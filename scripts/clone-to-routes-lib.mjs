@@ -299,9 +299,10 @@ export function repairSocialShareChrome(html) {
   //    HTML-escaped in the source attribute, which is exactly what an href
   //    needs, so it is copied verbatim rather than decoded and re-encoded.
   let out = html.replace(/<a\b[^>]*>/gi, (tag) => {
-    if (!/\shref="#"/i.test(tag)) return tag;
-    const dest = /\sdata-ss-ss-link="([^"]+)"/i.exec(tag);
-    if (!dest) return tag;
+    if (!isParkedHref(tag)) return tag;
+    const parked = attrValue(tag, 'data-ss-ss-link');
+    if (!parked) return tag;
+    const dest = [null, parked];
     // Refused, not sanitised: leaving it `href="#"` keeps the anchor exactly
     // as inert as the capture found it, and a rewritten destination would be
     // a guess at what the charity meant.
@@ -310,7 +311,7 @@ export function repairSocialShareChrome(html) {
       return tag;
     }
     repaired += 1;
-    let fixed = tag.replace(/\shref="#"/i, ` href="${dest[1]}"`);
+    let fixed = tag.replace(/\shref\s*=\s*("#"|'#')/i, ` href="${dest[1]}"`);
     // Sharing should not cost the reader the page they are sharing. The
     // plugin opened a popup window; a new tab is the static equivalent.
     if (!/\starget=/i.test(fixed)) {
@@ -349,6 +350,349 @@ export function repairSocialShareChrome(html) {
   return { html: out, repaired, removed, rejected };
 }
 
+/**
+ * TLDs a bare hostname is allowed to be recognised by.
+ *
+ * Deliberately a short allowlist rather than "any dotted string". The input
+ * here is an href, and the overwhelmingly common dotted href is a RELATIVE
+ * FILE -- `index.html`, `brochure.pdf`, `logo.png`. Treating one of those as a
+ * hostname would send a visitor off the site, so the rule only fires for a
+ * suffix that cannot be a file extension anyone would link to.
+ */
+export const BARE_HOST_TLDS = new Set([
+  'org',
+  'com',
+  'net',
+  'edu',
+  'gov',
+  'mil',
+  'int',
+  'io',
+  'co',
+  'us',
+  'uk',
+  'ca',
+  'info',
+]);
+
+/**
+ * Repair one href the source site itself got wrong, or return null.
+ *
+ * Three defects, all found in the newheightseducation.org capture and all of
+ * them the charity's own typing rather than anything the capture did:
+ *
+ *   `hhttps://x.com/newheightseduc1`   the doubled letter makes it an unknown
+ *                                      scheme, so the link does nothing. 539
+ *                                      pages -- it is in the footer widget.
+ *   `Radio.NewHeightsEducation.org`    no scheme, so a browser reads it as a
+ *                                      RELATIVE PATH and 404s on this site.
+ *   ` https://www.dgliteracy.org/`     a leading space. Browsers trim it, so
+ *                                      the link works -- but nothing else
+ *                                      does, including the naming pass, which
+ *                                      labelled it "Www.dgliteracy".
+ *
+ * Returns null when there is nothing to repair, so the caller can tell "fixed"
+ * from "already fine" without comparing strings itself.
+ */
+export function repairHref(raw) {
+  if (typeof raw !== 'string') return null;
+  let v = raw.trim();
+  // A doubled leading `h`. Anchored and collapsing to exactly one, so a
+  // correct `https://` passes through this unchanged rather than by luck.
+  v = v.replace(/^h+(ttps?:\/\/)/i, 'h$1');
+  const looksSchemed = /^[a-z][a-z0-9+.-]*:/i.test(v);
+  const looksRelative = /^[#/.]/.test(v) || v.startsWith('%%');
+  if (!looksSchemed && !looksRelative && v) {
+    const host = v.split(/[/?#]/)[0];
+    const tld = host.split('.').pop()?.toLowerCase() ?? '';
+    if (host.includes('.') && BARE_HOST_TLDS.has(tld)) v = `https://${v}`;
+  }
+  return v === raw ? null : v;
+}
+
+/** Apply `repairHref` to every href in a fragment. */
+export function repairMalformedHrefs(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0 };
+  let repaired = 0;
+  const out = html.replace(/\shref\s*=\s*("([^"]*)"|'([^']*)')/gi, (whole, _quoted, dq, sq) => {
+    const raw = dq ?? sq;
+    const fixed = repairHref(raw);
+    if (fixed === null) return whole;
+    repaired += 1;
+    // Re-emitted with the quote the source used, so a value containing the
+    // other quote character stays valid markup.
+    const q = dq === undefined ? "'" : '"';
+    return ` href=${q}${fixed}${q}`;
+  });
+  return { html: out, repaired };
+}
+
+/**
+ * How each network's share endpoint is spelled.
+ *
+ * `googleplus` is deliberately absent. Google+ shut down in April 2019, so
+ * there is no endpoint to point those 506 buttons at -- they are the one part
+ * of this share row that really is unrepairable, and they fall through to
+ * `removeDeadNamelessControls`.
+ */
+export const SHARE_ENDPOINTS = {
+  facebook: (url) => `https://www.facebook.com/sharer/sharer.php?u=${url}`,
+  twitter: (url, text) => `https://twitter.com/intent/tweet?url=${url}&amp;text=${text}`,
+  linkedin: (url) => `https://www.linkedin.com/sharing/share-offsite/?url=${url}`,
+  pinterest: (url, text) =>
+    `https://www.pinterest.com/pin/create/button/?url=${url}&amp;description=${text}`,
+};
+
+/** `community-news/foo` -> `/community-news/foo/`, and '' -> `/`. */
+export function routePathForSlug(slug) {
+  const s = typeof slug === 'string' ? slug.replace(/^\/+|\/+$/g, '') : '';
+  return s ? `/${s}/` : '/';
+}
+
+/**
+ * Rebuild a share button the capture left parked on `href="#"`.
+ *
+ * The plugin composed the share URL in JavaScript from `data-url` and
+ * `data-title`, and the capture strips JavaScript -- so 1,930 buttons across
+ * this site point at nothing while carrying, in plain sight, everything needed
+ * to point them somewhere real. Same defect as the floating bar that
+ * `repairSocialShareChrome` already fixes; different markup, because this is
+ * the same plugin's INLINE row and it stores the inputs to a share URL rather
+ * than a finished one.
+ *
+ * The destination is composed, never guessed: the path comes from `data-url`
+ * resolved against the page's own route, and the text from `data-title`.
+ *
+ * The origin is left as a `%%SITEURL_ENC%%` token rather than baked in, for
+ * the same reason `%%BASE%%` exists. A share URL has to be ABSOLUTE, and this
+ * site's absolute URL changes at cutover -- `freeforcharity.github.io/FFC-EX-…`
+ * today, the charity's own domain later. Baking either one in means every
+ * share button is wrong for one half of the site's life; substituting at read
+ * time means one commit is correct for both.
+ */
+export function repairInlineShareButtons(html, slug) {
+  if (typeof html !== 'string') return { html: '', repaired: 0, rejected: 0 };
+  let repaired = 0;
+  let rejected = 0;
+  const base = `https://ffc.invalid${routePathForSlug(slug)}`;
+  const out = html.replace(/<a\b([^>]*)>/gi, (tag, attrs) => {
+    if (!isParkedHref(attrs)) return tag;
+    const classes = (attrValue(attrs, 'class') ?? '').split(/\s+/);
+    const network = classes
+      .map((t) => /^([a-z]+)-share$/i.exec(t)?.[1]?.toLowerCase())
+      .find((n) => n && Object.prototype.hasOwnProperty.call(SHARE_ENDPOINTS, n));
+    if (!network) return tag;
+    const rawUrl = attrValue(attrs, 'data-url');
+    if (!rawUrl) return tag;
+    const decoded = decodeEntities(rawUrl).trim();
+    if (!decoded) return tag;
+
+    let target;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(decoded)) {
+      // Already absolute. Shared verbatim, through the same allowlist the
+      // floating-bar repair uses -- a `javascript:` payload must not become a
+      // live href here any more than it may there.
+      if (!isSafeShareDestination(decoded)) {
+        rejected += 1;
+        return tag;
+      }
+      target = encodeURIComponent(decoded);
+    } else {
+      let resolved;
+      try {
+        resolved = new URL(decoded, base);
+      } catch {
+        rejected += 1;
+        return tag;
+      }
+      // A relative `data-url` that climbs out of the site is not this page's
+      // to share; refusing leaves the button exactly as inert as it was.
+      if (resolved.origin !== 'https://ffc.invalid') {
+        rejected += 1;
+        return tag;
+      }
+      target = `%%SITEURL_ENC%%${encodeURIComponent(
+        resolved.pathname + resolved.search + resolved.hash,
+      )}`;
+    }
+
+    const title = encodeURIComponent(decodeEntities(attrValue(attrs, 'data-title') ?? ''));
+    repaired += 1;
+    let fixed = tag.replace(
+      /\shref\s*=\s*("#"|'#')/i,
+      ` href="${SHARE_ENDPOINTS[network](target, title)}"`,
+    );
+    // Sharing should not cost the reader the page they are sharing. The
+    // plugin opened a popup; a new tab is the static equivalent.
+    if (!/\starget=/i.test(fixed)) {
+      fixed = fixed.replace(/^<a\b/i, '<a target="_blank"');
+      fixed = ensureNoopener(fixed);
+    }
+    return fixed;
+  });
+  return { html: out, repaired, rejected };
+}
+
+/**
+ * One attribute's value, accepting either quote style.
+ *
+ * HTML permits `alt='Share'` exactly as much as `alt="Share"`, and a capture
+ * takes whatever the source theme emitted. A double-quote-only pattern is
+ * therefore a correctness bug anywhere the answer decides whether markup
+ * SURVIVES: a control named by a single-quoted `aria-label` reads as nameless
+ * and is deleted from a charity's live site, which is the one direction these
+ * passes are built never to fail in.
+ *
+ * Measured on the newheightseducation.org capture: zero anchors carry a
+ * single-quoted attribute, so nothing about that site changes here. Which is
+ * the point -- this was reachable only by reading the code, never by running
+ * it against the one capture in hand. Raised by Copilot on #1367.
+ *
+ * `name` is interpolated into a pattern, so every caller passes a literal.
+ */
+export function attrValue(attrs, name) {
+  if (typeof attrs !== 'string' || typeof name !== 'string') return null;
+  const m = new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(attrs);
+  if (!m) return null;
+  return m[2] ?? m[3] ?? '';
+}
+
+/**
+ * Is this anchor parked on a destination that goes nowhere?
+ *
+ * `href="#"` exactly -- `href="#main"` still navigates in a static export.
+ * Read through `attrValue` so a single-quoted `href='#'` is recognised too:
+ * missing one would leave a dead control on the page, and a repair pass would
+ * skip the very button it exists to fix.
+ */
+export function isParkedHref(attrs) {
+  return attrValue(attrs, 'href') === '#';
+}
+
+/**
+ * Does this anchor's markup give it an accessible name?
+ *
+ * Conservative by construction: every source of a name counts, so anything
+ * a visitor or a screen reader can perceive is reported as NAMED and is
+ * therefore never removed. Being wrong in the other direction would delete
+ * working navigation from a charity's site.
+ */
+export function anchorHasAccessibleName(attrs, inner) {
+  if (typeof attrs !== 'string' || typeof inner !== 'string') return true;
+  for (const name of ['aria-label', 'aria-labelledby', 'title']) {
+    if ((attrValue(attrs, name) ?? '').trim()) return true;
+  }
+  // An image's alt text names it; an inline SVG's <title> is caught by the text
+  // fallback below, which strips tags and keeps what was inside them.
+  if (/<img\b[^>]*\salt\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*')/i.test(inner)) return true;
+  // Text content, with tags stripped and `&nbsp;` treated as the space it is.
+  return (
+    inner
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
+      .trim().length > 0
+  );
+}
+
+/**
+ * Remove a captured control that can neither act nor be announced.
+ *
+ * The capture strips JavaScript, so a theme's icon-only `href="#"` trigger is
+ * left unable to do anything -- and because its only content is an icon, it
+ * has no accessible name either. axe reports it as `link-name` at SERIOUS
+ * severity, and on FFC-EX-newheightseducation.org that was 11-21 nodes per
+ * page and the single largest contributor to the accessibility score.
+ *
+ * The same treatment `repairSocialShareChrome` already gives `ss-share-all`,
+ * generalised: repair what has a destination, remove what is a dead trigger.
+ * Run AFTER that function, so a share link with a parked destination has
+ * already been repaired and is no longer `href="#"`.
+ *
+ * BOTH conditions are required, and the pairing is the whole safety argument:
+ *
+ *   - `href="#"` exactly. An anchor pointing at a real fragment (`#main`) or
+ *     a URL still navigates in a static export.
+ *   - no accessible name. A named control is one a visitor can see and a
+ *     reader can announce, and removing it would take real navigation off the
+ *     site -- measured on that capture, the named set is 58,491 anchors
+ *     including 1,760 menu items and ~100 translator flags, against 3,540
+ *     nameless ones across 9 icon-only signatures.
+ *
+ * Only the anchor is removed, not its container. An empty wrapper is inert,
+ * while guessing at which ancestor "belonged" to the control risks taking a
+ * layout element the page still needs.
+ */
+export function removeDeadNamelessControls(fragment) {
+  if (typeof fragment !== 'string') return { html: '', removed: 0 };
+  let removed = 0;
+  // Non-greedy to the first `</a>`: anchors cannot legally nest, so the first
+  // close is this anchor's own.
+  const html = fragment.replace(
+    /<a\b([^>]*)>((?:(?!<\/a>)[\s\S])*)<\/a>/gi,
+    (whole, attrs, inner) => {
+      if (!isParkedHref(attrs)) return whole;
+      if (anchorHasAccessibleName(attrs, inner)) return whole;
+      removed += 1;
+      return '';
+    },
+  );
+  return { html, removed };
+}
+
+/**
+ * A WordPress WIDGET title is not the page's heading.
+ *
+ * `widgettitle` is WordPress core's class for a sidebar widget's title, and
+ * several themes emit it as an `<h1>`. Jupiter does, and on
+ * FFC-EX-newheightseducation.org that made 429 of 785 pages look like they
+ * had a heading when they did not: the theme sets the widget `display: none`,
+ * so `verify:build` counted an `<h1>` tag, axe reported `page-has-heading-one`
+ * against the accessibility tree, and `ensureSingleH1` saw the tag and skipped
+ * the page. All three were right about what they measured, and a
+ * screen-reader user still arrived somewhere with no heading.
+ *
+ * A fragment cannot know its own computed CSS, so the level cannot be decided
+ * by asking whether the heading is visible. It can be decided semantically,
+ * which is stronger anyway: a widget title describes a widget, not the
+ * document, so `<h1>` is the wrong level whether or not the theme hides it.
+ * The capture already agrees -- it tags these `ffc-h2`, meaning "style this
+ * like an h2" -- so this only brings the TAG into line with the styling that
+ * was already applied to it.
+ *
+ * Demoted rather than removed: the widget and its title are the charity's
+ * content, and a sidebar heading at the right level is useful. Only the level
+ * is wrong.
+ */
+export function demoteWidgetTitles(fragment) {
+  if (typeof fragment !== 'string') return { html: '', demoted: 0 };
+  let demoted = 0;
+  const html = fragment.replace(/<h1\b([^>]*)>([\s\S]*?)<\/h1>/gi, (whole, attrs, inner) => {
+    // The class attribute is SPLIT, not pattern-matched. `\bwidgettitle\b`
+    // looks right and is wrong: `-` is a word boundary in a regex, so it
+    // also matches `widgettitle-custom` and `my-widgettitle-x`, and would
+    // demote a theme's unrelated heading. Raised by Copilot on #1364; the
+    // self-test that was supposed to cover this only tried letters either
+    // side (`nonwidgettitleish`), which `\b` does reject -- so the test
+    // passed and the bug was real.
+    const cls = /\sclass\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+    const tokens = (cls?.[2] ?? cls?.[3] ?? '').split(/\s+/).filter(Boolean);
+    if (!tokens.includes('widgettitle')) return whole;
+    demoted += 1;
+    return `<h2${attrs}>${inner}</h2>`;
+  });
+  return { html, demoted };
+}
+
+/**
+ * Give a captured page exactly one `<h1>`, taken from its own title.
+ *
+ * The heading is `ffc-sr-only`: visually hidden with the clip pattern, which
+ * keeps it in the accessibility tree rather than removing it the way
+ * `display: none` would.
+ *
+ * Run AFTER `demoteWidgetTitles`, or a hidden widget title counts as the
+ * page's heading and the page keeps none a reader can reach.
+ */
 export function ensureSingleH1(fragment, title) {
   if (typeof fragment !== 'string') return '';
   if (/<h1[\s>]/i.test(fragment)) return fragment;
@@ -726,25 +1070,71 @@ export function ensureImageAlt(html) {
 }
 
 /**
- * Give a link that wraps only a decorative image an accessible name.
+ * Name a link by where it actually goes.
  *
- * 71 links here contain nothing but an `alt=""` image, so they announce as
- * "link" with no destination — Lighthouse's `link-name`, and one of the two
- * audits keeping this site's accessibility score below its threshold. The name
- * is derived from where the link goes, never from guessing what the image
- * shows: a link to the site root is the site name, and anything else falls back
- * to its own path. A link that already has text, a title or an aria-label is
- * left completely alone.
+ * `labelForHref` reads the last PATH SEGMENT, which is the right answer for a
+ * link into the charity's own site and the wrong one for a link out of it: a
+ * social icon row yields `10828913` (a LinkedIn company id),
+ * `UCcpyuCpFRzYzfHYznRlX_zw` (a YouTube channel id) and `Ref=sr 1 5` (an
+ * Amazon tracking parameter) -- names that are accurate and tell a listener
+ * nothing. Worse, it strips the host before testing for a root URL, so
+ * `https://www.4imprint.com/` comes back as "<site> -- home", naming someone
+ * else's front page as the charity's own.
+ *
+ * So an off-site link is named by its HOST, which is the part a listener can
+ * act on ("link, facebook.com"), and an on-page link by the fragment it
+ * targets. Nothing is invented and nothing is guessed from an icon's class:
+ * every name here is read out of the href.
+ */
+export function linkDestinationLabel(href, siteName) {
+  const raw = decodeEntities(href).trim();
+  // A bare `#`, an empty href, a `javascript:` URL and a non-string each
+  // return null -- but from further down, never from a guard here. The
+  // fragment branch refuses an EMPTY fragment, `labelForHref` refuses
+  // `javascript:` and '', and `decodeEntities` turns a non-string into ''.
+  // Guards for all four up here were measured unkillable by mutation:
+  // correct, and doing nothing. The outcomes stay asserted below.
+  if (/^mailto:/i.test(raw)) return safeDecodeURIComponent(raw.slice(7).split('?')[0]) || null;
+  // An in-page target: `#top-of-page` is a real destination, `#` is not.
+  if (raw.startsWith('#')) {
+    const words = safeDecodeURIComponent(raw.slice(1)).replace(/[-_]+/g, ' ').trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
+  }
+  const host = /^https?:\/\/([^/?#]+)/i.exec(raw)?.[1];
+  if (host) return host.replace(/^www\./i, '').toLowerCase() || null;
+  return labelForHref(raw, siteName);
+}
+
+/**
+ * Give a link that announces as bare "link" an accessible name.
+ *
+ * A captured theme draws its social row, its back-to-top button and its image
+ * links as icons -- a CSS `::before`, an inline `<svg>`, an `alt=""` image --
+ * so they carry no text for a screen reader to read. axe reports each one as
+ * `link-name` at SERIOUS, and on this capture that is 5,522 links across 785
+ * pages: by far the largest accessibility defect a migration ships.
+ *
+ * These are NOT the dead controls `removeDeadNamelessControls` deletes, and
+ * the difference decides the treatment. Those go nowhere, so naming them would
+ * promise a capability the static export cannot deliver. These go somewhere
+ * real -- the charity's Facebook page, its YouTube channel -- so removing them
+ * would delete working links, and naming them is the whole fix.
+ *
+ * `href="#"` is therefore skipped here on purpose rather than by accident: it
+ * is the one destination that is not one, and this function runs BEFORE the
+ * removal in the pipeline, so naming it would defeat that pass entirely.
+ *
+ * A link that already has a name -- text, `aria-label`, `title`, an image with
+ * alt text, an SVG `<title>` -- is left completely alone;
+ * `anchorHasAccessibleName` is the single judge of that, shared with the
+ * removal so the two can never disagree about what "nameless" means.
  */
 export function nameAnonymousLinks(html, siteName) {
   let named = 0;
-  const out = html.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (whole, attrs, inner) => {
-    if (/\baria-label\s*=/i.test(attrs) || /\btitle\s*=/i.test(attrs)) return whole;
-    if (decodeEntities(inner.replace(/<[^>]+>/g, '')).trim()) return whole;
-    const alts = [...inner.matchAll(/<img[^>]*\balt\s*=\s*["']([^"']*)["']/gi)].map((m) => m[1]);
-    if (!alts.length || alts.some((a) => a.trim())) return whole;
+  const out = html.replace(/<a\b([^>]*)>((?:(?!<\/a>)[\s\S])*)<\/a>/gi, (whole, attrs, inner) => {
+    if (anchorHasAccessibleName(attrs, inner)) return whole;
     const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
-    const label = labelForHref(href, siteName);
+    const label = linkDestinationLabel(href, siteName);
     if (!label) return whole;
     named += 1;
     return `<a${attrs} aria-label="${escapeAttr(label)}">${inner}</a>`;
@@ -1335,7 +1725,7 @@ export function tokenizeAssetPaths(html, assetsDirName = '_ffc-assets') {
  * Same reason as the assets: `../about-us/` resolves against the file's
  * directory, and a route is not a file. `%%BASE%%` carries the subpath.
  */
-export function tokenizePageLinks(html, routes) {
+export function tokenizePageLinks(html, routes, sourceHosts = []) {
   // The capture's own path and the route's slug are not the same string:
   // `sanitizeSlug` strips characters a directory name and a URL cannot both
   // carry, so a link has to be looked up by the path the markup names and
@@ -1350,7 +1740,7 @@ export function tokenizePageLinks(html, routes) {
   // leaves 351 links to LIVE pages unrewritten — which then read as links to
   // pages the capture does not have, and were very nearly unlinked as dead.
   const out = html.replace(
-    /\bhref="((?:\.\.\/)+|\.\/)([^"#?]*?)([?#][^"]*)?"/g,
+    /\bhref\s*=\s*["']((?:\.\.\/)+|\.\/)([^"'#?]*?)([?#][^"']*)?["']/g,
     (whole, prefix, rest, suffix = '') => {
       const target = rest.replace(/\/+$/, '');
       if (target === '') {
@@ -1363,7 +1753,42 @@ export function tokenizePageLinks(html, routes) {
       return `href="%%BASE%%/${slug}/${suffix}"`;
     },
   );
-  return { html: out, rewritten };
+  // The same in-site links written ABSOLUTELY, which the pass above cannot
+  // see: it matches `../` and `./` only. WordPress emits both forms, and on
+  // newheightseducation.org 9,074 links to pages this very export contains
+  // were still addressed as `https://www.newheightseducation.org/...`. Those
+  // work after cutover and send a visitor to the OLD SITE before it -- so for
+  // the weeks a migration sits on its temporary URL, the site links away from
+  // itself, which is exactly when someone is reviewing it.
+  //
+  // Only the apex and its `www.` form. A subdomain is a different site:
+  // `school.`, `radio.` and `publications.` are all real, separate hosts here,
+  // and rewriting them would point a visitor at a page that does not exist.
+  const hosts = new Set(
+    [...sourceHosts]
+      .filter((h) => typeof h === 'string' && h)
+      .map((h) => h.toLowerCase().replace(/^www\./, '')),
+  );
+  const out2 = hosts.size
+    ? out.replace(
+        /\bhref\s*=\s*["']https?:\/\/([^/"'?#]+)([^"'#?]*?)([?#][^"']*)?["']/gi,
+        (whole, host, rest, suffix = '') => {
+          if (!hosts.has(host.toLowerCase().replace(/^www\./, ''))) return whole;
+          const target = rest.replace(/^\/+/, '').replace(/\/+$/, '');
+          if (target === '') {
+            rewritten += 1;
+            return `href="%%BASE%%/${suffix}"`;
+          }
+          // A path this export does not carry is left pointing at the live
+          // site, which still has the page. Rewriting it would turn a working
+          // link into a 404 on our own domain.
+          if (!known.has(target)) return whole;
+          rewritten += 1;
+          return `href="%%BASE%%/${known.get(target)}/${suffix}"`;
+        },
+      )
+    : out;
+  return { html: out2, rewritten };
 }
 
 /**
@@ -1961,6 +2386,162 @@ function selfTest() {
     );
   }
 
+  // --- dead nameless controls ----------------------------------------------
+  {
+    // Both conditions are required, and the NAMED cases are the ones that
+    // matter: being wrong there deletes working navigation from a charity's
+    // site. Measured on FFC-EX-newheightseducation.org, the named set is
+    // 58,491 anchors against 3,540 nameless ones.
+    eq(
+      'an icon-only href="#" trigger is removed',
+      removeDeadNamelessControls(
+        '<a class="mk-search-trigger" href="#"><svg><path d="x"/></svg></a>',
+      ).removed,
+      1,
+    );
+    eq(
+      '...and the page around it is left intact',
+      removeDeadNamelessControls('<p>a</p><a href="#"><svg/></a><p>b</p>').html,
+      '<p>a</p><p>b</p>',
+    );
+    eq(
+      'a menu item with text is NOT removed',
+      removeDeadNamelessControls('<a class="menu-item-link js-smooth-scroll" href="#">About Us</a>')
+        .removed,
+      0,
+    );
+    eq(
+      'a control named by title is NOT removed',
+      removeDeadNamelessControls('<a href="#" title="Zulu" class="flag"><span></span></a>').removed,
+      0,
+    );
+    eq(
+      'a control named by aria-label is NOT removed',
+      removeDeadNamelessControls('<a href="#" aria-label="Search button"><i></i></a>').removed,
+      0,
+    );
+    eq(
+      "a control named by its image's alt is NOT removed",
+      removeDeadNamelessControls('<a href="#"><img src="x.png" alt="Share"></a>').removed,
+      0,
+    );
+    eq(
+      "a control named by its SVG's title is NOT removed",
+      removeDeadNamelessControls('<a href="#"><svg><title>Close</title></svg></a>').removed,
+      0,
+    );
+    // `href="#main"` still navigates in a static export; only a bare `#` is
+    // the dead case.
+    eq(
+      'an anchor pointing at a real fragment is NOT removed',
+      removeDeadNamelessControls('<a href="#main"><svg/></a>').removed,
+      0,
+    );
+    eq(
+      'an anchor with a real URL is NOT removed',
+      removeDeadNamelessControls('<a href="/about/"><svg/></a>').removed,
+      0,
+    );
+    // Whitespace-only content is not a name, however it is spelled.
+    eq(
+      'an anchor holding only &nbsp; is still nameless',
+      removeDeadNamelessControls('<a href="#">&nbsp;</a>').removed,
+      1,
+    );
+    eq(
+      'an empty title or alt does not count as a name',
+      removeDeadNamelessControls('<a href="#" title="  "><img src="x" alt=""></a>').removed,
+      1,
+    );
+    // Two anchors in a row must not be swallowed as one: anchors cannot nest,
+    // so the match has to stop at the FIRST close tag.
+    eq(
+      'a named anchor immediately after a nameless one survives',
+      removeDeadNamelessControls('<a href="#"><svg/></a><a href="/x/">Keep me</a>').html,
+      '<a href="/x/">Keep me</a>',
+    );
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return removeDeadNamelessControls(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
+  }
+
+  // --- widget titles are not page headings ---------------------------------
+  {
+    const widget = '<aside><h1 class="widgettitle ffc-h2">Cart</h1></aside>\n<p>body</p>';
+    const d = demoteWidgetTitles(widget);
+    eq('a widget title emitted as an h1 is demoted to h2', d.demoted, 1);
+    eq(
+      '...keeping the widget, its classes and its text',
+      d.html,
+      '<aside><h2 class="widgettitle ffc-h2">Cart</h2></aside>\n<p>body</p>',
+    );
+    // The whole point: after the demotion the page has no h1, so the real
+    // heading can be supplied. Before it, the hidden widget title counted.
+    eq(
+      '...so the page then gets a heading a reader can actually reach',
+      ensureSingleH1(d.html, 'Cart - NHEG'),
+      '<h1 class="ffc-sr-only">Cart - NHEG</h1>\n<aside><h2 class="widgettitle ffc-h2">Cart</h2></aside>\n<p>body</p>',
+    );
+    eq(
+      'a real page heading is NOT demoted',
+      demoteWidgetTitles('<h1 class="entry-title">Real</h1>').demoted,
+      0,
+    );
+    // `widgettitle` must be matched as a whole class, not as a substring: a
+    // theme shipping `nonwidgettitle` is not WordPress's widget class.
+    eq(
+      '...and a class that merely contains the word is not the widget class',
+      demoteWidgetTitles('<h1 class="nonwidgettitleish">x</h1>').demoted,
+      0,
+    );
+    // The case the first version got wrong, and the one a `\b` regex cannot
+    // see: `-` IS a word boundary, so `widgettitle-custom` matched. The class
+    // attribute is split into tokens instead of pattern-matched.
+    eq(
+      '...including one separated by a hyphen, which is a regex word boundary',
+      [
+        demoteWidgetTitles('<h1 class="widgettitle-custom">x</h1>').demoted,
+        demoteWidgetTitles('<h1 class="my-widgettitle-x">x</h1>').demoted,
+        demoteWidgetTitles("<h1 class='sidebar widgettitle-alt'>x</h1>").demoted,
+      ].join(','),
+      '0,0,0',
+    );
+    eq(
+      '...while a single-quoted class attribute still works',
+      demoteWidgetTitles("<h1 class='widgettitle ffc-h2'>x</h1>").demoted,
+      1,
+    );
+    eq(
+      '...and an h1 with no class at all is left alone',
+      demoteWidgetTitles('<h1>x</h1>').demoted,
+      0,
+    );
+    eq(
+      'an h2 that is already correct is left alone',
+      demoteWidgetTitles('<h2 class="widgettitle">x</h2>').demoted,
+      0,
+    );
+    eq(
+      'a non-string is not a crash',
+      (() => {
+        try {
+          return demoteWidgetTitles(null).html;
+        } catch (err) {
+          return `threw ${err.name}`;
+        }
+      })(),
+      '',
+    );
+  }
+
   eq(
     'a page with no heading of its own is given one from its title',
     ensureSingleH1('<p>body</p>\n', 'About NHEG Publications'),
@@ -2312,6 +2893,352 @@ function selfTest() {
     nameAnonymousLinks('<a href="/x"><img alt="A cat"></a>', 'V').named,
     0,
   );
+  // The population this widening exists for: a social icon row. The theme
+  // draws each one with a CSS `::before`, so the anchor holds nothing at all --
+  // no text, no <img>, no <svg>. Before the widening `nameAnonymousLinks`
+  // skipped these outright (it required an `alt=""` image to be present), and
+  // they were 5,522 of the capture's `link-name` violations.
+  eq(
+    'an icon-only social link with a real destination is named by its host',
+    nameAnonymousLinks(
+      '<a class="facebook-hover c_" href="https://www.facebook.com/NHEG/"></a>',
+      'NHEG',
+    ).html,
+    '<a class="facebook-hover c_" href="https://www.facebook.com/NHEG/" aria-label="facebook.com"></a>',
+  );
+  // ...and NOT by its last path segment, which is what `labelForHref` reads.
+  // On this capture that yields `10828913` for a LinkedIn company id and
+  // `UCcpyuCpFRzYzfHYznRlX zw` for a YouTube channel -- accurate, useless.
+  eq(
+    'an opaque id in the path is not used as the name',
+    linkDestinationLabel('https://www.linkedin.com/company/10828913', 'NHEG'),
+    'linkedin.com',
+  );
+  // `labelForHref` strips the host BEFORE testing for a root URL, so someone
+  // else's front page comes back as this charity's home. Naming an off-site
+  // link by its host is what stops that being announced to a visitor.
+  eq(
+    "another site's front page is not announced as this site's home",
+    linkDestinationLabel('https://www.4imprint.com/', 'NHEG'),
+    '4imprint.com',
+  );
+  eq(
+    'labelForHref alone would have said otherwise',
+    labelForHref('https://www.4imprint.com/', 'NHEG'),
+    'NHEG — home',
+  );
+  // `href="#"` is the dead case `removeDeadNamelessControls` owns. Naming it
+  // would both promise a capability the export cannot deliver AND defeat that
+  // pass, which runs later in the pipeline and keys on the bare `#`.
+  eq(
+    'a bare # is left for the removal pass, not named',
+    nameAnonymousLinks('<a class="mk-search-trigger" href="#"><i></i></a>', 'NHEG').named,
+    0,
+  );
+  // A real fragment does navigate, so it is named rather than removed.
+  eq(
+    'a back-to-top button is named from the fragment it targets',
+    linkDestinationLabel('#top-of-page', 'NHEG'),
+    'Top of page',
+  );
+  eq('javascript: is not a destination', linkDestinationLabel('javascript:void(0)', 'NHEG'), null);
+  // The entity case has to be one where decoding CHANGES the answer. A
+  // `&amp;` inside a query string does not: the host is read before it.
+  eq(
+    'an entity-encoded fragment is decoded before it is read',
+    linkDestinationLabel('&#35;top-of-page', 'NHEG'),
+    'Top of page',
+  );
+  eq('a non-string href is not a destination', linkDestinationLabel(42, 'NHEG'), null);
+  eq('an empty href is not a destination', linkDestinationLabel('', 'NHEG'), null);
+  eq(
+    'a mailto is named by its address',
+    linkDestinationLabel('mailto:a@b.org?subject=Hi', 'N'),
+    'a@b.org',
+  );
+  // The host is compared case-insensitively and `www.` is dropped, so one
+  // social row does not announce three spellings of the same site.
+  eq(
+    'the host is normalised',
+    linkDestinationLabel('HTTPS://WWW.Example.COM/x', 'N'),
+    'example.com',
+  );
+  // An entity-encoded href is decoded before it is read: the capture ships
+  // `&amp;` inside query strings throughout.
+  eq(
+    'an entity-encoded href is decoded first',
+    linkDestinationLabel('https://nheg.memberhub.com/store?a=1&amp;b=2', 'N'),
+    'nheg.memberhub.com',
+  );
+  // Naming must not disturb the anchor's own attributes or its contents.
+  eq(
+    'the existing markup is preserved exactly',
+    nameAnonymousLinks('<a rel="noopener" target="_blank" href="https://x.com/n"><svg/></a>', 'N')
+      .html,
+    '<a rel="noopener" target="_blank" href="https://x.com/n" aria-label="x.com"><svg/></a>',
+  );
+  // Anchors cannot nest, so the first `</a>` closes this one -- a greedy match
+  // would swallow the next link and name the pair.
+  eq(
+    'a named link following a nameless one is not swallowed',
+    nameAnonymousLinks('<a href="https://a.org/"></a><a href="/b/">Read it</a>', 'N').named,
+    1,
+  );
+  // --- repairHref: defects the SOURCE SITE shipped -------------------------
+  // 539 pages carried this. The doubled letter makes `hhttps` an unknown
+  // scheme, so the charity's X link did nothing on 69% of the site.
+  eq('a doubled scheme letter is repaired', repairHref('hhttps://x.com/n'), 'https://x.com/n');
+  eq('a correct scheme is not "repaired"', repairHref('https://x.com/n'), null);
+  eq('http is left as http', repairHref('hhttp://x.com/n'), 'http://x.com/n');
+  // No scheme: a browser reads this as a RELATIVE PATH and 404s on our site.
+  eq(
+    'a bare hostname is given a scheme',
+    repairHref('Radio.NewHeightsEducation.org'),
+    'https://Radio.NewHeightsEducation.org',
+  );
+  // ...and the reason that rule is an ALLOWLIST rather than "anything dotted":
+  // the overwhelmingly common dotted href is a relative FILE, and treating one
+  // as a hostname sends a visitor off the site.
+  eq('a relative file is NOT read as a hostname', repairHref('index.html'), null);
+  eq('nor a pdf', repairHref('brochure.pdf'), null);
+  eq('nor an image', repairHref('logo.png'), null);
+  eq('a relative directory is left alone', repairHref('about/'), null);
+  eq('a dotted relative directory is left alone', repairHref('../who-we-are/'), null);
+  eq('a fragment is left alone', repairHref('#main'), null);
+  // The one shape that distinguishes the relative guard from the TLD
+  // allowlist: every other relative href is refused by the allowlist too,
+  // because `..` and `.` leave an empty last label. Without the guard this
+  // becomes `https://.org`.
+  eq('an href that is itself a dotted TLD is left alone', repairHref('.org'), null);
+  eq('an already-tokenized link is left alone', repairHref('%%BASE%%/about/'), null);
+  eq('a mailto is left alone', repairHref('mailto:a@b.org'), null);
+  // Browsers trim this, so the link works -- but the naming pass reads the
+  // href, and a leading space made it label the link "Www.dgliteracy".
+  eq('surrounding whitespace is trimmed', repairHref(' https://x.org/ '), 'https://x.org/');
+  eq(
+    'the pass reports what it touched',
+    repairMalformedHrefs('<a href="hhttps://x.com/">a</a><a href="/ok/">b</a>').repaired,
+    1,
+  );
+
+  // --- repairInlineShareButtons -------------------------------------------
+  // The plugin built this URL in JavaScript, which the capture strips. Both
+  // inputs are right there in the markup, so the button is repairable -- and
+  // 1,930 of them were being deleted as dead before this existed.
+  eq(
+    'a parked share button is pointed at a real endpoint',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-title="Fire and Light" data-url="../../news/fire/" href="#"></a>',
+      'community-news/fire-and-light',
+    ).html,
+    '<a rel="noopener noreferrer" target="_blank" class="facebook-share" data-title="Fire and Light" ' +
+      'data-url="../../news/fire/" href="https://www.facebook.com/sharer/sharer.php?u=%%SITEURL_ENC%%%2Fnews%2Ffire%2F"></a>',
+  );
+  // The origin stays a TOKEN. Baked in, every share button is wrong for one
+  // half of the site's life -- the URL changes at cutover.
+  eq(
+    'the origin is left for the loader to resolve',
+    /%%SITEURL_ENC%%/.test(
+      repairInlineShareButtons(
+        '<a class="twitter-share" data-title="A &amp; B" data-url="./x/" href="#"></a>',
+        'p',
+      ).html,
+    ),
+    true,
+  );
+  // `data-url` is relative to the PAGE, so the slug is what makes it resolve.
+  eq(
+    'the path is resolved against the page the button sits on',
+    /url=%%SITEURL_ENC%%%2Fa%2Fb%2Fx%2F&amp;text=A%20%26%20B/.test(
+      repairInlineShareButtons(
+        '<a class="twitter-share" data-title="A &amp; B" data-url="./x/" href="#"></a>',
+        'a/b',
+      ).html,
+    ),
+    true,
+  );
+  // Google+ shut down in 2019. There is no endpoint, so these stay parked and
+  // fall through to the removal -- the one part of the row that really is dead.
+  eq(
+    'a googleplus button has no endpoint and is left for removal',
+    repairInlineShareButtons('<a class="googleplus-share" data-url="./x/" href="#"></a>', 'p')
+      .repaired,
+    0,
+  );
+  eq(
+    'a share button with no data-url is left alone',
+    repairInlineShareButtons('<a class="facebook-share" href="#"></a>', 'p').repaired,
+    0,
+  );
+  // Same allowlist the floating-bar repair uses: a script payload must not
+  // become a live href here either.
+  eq(
+    'a javascript: data-url is refused, not promoted',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-url="javascript:alert(1)" href="#"></a>',
+      'p',
+    ).rejected,
+    1,
+  );
+  eq(
+    'an absolute data-url is shared verbatim',
+    /u=https%3A%2F%2Felsewhere.org%2Fpost%2F/.test(
+      repairInlineShareButtons(
+        '<a class="facebook-share" data-url="https://elsewhere.org/post/" href="#"></a>',
+        'p',
+      ).html,
+    ),
+    true,
+  );
+  // `..` past the root cannot escape -- WHATWG clamps it -- so the shape that
+  // matters is a PROTOCOL-RELATIVE data-url, which resolves to another origin
+  // entirely and would turn a share button into a link to someone else's site.
+  eq(
+    'a protocol-relative data-url is refused',
+    repairInlineShareButtons(
+      '<a class="facebook-share" data-url="//evil.example/x/" href="#"></a>',
+      'a',
+    ).rejected,
+    1,
+  );
+  eq(
+    '...while climbing past the root is simply clamped, not an escape',
+    /u=%%SITEURL_ENC%%%2Fx%2F"/.test(
+      repairInlineShareButtons(
+        '<a class="facebook-share" data-url="../../../../x/" href="#"></a>',
+        'a',
+      ).html,
+    ),
+    true,
+  );
+  eq('the home page resolves as the root', routePathForSlug(''), '/');
+  eq('a slug becomes a directory path', routePathForSlug('a/b'), '/a/b/');
+  // A non-share `href="#"` control is none of this pass's business.
+  // The data-url matters: without one this passes even if the class rule is
+  // gone, because the repair needs a destination and finds none -- so the test
+  // would be green for a reason that has nothing to do with what it names.
+  eq(
+    'a search trigger is not mistaken for a share button',
+    repairInlineShareButtons('<a class="mk-search-trigger" data-url="./x/" href="#"></a>', 'p')
+      .repaired,
+    0,
+  );
+
+  // --- tokenizePageLinks: the ABSOLUTE in-site form ------------------------
+  // 9,074 links on this capture were addressed as
+  // `https://www.newheightseducation.org/...` to pages this very export
+  // contains. They work after cutover and go to the OLD SITE before it, which
+  // is exactly when someone is reviewing the migration.
+  const absTok = tokenizePageLinks(
+    '<a href="https://www.example.org/about-us/">A</a>' +
+      '<a href="https://example.org/about-us/?x=1#c">B</a>' +
+      '<a href="https://example.org/">Home</a>',
+    ['about-us'],
+    ['example.org'],
+  );
+  eq('an absolute in-site link is tokenized', absTok.rewritten, 3);
+  eq(
+    'its query and fragment are carried across',
+    /href="%%BASE%%\/about-us\/\?x=1#c"/.test(absTok.html),
+    true,
+  );
+  // A subdomain is a DIFFERENT SITE. `school.`, `radio.` and `publications.`
+  // are all real separate hosts on this capture; rewriting one points a
+  // visitor at a page that does not exist.
+  eq(
+    'a subdomain is not the same site',
+    tokenizePageLinks(
+      '<a href="https://school.example.org/about-us/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  eq(
+    'another site entirely is left alone',
+    tokenizePageLinks(
+      '<a href="https://elsewhere.org/about-us/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  // A path this export does not carry stays pointing at the live site, which
+  // still has the page. Rewriting it would turn a working link into our 404.
+  eq(
+    'a page this export does not have is left pointing at the live site',
+    tokenizePageLinks(
+      '<a href="https://example.org/nheg-magazine/">x</a>',
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    0,
+  );
+  eq(
+    'with no source host supplied nothing absolute is touched',
+    tokenizePageLinks('<a href="https://example.org/about-us/">x</a>', ['about-us']).rewritten,
+    0,
+  );
+
+  // --- either quote style ---------------------------------------------------
+  // HTML permits both, a capture takes whatever the theme emitted, and every
+  // pass below decides whether markup SURVIVES. Measured: this capture uses
+  // none, so these cases exist to stop the next one being deleted.
+  eq(
+    'a control named by a single-quoted aria-label is NOT removed',
+    removeDeadNamelessControls('<a href="#" aria-label=\'Search\'><i></i></a>').removed,
+    0,
+  );
+  eq(
+    'a control named by a single-quoted title is NOT removed',
+    removeDeadNamelessControls('<a href="#" title=\'Zulu\'><span></span></a>').removed,
+    0,
+  );
+  eq(
+    'a control named by a single-quoted image alt is NOT removed',
+    removeDeadNamelessControls("<a href=\"#\"><img src='x.png' alt='Share'></a>").removed,
+    0,
+  );
+  // ...and the same anchor written entirely in single quotes is still DEAD,
+  // so widening the read did not quietly stop the removal working.
+  eq(
+    'a single-quoted parked control is still removed',
+    removeDeadNamelessControls("<a href='#' class='mk-search-trigger'><i></i></a>").removed,
+    1,
+  );
+  eq('a single-quoted href is read', attrValue("<a href='#'>", 'href'), '#');
+  eq('a double-quoted href is read', attrValue('<a href="#">', 'href'), '#');
+  eq('a missing attribute reads as null', attrValue('<a href="#">', 'title'), null);
+  eq('an empty value reads as empty, not missing', attrValue('<a title="">', 'title'), '');
+  eq('a single-quoted parked href is recognised', isParkedHref("<a href='#'>"), true);
+  eq('a real fragment is not parked', isParkedHref('<a href="#main">'), false);
+  // The repairs read the same way, so a single-quoted share button is fixed
+  // rather than skipped and then deleted as dead.
+  eq(
+    'a single-quoted share button is repaired',
+    repairInlineShareButtons(
+      "<a class='facebook-share' data-title='A' data-url='./x/' href='#'></a>",
+      'p',
+    ).repaired,
+    1,
+  );
+  // A repaired href keeps the quote style it was found with, so a value
+  // containing the other quote character stays valid markup.
+  eq(
+    'a single-quoted malformed href is repaired in place',
+    repairMalformedHrefs("<a href='hhttps://x.com/'>a</a>").html,
+    "<a href='https://x.com/'>a</a>",
+  );
+  eq(
+    'a single-quoted in-site link is tokenized',
+    tokenizePageLinks(
+      "<a href='https://example.org/about-us/'>x</a>",
+      ['about-us'],
+      ['example.org'],
+    ).rewritten,
+    1,
+  );
+
   eq('a slug label is humanised', labelForHref('../about-us/', 'V'), 'About us');
   eq('an anchor is not a destination worth naming', labelForHref('#top', 'V'), null);
 

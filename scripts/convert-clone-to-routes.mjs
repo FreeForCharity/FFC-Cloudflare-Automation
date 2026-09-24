@@ -67,12 +67,16 @@ import {
   mirrorHeadingSelectors,
   scopeCloneCss,
   fragmentHead,
+  demoteWidgetTitles,
+  removeDeadNamelessControls,
   ensureSingleH1,
   repairSocialShareChrome,
   stripLayoutDuplicates,
   removeDeadConsentUi,
   ensureImageAlt,
   nameAnonymousLinks,
+  repairInlineShareButtons,
+  repairMalformedHrefs,
   nameGenericLinks,
   titleIframes,
   tokenizeAssetPaths,
@@ -310,8 +314,11 @@ function main() {
     iframesTitled: 0,
     scriptsRemoved: 0,
     shareLinksRepaired: 0,
+    hrefsRepaired: 0,
     shareChromeRemoved: 0,
     shareLinksRefused: 0,
+    widgetTitlesDemoted: 0,
+    deadControlsRemoved: 0,
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
@@ -343,9 +350,6 @@ function main() {
     const alt = ensureImageAlt(out);
     out = alt.html;
     tally.altsAdded += alt.added;
-    const named = nameAnonymousLinks(out, siteName);
-    out = named.html;
-    tally.linksNamed += named.named;
     const generic = nameGenericLinks(out);
     out = generic.html;
     tally.genericLinksNamed += generic.named;
@@ -376,7 +380,12 @@ function main() {
     const assetsTok = tokenizeAssetPaths(out, assetsDir);
     out = assetsTok.html;
     tally.assetRefs += assetsTok.rewritten;
-    const linksTok = tokenizePageLinks(out, rawToSlug);
+    // The capture's own host, so an in-site link written ABSOLUTELY is
+    // tokenized like a relative one. Without it a migration links away from
+    // itself to the site it is replacing -- which still serves those pages
+    // until cutover, so nothing looks broken while a reviewer is silently
+    // reading the old site.
+    const linksTok = tokenizePageLinks(out, rawToSlug, siteName ? [siteName] : []);
     out = linksTok.html;
     tally.pageRefs += linksTok.rewritten;
     // A `wp-content/…` reference the capture downloaded but never rewrote —
@@ -444,10 +453,36 @@ function main() {
     tally.shareLinksRepaired += share.repaired;
     tally.shareChromeRemoved += share.removed;
     tally.shareLinksRefused += share.rejected;
+    // The same plugin's INLINE row, which keeps the inputs to a share URL
+    // rather than a finished one. Needs the slug, because its `data-url` is
+    // relative to the page it sits on.
+    const inline = repairInlineShareButtons(share.html, slug);
+    tally.shareLinksRepaired += inline.repaired;
+    tally.shareLinksRefused += inline.rejected;
+    // Typos the SOURCE SITE shipped: a doubled `hhttps://`, a hostname with no
+    // scheme, an href with a leading space. Repaired before the naming pass,
+    // which reads the href to build the name.
+    const hrefs = repairMalformedHrefs(inline.html);
+    tally.hrefsRepaired += hrefs.repaired;
+    // Naming comes AFTER every repair and BEFORE the removal. After, because a
+    // repair turns `href="#"` into a real destination and this pass skips a
+    // bare `#` on purpose -- run first, it leaves every repaired link nameless.
+    // Before, because a named control is one the removal keeps.
+    const named = nameAnonymousLinks(hrefs.html, siteName);
+    tally.linksNamed += named.named;
     // The heading last, from the title computed just above: a WordPress
     // archive template often renders none, and the FFC template's
     // `verify:build` requires exactly one per indexable page.
-    const fragment = ensureSingleH1(share.html, title);
+    // After the share repair, which turns a parked destination into a real
+    // href -- so anything still `href="#"` here genuinely has nowhere to go.
+    const dead = removeDeadNamelessControls(named.html);
+    tally.deadControlsRemoved += dead.removed;
+    // Before the heading check, not after: a hidden widget title counts as
+    // the page's <h1> otherwise, and the page keeps no heading a reader can
+    // reach while every static check reports one.
+    const widget = demoteWidgetTitles(dead.html);
+    tally.widgetTitlesDemoted += widget.demoted;
+    const fragment = ensureSingleH1(widget.html, title);
     const wrapperClass = [WRAPPER_CLASS, bodyClass].filter(Boolean).join(' ');
     if (!dryRun) {
       write(join(repo, 'src', 'clone-content', `${slug || 'index'}.html`), fragment);
@@ -555,7 +590,10 @@ function main() {
   for (const h of [...frameHosts].sort()) console.log(`  https://${h}`);
   console.log(`scripts removed from fragments  ${tally.scriptsRemoved}`);
   console.log(`share links repointed          ${tally.shareLinksRepaired}`);
+  console.log(`malformed hrefs repaired       ${tally.hrefsRepaired}`);
   console.log(`dead share controls removed    ${tally.shareChromeRemoved}`);
+  console.log(`widget titles demoted to h2    ${tally.widgetTitlesDemoted}`);
+  console.log(`dead nameless controls removed ${tally.deadControlsRemoved}`);
   // Loud rather than silent: a refusal means the capture parked a
   // destination this conversion will not make live (javascript:, data:,
   // protocol-relative). Zero is the expected reading, and a non-zero one is

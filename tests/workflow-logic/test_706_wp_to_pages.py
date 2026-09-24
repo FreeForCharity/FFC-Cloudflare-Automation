@@ -1732,8 +1732,8 @@ def test_the_dead_social_share_chrome_is_repaired_or_removed():
     # half of that.
     assert re.search(
         r"import\s*\{[^}]*\brepairSocialShareChrome\b[^}]*\}\s*from", src, re.S
-    ), src[:400]
-    assert "repairSocialShareChrome(" in src, src[:400]
+    ), _around(src, "import {", "repairSocialShareChrome import")
+    assert "repairSocialShareChrome(" in src, _around(src, "const share =", "repairSocialShareChrome(")
 
 
 def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
@@ -1764,6 +1764,363 @@ def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
     # And the per-id cap must not come back alongside it: two mechanisms for
     # one job is how the weaker one goes on being trusted.
     assert "#ss-floating-bar" not in css, css[-800:]
+
+
+def _around(src: str, anchor: str, needle: str, span: int = 400) -> str:
+    """An excerpt from where the reader should look, not from the file's top.
+
+    `src[:400]` on a string that lives 450 lines in prints the imports, which
+    is worse than no context: it looks like evidence and points somewhere
+    unrelated. Raised by Copilot on #1364.
+    """
+    i = src.find(anchor)
+    if i == -1:
+        return f"{needle!r} not found, and neither was the anchor {anchor!r}"
+    return f"{needle!r} not found near {anchor!r}:\n...{src[max(0, i - span // 4) : i + span]}..."
+
+
+def test_a_control_that_can_neither_act_nor_be_announced_is_removed():
+    """The capture strips JavaScript, so a theme's icon-only `href="#"` trigger
+    can no longer do anything -- and because its only content is an icon it has
+    no accessible name either. axe reports `link-name` at SERIOUS severity, and
+    on FFC-EX-newheightseducation.org that was 11-21 nodes per page and the
+    largest single contributor to the accessibility score.
+
+    Clarke's call was removal rather than labelling: the capability is not
+    possible in a static export, so a named control that still does nothing
+    would be a worse promise to a visitor than no control.
+
+    BOTH conditions are required, and the NAMED half is the safety argument.
+    Measured on that capture: 3,540 nameless anchors across 9 icon-only
+    signatures against **58,491 named** ones, including 1,760 menu items and
+    ~100 translator flags. A rule that keyed on `href="#"` alone would have
+    deleted the site's navigation."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        'an icon-only href="#" trigger is removed',
+        "...and the page around it is left intact",
+        "a menu item with text is NOT removed",
+        "a control named by title is NOT removed",
+        "a control named by aria-label is NOT removed",
+        "a control named by its image's alt is NOT removed",
+        "a control named by its SVG's title is NOT removed",
+        "an anchor pointing at a real fragment is NOT removed",
+        "an anchor with a real URL is NOT removed",
+        "an anchor holding only &nbsp; is still nameless",
+        "a named anchor immediately after a nameless one survives",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that it runs AFTER the share repair, which turns a parked
+    # destination into a real href. Run before, a repairable share link is
+    # still `href="#"` and would be deleted instead of fixed.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert "removeDeadNamelessControls(named.html)" in src, _around(
+        src, "const dead =", "removeDeadNamelessControls(named.html)"
+    )
+    # Removal is LAST. Every repair and the naming pass run ahead of it, so by
+    # the time it sees a control, everything that could have given that control
+    # a destination or a name has already had its chance -- which is what makes
+    # "still `href="#"` and still nameless" mean genuinely dead rather than
+    # not-yet-looked-at.
+    for earlier in (
+        "repairSocialShareChrome(",
+        "repairInlineShareButtons(",
+        "repairMalformedHrefs(",
+        "nameAnonymousLinks(",
+    ):
+        assert src.index(earlier) < src.index("removeDeadNamelessControls("), _around(
+            src, earlier, f"{earlier} must run before the removal"
+        )
+
+
+def test_a_working_link_with_no_name_is_named_rather_than_removed():
+    """The removal in the test above cleared the capture's DEAD controls and
+    moved `link-name` on FFC-EX-newheightseducation.org from 21 nodes to 20:
+    the theme's search trigger was one node per page, and the other 5,522 were
+    a different population entirely -- icon-only links that WORK.
+
+    The charity's Facebook page, its YouTube channel, its Yelp listing: each
+    drawn as a CSS `::before` with no text, so each announces as a bare "link".
+    Removing those would delete the charity's real social presence, so the
+    treatment is the opposite of the dead case, and the two are told apart by
+    the one thing that differs -- whether the href goes anywhere.
+
+    `nameAnonymousLinks` already existed for this and could not reach them: it
+    required an `alt=""` image to be present, and an icon drawn in CSS has no
+    `<img>` at all. The widening drops that requirement and defers to
+    `anchorHasAccessibleName`, which is the SAME judge the removal uses, so the
+    two passes can never disagree about what "nameless" means.
+
+    The ordering constraint is load-bearing and runs the opposite way to the
+    share repair's. Naming happens BEFORE the removal, so if it ever named a
+    bare `href="#"` the removal would find a labelled control and keep it --
+    the fix would silently stop working while every one of its own tests went
+    on passing."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "an icon-only social link with a real destination is named by its host",
+        "an opaque id in the path is not used as the name",
+        "another site's front page is not announced as this site's home",
+        "a bare # is left for the removal pass, not named",
+        "a back-to-top button is named from the fragment it targets",
+        "javascript: is not a destination",
+        "an empty href is not a destination",
+        "a mailto is named by its address",
+        "the host is normalised",
+        "an entity-encoded href is decoded first",
+        "an entity-encoded fragment is decoded before it is read",
+        "a non-string href is not a destination",
+        "the existing markup is preserved exactly",
+        "a named link following a nameless one is not swallowed",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    lib = (REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs").read_text(encoding="utf-8")
+    # One judge of "nameless", shared. A second copy of this logic is how the
+    # naming pass and the removal pass start disagreeing about the same anchor.
+    body = lib[lib.index("export function nameAnonymousLinks") :]
+    body = body[: body.index("\n}\n")]
+    assert "anchorHasAccessibleName(attrs, inner)" in body, _around(
+        lib, "export function nameAnonymousLinks", "anchorHasAccessibleName"
+    )
+
+    # ...and the ordering, read off the converter rather than assumed. Naming
+    # sits between the repairs and the removal, and BOTH sides are load-bearing.
+    #
+    # After the repairs: a repair turns `href="#"` into a real destination, and
+    # this pass skips a bare `#` on purpose -- run first, it leaves every link
+    # a repair fixed nameless, and axe reports each one. That was latent for a
+    # release, because the only site to run the pipeline had already had its
+    # share bar repaired before the naming pass existed.
+    #
+    # Before the removal: a named control is one the removal keeps.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    assert src.index("nameAnonymousLinks(hrefs.html, siteName)") < src.index(
+        "removeDeadNamelessControls("
+    ), _around(src, "nameAnonymousLinks(", "naming before dead-control removal")
+    for repair in ("repairSocialShareChrome(", "repairInlineShareButtons(", "repairMalformedHrefs("):
+        assert src.index(repair) < src.index("nameAnonymousLinks(hrefs.html"), _around(
+            src, repair, f"{repair} must run before the naming pass"
+        )
+
+
+def test_what_can_be_repaired_is_repaired_rather_than_removed():
+    """Removal is the last resort, not the first move. Three passes ahead of it
+    put a real destination back on a link the capture left parked, and each one
+    shrinks what the removal is left holding.
+
+    On FFC-EX-newheightseducation.org, measured:
+
+      1,930  share buttons whose destination was sitting in `data-url` and
+             `data-title` all along. The plugin composed the URL in JavaScript
+             and the capture strips JavaScript -- the same defect
+             `repairSocialShareChrome` already fixed on the floating bar, in
+             the same plugin's inline row, which stores the INPUTS to a share
+             URL rather than a finished one.
+        539  `hhttps://x.com/newheightseduc1` -- the charity's own typo, in a
+             footer widget, so it broke their X link on 69% of the site.
+      9,074  in-site links written as `https://www.newheightseducation.org/...`
+             to pages this very export contains. `tokenizePageLinks` matched
+             `../` and `./` only, so these were left addressing the OLD SITE --
+             which still serves them until cutover, so a reviewer on the new
+             site reads the old one and nothing looks broken.
+          1  `Radio.NewHeightsEducation.org`, with no scheme, which a browser
+             reads as a relative path.
+
+    What is left for removal is what has no repair: 1,078 JS-only overlay
+    triggers, 26 slider arrows with no paginated route to point at, and 506
+    Google+ buttons for a service that shut down in 2019.
+
+    The share URL's origin is a `%%SITEURL_ENC%%` token, not a baked string.
+    A share URL must be absolute and this site's absolute URL CHANGES at
+    cutover, so either literal would be wrong for one half of the site's life.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a doubled scheme letter is repaired",
+        'a correct scheme is not "repaired"',
+        "a bare hostname is given a scheme",
+        "a relative file is NOT read as a hostname",
+        "nor a pdf",
+        "nor an image",
+        "a relative directory is left alone",
+        "an already-tokenized link is left alone",
+        "surrounding whitespace is trimmed",
+        "a parked share button is pointed at a real endpoint",
+        "the origin is left for the loader to resolve",
+        "the path is resolved against the page the button sits on",
+        "a googleplus button has no endpoint and is left for removal",
+        "a javascript: data-url is refused, not promoted",
+        "a protocol-relative data-url is refused",
+        "a search trigger is not mistaken for a share button",
+        "an absolute in-site link is tokenized",
+        "its query and fragment are carried across",
+        "a subdomain is not the same site",
+        "another site entirely is left alone",
+        "a page this export does not have is left pointing at the live site",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    # The tokenizer cannot recognise the absolute form without being told which
+    # host is "this site", and it must be told the CAPTURED domain rather than
+    # anything about where the export is deployed.
+    assert "tokenizePageLinks(out, rawToSlug, siteName ? [siteName] : [])" in src, _around(
+        src, "tokenizePageLinks(", "the source host reaches the tokenizer"
+    )
+    # The share button's origin is resolved at read time by the loader, so the
+    # token has to exist on both sides. A fragment carrying a token nothing
+    # substitutes ships `%%SITEURL_ENC%%` to a visitor's Facebook share dialog.
+    loader = (REPO_ROOT / "assets" / "clone-content-lib.ts").read_text(encoding="utf-8")
+    # The SUBSTITUTION, not the token: the docblock above names the token too,
+    # so asserting on the bare string passes for a loader that has stopped
+    # resolving it -- and a fragment whose token nothing substitutes ships
+    # `%%SITEURL_ENC%%` into a visitor's Facebook share dialog.
+    assert ".split('%%SITEURL_ENC%%').join(siteUrlEncoded)" in loader, _around(
+        loader, "loadCloneContent", "the loader resolves %%SITEURL_ENC%%"
+    )
+    assert "encodeURIComponent(siteConfig.url" in loader, _around(
+        loader, "siteUrlEncoded", "the origin comes from siteConfig, pre-encoded"
+    )
+
+
+def test_an_attribute_is_read_whichever_quote_the_theme_used():
+    """HTML permits `alt='Share'` exactly as much as `alt="Share"`, and a
+    capture takes whatever the source theme emitted. Every pass here decides
+    whether markup SURVIVES, so a double-quote-only pattern is not a style
+    question: a control named by a single-quoted `aria-label` reads as nameless
+    and is deleted from a charity's live site -- the one direction these passes
+    are built never to fail in. A single-quoted `href='#'` fails the other way:
+    the repairs skip the button they exist to fix, and then the removal deletes
+    it as dead.
+
+    Raised by Copilot on #1367, and it could not have been found by running the
+    pipeline. Measured on the newheightseducation.org capture: 11,515
+    single-quoted hrefs, all of them on `<link rel=stylesheet>`, and **zero**
+    anchors carrying a single-quoted attribute. Re-deriving all 785 fragments
+    with the widened reads produces byte-identical output. So this is a defect
+    reachable only by reading the code, whose fix is a no-op for the one site
+    in hand and load-bearing for the next one.
+
+    `attrValue` is the single reader, and `isParkedHref` the single test for
+    "goes nowhere", so the passes cannot drift apart on either question."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a control named by a single-quoted aria-label is NOT removed",
+        "a control named by a single-quoted title is NOT removed",
+        "a control named by a single-quoted image alt is NOT removed",
+        "a single-quoted parked control is still removed",
+        "a single-quoted href is read",
+        "a double-quoted href is read",
+        "a missing attribute reads as null",
+        "an empty value reads as empty, not missing",
+        "a single-quoted parked href is recognised",
+        "a real fragment is not parked",
+        "a single-quoted share button is repaired",
+        "a single-quoted malformed href is repaired in place",
+        "a single-quoted in-site link is tokenized",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    # One reader and one parked-href test, shared. Two copies of either is how
+    # the naming pass and the removal start disagreeing about the same anchor.
+    lib = (REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs").read_text(encoding="utf-8")
+    for caller in (
+        "removeDeadNamelessControls",
+        "repairInlineShareButtons",
+        "repairSocialShareChrome",
+    ):
+        body = lib[lib.index(f"export function {caller}") :]
+        body = body[: body.index("\n}\n")]
+        assert "isParkedHref(" in body, _around(
+            lib, f"export function {caller}", f"{caller} must use isParkedHref"
+        )
+
+
+def test_a_hidden_widget_title_does_not_count_as_the_pages_heading():
+    """`widgettitle` is WordPress core's class for a sidebar widget's title,
+    and Jupiter emits it as an `<h1>`. On FFC-EX-newheightseducation.org that
+    left **429 of 785** pages looking like they had a heading when they had
+    none a screen reader could reach: the theme sets the widget
+    `display: none`, so `verify:build` counted an `<h1>` TAG, axe reported
+    `page-has-heading-one` against the ACCESSIBILITY TREE, and
+    `ensureSingleH1` saw the tag and skipped the page.
+
+    All three were right about what they measured, which is why no static
+    check caught it -- and a fragment cannot know its own computed CSS, so the
+    level cannot be decided by asking whether the heading is visible. It is
+    decided semantically instead: a widget title describes a widget, not the
+    document. The capture already agreed, tagging these `ffc-h2`.
+
+    Found by the post-deploy smoke suite added in
+    FFC-EX-newheightseducation.org#19, which renders the page in a browser --
+    the only layer at which the disagreement is observable."""
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a widget title emitted as an h1 is demoted to h2",
+        "...keeping the widget, its classes and its text",
+        "...so the page then gets a heading a reader can actually reach",
+        "a real page heading is NOT demoted",
+        "...and a class that merely contains the word is not the widget class",
+        "...including one separated by a hyphen, which is a regex word boundary",
+        "...while a single-quoted class attribute still works",
+        "...and an h1 with no class at all is left alone",
+        "an h2 that is already correct is left alone",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+    # ...and that the converter runs it BEFORE the heading check. Run after,
+    # it demotes a heading the page was already counting and leaves nothing.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    # `dead.html`, not `share.html`: the dead-control removal now sits between
+    # the share repair and this step. The chain is
+    # share -> dead -> widget -> heading, and each link is asserted by the test
+    # that owns its step.
+    for needle in ("demoteWidgetTitles(dead.html)", "ensureSingleH1(widget.html, title)"):
+        # The excerpt is taken around the CALL SITE, not from the top of the
+        # file: these strings live ~450 lines in, so `src[:400]` printed the
+        # imports on failure and sent the reader somewhere unrelated. Raised by
+        # Copilot on #1364.
+        assert needle in src, _around(src, "const fragment =", needle)
 
 
 def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
@@ -1807,7 +2164,9 @@ def test_a_captured_page_with_no_heading_of_its_own_is_given_one():
     # to be assigned first for the code to run at all, so no mutation could
     # fail that assertion -- and an assertion nothing can break reads as
     # coverage while supplying none.
-    assert "ensureSingleH1(share.html, title)" in src, src[:200]
+    assert "ensureSingleH1(widget.html, title)" in src, _around(
+        src, "const fragment =", "ensureSingleH1(widget.html, title)"
+    )
 
 
 def test_the_built_output_verifier_is_scoped_to_routes_not_captured_assets():

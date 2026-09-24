@@ -769,10 +769,37 @@ function transformInlineStyles(html) {
  * The template's own home page is the one exception: the charity's front page
  * owns `/` now, so it is dropped rather than restored.
  */
-/** A `page.*` directly here — i.e. this directory IS a route someone owns. */
+/**
+ * A `page.*` or `route.*` directly here — i.e. this directory IS a route
+ * someone owns.
+ *
+ * `route.*` counts because an API route owns its path exactly as a page does,
+ * and this is the predicate for "the capture owns this route". Checking only
+ * `page.*` read a captured `route.ts` as a free slot and merged template files
+ * in beside it.
+ *
+ * Fails CLOSED on a readdir error rather than crashing the conversion: the
+ * destination can exist without being a directory, and `existsSync` says
+ * nothing about that — `readdirSync` on a file throws ENOTDIR, which took the
+ * whole run down from a predicate whose job is to answer a question.
+ */
 function hasRoutablePage(dir) {
-  if (!existsSync(dir)) return false;
-  return readdirSync(dir).some((name) => /^page\.(tsx|ts|jsx|js)$/.test(name));
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((name) => /^(page|route)\.(tsx|ts|jsx|js)$/.test(name));
+}
+
+/** The destination exists but is not a directory — nothing may be merged into it. */
+function blockedByNonDirectory(dir) {
+  try {
+    return !statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** A `page.*` or `route.*` ANYWHERE beneath here — i.e. this tree holds routes. */
@@ -826,7 +853,7 @@ function restoreTemplateRoutes(repo) {
   try {
     entries = readdirSync(parked, { withFileTypes: true });
   } catch {
-    return { restored, collided };
+    return { restored, collided, skipped };
   }
   for (const entry of entries) {
     const from = join(parked, entry.name);
@@ -878,7 +905,10 @@ function restoreTemplateRoutes(repo) {
       skipped.push(entry.name);
       continue;
     }
-    if (hasRoutablePage(to)) {
+    // A destination that exists as a FILE is the capture's too, and merging
+    // into it is not possible — `mergeRouteDirectory` would `mkdirSync` over a
+    // file and abort the run. Report it as a collision rather than crashing.
+    if (hasRoutablePage(to) || blockedByNonDirectory(to)) {
       collided.push(entry.name);
       continue;
     }
@@ -1633,6 +1663,22 @@ function selfTest() {
     }
   }
 
+  // A repo with nothing parked returns the SAME shape as one that restored
+  // something. A caller destructuring `skipped` got `undefined` here.
+  {
+    const empty = mkdtempSync(join(tmpdir(), 'ffc-convert-empty-'));
+    try {
+      const r = restoreTemplateRoutes(empty);
+      eq('no parked directory still returns restored/collided/skipped', Object.keys(r).sort(), [
+        'collided',
+        'restored',
+        'skipped',
+      ]);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  }
+
   // --- the repo shape --------------------------------------------------
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));
   try {
@@ -1676,6 +1722,19 @@ function selfTest() {
     write(join(dir, '_disabled_template_routes', '__tests__', 'components', 'Card.test.tsx'), 't');
     write(join(dir, '_disabled_template_routes', 'README.md'), 'why this is parked');
 
+    // An API route the capture owns. `hasRoutablePage` is the collision
+    // predicate, and checking only `page.*` read this as a free slot.
+    mkdirSync(join(dir, '_disabled_template_routes', 'api'), { recursive: true });
+    mkdirSync(join(dir, 'src', 'app', 'api'), { recursive: true });
+    write(join(dir, '_disabled_template_routes', 'api', 'page.tsx'), 'template api page');
+    write(join(dir, 'src', 'app', 'api', 'route.ts'), 'the captured api route');
+
+    // A destination that exists as a FILE. `existsSync` is true and
+    // `readdirSync` throws ENOTDIR, which crashed the whole conversion.
+    mkdirSync(join(dir, '_disabled_template_routes', 'sitemap.xml'), { recursive: true });
+    write(join(dir, '_disabled_template_routes', 'sitemap.xml', 'page.tsx'), 'template');
+    write(join(dir, 'src', 'app', 'sitemap.xml'), 'the captured sitemap, a FILE');
+
     const routes = restoreTemplateRoutes(dir);
     // The footer standard links to these; leaving them parked ships 404s.
     // Sorted: readdir order is filesystem-dependent and is not the property
@@ -1693,6 +1752,18 @@ function selfTest() {
       '__tests__',
       'src',
     ]);
+    // `api` collided on a captured `route.ts`, which the old predicate read as
+    // a free slot.
+    eq(
+      'a captured route.ts keeps the template page out',
+      existsSync(join(dir, 'src', 'app', 'api', 'page.tsx')),
+      false,
+    );
+    eq(
+      'a destination that is a file is reported, not crashed on',
+      readFileSync(join(dir, 'src', 'app', 'sitemap.xml'), 'utf8'),
+      'the captured sitemap, a FILE',
+    );
     eq(
       '...and its files are still where the repo put them',
       readFileSync(
@@ -1735,7 +1806,11 @@ function selfTest() {
       false,
     );
     // Restoring over a captured page would delete the charity's content.
-    eq('a route the capture owns is not overwritten', routes.collided, ['about-us']);
+    eq('a route the capture owns is not overwritten', [...routes.collided].sort(), [
+      'about-us',
+      'api',
+      'sitemap.xml',
+    ]);
     eq(
       'and the captured page is still there',
       readFileSync(join(dir, 'src', 'app', 'about-us', 'page.tsx'), 'utf8'),

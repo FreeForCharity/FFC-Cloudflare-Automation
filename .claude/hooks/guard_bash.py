@@ -217,14 +217,29 @@ def _top_level_ops(bare, ops):
       force-push into two stages. 21 such splits were measured -- but the
       injected prefix carrying the odd backtick is **bash-invalid**, and a
       sweep of 132 bash-VALID vectors of this shape found **0** the old code
-      allowed. Bash makes unquoted backticks pair, so a runnable command
-      carries an even count and the scanner counts the same ones; the one place
-      an odd backtick is tolerated is a heredoc body, which
-      `_split_statements` skips. So this was a real parsing defect that
-      mis-split input no shell would run, not a permissive hole. The first
-      write-up of this docstring said "21 real force-pushes allowed", which
-      overstated it by skipping the `bash -n` filter the bullet below applies;
-      Copilot caught the contradiction.
+      allowed. The reason is that this scanner's state is local to one CALL --
+      one statement -- and any statement a shell will actually execute has
+      balanced backticks, so the parity it sees is even and cannot invert. An
+      odd backtick is only tolerated where it is never executed as part of the
+      same statement: a quoted heredoc body holds literal text, but the body's
+      own lines are statements too, so an unpaired backtick and a force-push
+      cannot share one runnable statement. Measured on that shape as well --
+      `bash <<'EOF'` with the odd backtick and the push in one body blocks on
+      both the old and new code.
+
+      So this was a real parsing defect that mis-split input no shell would
+      run, not a permissive hole.
+
+      Two corrections earned here, both from Copilot on #1336 and both worth
+      keeping because the wrong versions were plausible. The first write-up
+      said "21 real force-pushes allowed", which skipped the `bash -n` filter
+      the bullet below already applied. The second explained the 0 by claiming
+      heredoc bodies are skipped by `_split_statements` -- **wrong**: rule 2's
+      segments come from `_echo_segments`, which INCLUDES bodies deliberately
+      and fail-closed (`bash <<EOF` really does execute a push in its body, as
+      `force_push_violation` documents). The 0 was measured; that explanation
+      of it was invented, and an invented mechanism next to a measured number
+      is how a reader ends up trusting the wrong one.
     - Toggling it only at TOP LEVEL fixes that but leaves backticks inside
       `$(...)` untracked, so an unquoted `)` inside them can match the outer
       substitution's closer and empty the stack early. Measured over 72

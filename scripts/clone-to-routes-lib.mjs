@@ -411,6 +411,41 @@ export function repairHref(raw) {
 }
 
 /** Apply `repairHref` to every href in a fragment. */
+/**
+ * Un-escape attribute quotes that WordPress stored escaped.
+ *
+ * Some blocks are held in the database with their markup JSON-escaped and are
+ * then rendered literally, so the page ships
+ *
+ *   <figure class=\\"alignleft size-large\\"><img src=\\"https://host/a.jpg\\" alt=\\"\\">
+ *
+ * A browser reads `src` as the single character `\` and then requests
+ * `/%22https://host/a.jpg%22` against the CURRENT origin -- so the image is a
+ * broken icon, the classes do not apply, and the site 404s itself. Measured on
+ * newheightseducation.org: 858 occurrences across 39 of 785 fragments, every
+ * one of them at an attribute boundary (`class=`, `src=`, `alt=`, `width=`,
+ * `height=` and the quotes closing those values).
+ *
+ * The source site has the same markup and the same broken images. Reproducing
+ * a corrupted attribute faithfully is not a goal -- nothing about the page's
+ * MEANING is carried by the backslash.
+ *
+ * Scoped to `=\"` and the quote that closes that value, never a bare `\"`
+ * anywhere in the document: prose may legitimately contain an escaped quote,
+ * and rewriting text is not this pass's job.
+ */
+export function repairEscapedAttributeQuotes(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0 };
+  let repaired = 0;
+  // `=\"value\"` -> `="value"`. The value itself may not contain a quote,
+  // which is what keeps this from running past the end of the attribute.
+  const out = html.replace(/=\\"([^"\\]*)\\"/g, (_whole, value) => {
+    repaired += 1;
+    return `="${value}"`;
+  });
+  return { html: out, repaired };
+}
+
 export function repairMalformedHrefs(html) {
   if (typeof html !== 'string') return { html: '', repaired: 0 };
   let repaired = 0;
@@ -3015,6 +3050,35 @@ function selfTest() {
   // Browsers trim this, so the link works -- but the naming pass reads the
   // href, and a leading space made it label the link "Www.dgliteracy".
   eq('surrounding whitespace is trimmed', repairHref(' https://x.org/ '), 'https://x.org/');
+  // --- attribute quotes WordPress stored escaped -------------------------
+  eq(
+    'escaped quotes: a src the browser cannot read is repaired',
+    repairEscapedAttributeQuotes('<img src=\\"https://h/a.jpg\\" alt=\\"\\">').html,
+    '<img src="https://h/a.jpg" alt="">',
+  );
+  eq(
+    'escaped quotes: both attributes counted',
+    repairEscapedAttributeQuotes('<img src=\\"https://h/a.jpg\\" alt=\\"\\">').repaired,
+    2,
+  );
+  // The discrimination that keeps this from rewriting the charity's prose: an
+  // escaped quote in TEXT is not an attribute and must survive untouched.
+  eq(
+    'escaped quotes: prose is not an attribute',
+    repairEscapedAttributeQuotes('<p>He said \\"no\\" loudly</p>').html,
+    '<p>He said \\"no\\" loudly</p>',
+  );
+  eq(
+    'escaped quotes: already-clean markup is a no-op',
+    repairEscapedAttributeQuotes('<img src="https://h/a.jpg">').repaired,
+    0,
+  );
+  eq(
+    'escaped quotes: a non-string is refused rather than crashing',
+    repairEscapedAttributeQuotes(null).html,
+    '',
+  );
+
   eq(
     'the pass reports what it touched',
     repairMalformedHrefs('<a href="hhttps://x.com/">a</a><a href="/ok/">b</a>').repaired,

@@ -76,6 +76,7 @@ import {
   ensureImageAlt,
   nameAnonymousLinks,
   repairInlineShareButtons,
+  repairEscapedAttributeQuotes,
   repairMalformedHrefs,
   nameGenericLinks,
   titleIframes,
@@ -462,7 +463,11 @@ function main() {
     // Typos the SOURCE SITE shipped: a doubled `hhttps://`, a hostname with no
     // scheme, an href with a leading space. Repaired before the naming pass,
     // which reads the href to build the name.
-    const hrefs = repairMalformedHrefs(inline.html);
+    // Before the href repair: an escaped `src=\\"...\\"` is not a malformed
+    // URL, it is an attribute the browser never parsed, so it has to become a
+    // real attribute before anything can inspect its value.
+    const unescaped = repairEscapedAttributeQuotes(inline.html);
+    const hrefs = repairMalformedHrefs(unescaped.html);
     tally.hrefsRepaired += hrefs.repaired;
     // Naming comes AFTER every repair and BEFORE the removal. After, because a
     // repair turns `href="#"` into a real destination and this pass skips a

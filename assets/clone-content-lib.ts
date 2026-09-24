@@ -2,10 +2,20 @@
 // FFC-Cloudflare-Automation/assets/clone-content-lib.ts, not this copy.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { siteConfig } from '@/lib/site.config'
 
 // Read at module scope: `output: 'export'` runs every route at build time, so
 // this resolves once against the build's own environment rather than per page.
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+
+// A share URL has to be ABSOLUTE, and this site's absolute URL changes at
+// cutover: `https://<owner>.github.io/FFC-EX-<domain>` while it sits on the
+// default Pages URL, the charity's own domain afterwards. Baking either one
+// into the captured markup makes every share button wrong for one half of the
+// site's life, so the fragments carry a token and it is resolved here, from
+// the same config that produces every canonical URL. Pre-encoded because the
+// only place it appears is inside a query parameter.
+const siteUrlEncoded = encodeURIComponent(siteConfig.url.replace(/\/$/, '') + basePath)
 
 const CONTENT_DIR = join(process.cwd(), 'src', 'clone-content')
 
@@ -18,6 +28,9 @@ const CONTENT_DIR = join(process.cwd(), 'src', 'clone-content')
  * custom domain is attached. Substituting at read time is what lets one commit
  * be correct for both, and it keeps raw asset URLs out of the repo's
  * `assetPath()` drift scan.
+ *
+ * `%%SITEURL_ENC%%` is the same idea for the one place a fragment needs an
+ * ABSOLUTE url rather than a path: the share buttons' query parameters.
  */
 export function loadCloneContent(name: string): string {
   // The name comes from the generator, never from a request — this site is a
@@ -27,5 +40,5 @@ export function loadCloneContent(name: string): string {
     throw new Error(`refusing to load clone content for an unexpected name: ${name}`)
   }
   const raw = readFileSync(join(CONTENT_DIR, `${name}.html`), 'utf8')
-  return raw.split('%%BASE%%').join(basePath)
+  return raw.split('%%BASE%%').join(basePath).split('%%SITEURL_ENC%%').join(siteUrlEncoded)
 }

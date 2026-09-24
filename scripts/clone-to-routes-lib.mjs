@@ -411,6 +411,77 @@ export function repairHref(raw) {
 }
 
 /** Apply `repairHref` to every href in a fragment. */
+/**
+ * Un-escape attribute quotes that WordPress stored escaped.
+ *
+ * Some blocks are held in the database with their markup JSON-escaped and are
+ * then rendered literally, so the page ships
+ *
+ *   <figure class=\\"alignleft size-large\\"><img src=\\"https://host/a.jpg\\" alt=\\"\\">
+ *
+ * A browser reads `src` as the single character `\` and then requests
+ * `/%22https://host/a.jpg%22` against the CURRENT origin -- so the image is a
+ * broken icon, the classes do not apply, and the site 404s itself. Measured on
+ * newheightseducation.org: 858 occurrences across 39 of 785 fragments, every
+ * one of them at an attribute boundary (`class=`, `src=`, `alt=`, `width=`,
+ * `height=` and the quotes closing those values).
+ *
+ * The source site has the same markup and the same broken images. Reproducing
+ * a corrupted attribute faithfully is not a goal -- nothing about the page's
+ * MEANING is carried by the backslash.
+ *
+ * Scoped to `=\"` and the quote that closes that value, never a bare `\"`
+ * anywhere in the document: prose may legitimately contain an escaped quote,
+ * and rewriting text is not this pass's job.
+ */
+export function repairEscapedAttributeQuotes(html) {
+  if (typeof html !== 'string') return { html: '', repaired: 0 };
+  let repaired = 0;
+  // `=\"value\"` -> `="value"`. The value itself may not contain a quote,
+  // which is what keeps this from running past the end of the attribute.
+  const out = html.replace(/=\\"([^"\\]*)\\"/g, (_whole, value) => {
+    repaired += 1;
+    return `="${value}"`;
+  });
+  return { html: out, repaired };
+}
+
+/**
+ * Undo one round of UTF-8-decoded-as-Latin-1 in captured text.
+ *
+ * `\u00C2` (\u00C2) followed immediately by a character in U+0080..U+00BF is
+ * not text anyone typed: it is the two bytes of a 2-byte UTF-8 sequence, each
+ * decoded as its own Latin-1 character and then re-encoded. The commonest
+ * visible form is a right guillemet, `\u00BB`, arriving as `\u00C2\u00BB`.
+ *
+ * Measured on newheightseducation.org: **429 of 581 fragments**, always the
+ * same string -- the Google Language Translator plugin's trigger, which reads
+ * `Translate \u00C2\u00BB` on every page it appears on, in an orange tab in the
+ * corner of the viewport. No other mojibake signature occurs anywhere in the
+ * capture (`\u00E2\u0080\u0099`, `\u00C3\u00A9`, `\u00E2\u0080\u009C` and the rest: zero files), so this is the
+ * source site's own plugin output rather than anything the capture did to it.
+ *
+ * Reproducing it faithfully is not a goal. The page's meaning is `\u00BB`, the
+ * charity did not choose to publish `\u00C2\u00BB`, and it is on every page of their
+ * site.
+ *
+ * Scoped to the C2 range only, and to ADJACENT characters. The C3 range
+ * (accented letters: `\u00C3\u00A9` for `\u00E9`) is the same bug and is deliberately left
+ * alone here because it did not occur -- a repair that fires on text nobody
+ * measured is how a pass like this starts corrupting the charity's prose. A
+ * legitimate `\u00C2` immediately followed by a guillemet or a non-breaking space,
+ * with no separator, is not a sequence a human writes.
+ */
+export function repairMojibake(text) {
+  if (typeof text !== 'string') return { text: '', repaired: 0 };
+  let repaired = 0;
+  const out = text.replace(/\u00C2([\u0080-\u00BF])/g, (_whole, tail) => {
+    repaired += 1;
+    return tail;
+  });
+  return { text: out, repaired };
+}
+
 export function repairMalformedHrefs(html) {
   if (typeof html !== 'string') return { html: '', repaired: 0 };
   let repaired = 0;
@@ -3015,6 +3086,75 @@ function selfTest() {
   // Browsers trim this, so the link works -- but the naming pass reads the
   // href, and a leading space made it label the link "Www.dgliteracy".
   eq('surrounding whitespace is trimmed', repairHref(' https://x.org/ '), 'https://x.org/');
+  // --- attribute quotes WordPress stored escaped -------------------------
+  eq(
+    'escaped quotes: a src the browser cannot read is repaired',
+    repairEscapedAttributeQuotes('<img src=\\"https://h/a.jpg\\" alt=\\"\\">').html,
+    '<img src="https://h/a.jpg" alt="">',
+  );
+  eq(
+    'escaped quotes: both attributes counted',
+    repairEscapedAttributeQuotes('<img src=\\"https://h/a.jpg\\" alt=\\"\\">').repaired,
+    2,
+  );
+  // The discrimination that keeps this from rewriting the charity's prose: an
+  // escaped quote in TEXT is not an attribute and must survive untouched.
+  eq(
+    'escaped quotes: prose is not an attribute',
+    repairEscapedAttributeQuotes('<p>He said \\"no\\" loudly</p>').html,
+    '<p>He said \\"no\\" loudly</p>',
+  );
+  eq(
+    'escaped quotes: already-clean markup is a no-op',
+    repairEscapedAttributeQuotes('<img src="https://h/a.jpg">').repaired,
+    0,
+  );
+  eq(
+    'escaped quotes: a non-string is refused rather than crashing',
+    repairEscapedAttributeQuotes(null).html,
+    '',
+  );
+
+  // --- text the source double-encoded ------------------------------------
+  eq(
+    'mojibake: a double-encoded guillemet is restored',
+    repairMojibake('<span>Translate \u00C2\u00BB</span>').text,
+    '<span>Translate \u00BB</span>',
+  );
+  eq('mojibake: and counted', repairMojibake('a \u00C2\u00BB b \u00C2\u00A0 c').repaired, 2);
+  // The two discriminations that keep this off the charity's prose. Neither is
+  // hypothetical: \u00C2 is a letter in French and Portuguese, and a guillemet
+  // preceded by a space is how French punctuates.
+  eq(
+    'mojibake: a lone \u00C2 is left alone',
+    repairMojibake('\u00C0 la carte, \u00C2 by itself, caf\u00E9').text,
+    '\u00C0 la carte, \u00C2 by itself, caf\u00E9',
+  );
+  eq(
+    'mojibake: a SPACED \u00C2 \u00BB is not a double-encoding',
+    repairMojibake('\u00C2 \u00BB').text,
+    '\u00C2 \u00BB',
+  );
+  // The TAIL range matters as much as the lead byte: a real 2-byte UTF-8
+  // sequence starting C2 can only continue 80..BF, so `\u00C2` followed by a
+  // letter is two letters, not one mis-decoded character. Widening the tail
+  // is the one mutation the first version of these tests did not catch.
+  eq(
+    'mojibake: \u00C2 followed by a LETTER is two letters, not a sequence',
+    repairMojibake('\u00C2\u00E9 and \u00C2\u00FF').text,
+    '\u00C2\u00E9 and \u00C2\u00FF',
+  );
+  // The C3 range is the same bug in accented letters and is deliberately NOT
+  // repaired -- it did not occur in this capture, and a pass that fires on
+  // text nobody measured is how prose gets corrupted.
+  eq(
+    'mojibake: the unmeasured C3 range is left for evidence',
+    repairMojibake('caf\u00C3\u00A9').text,
+    'caf\u00C3\u00A9',
+  );
+  eq('mojibake: clean text is a no-op', repairMojibake('Translate \u00BB').repaired, 0);
+  eq('mojibake: a non-string is refused rather than crashing', repairMojibake(undefined).text, '');
+
   eq(
     'the pass reports what it touched',
     repairMalformedHrefs('<a href="hhttps://x.com/">a</a><a href="/ok/">b</a>').repaired,

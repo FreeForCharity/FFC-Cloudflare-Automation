@@ -35,10 +35,59 @@ import { siteConfig } from '@/lib/site.config'
  * The moment a real EIN is set the identity line starts carrying it, with no
  * further edit here.
  */
+/**
+ * The parent organization to ASSERT, or null.
+ *
+ * `supportedBy` and `parentOrg` are different claims. The first is the FFC
+ * program attribution required on every supported site. The second is genuine
+ * fiscal sponsorship -- "a project of" -- which says the charity is NOT
+ * independent. An FFC-EX repo is an external charity's own site: FFC gives it
+ * a website, and the charity is its own organization. (Not "its own
+ * 501(c)(3)": the footer standard separates Level 1, a pre-501c3 charity whose
+ * determination letter has not arrived and whose 501(c)(3) language is
+ * deliberately removed, from Level 2. Independence is true of both; tax status
+ * is not this line's claim to make.)
+ *
+ * The template ships `parentOrg` pointing at Free For Charity, the same
+ * organization as `supportedBy`, so a fork that changes nothing renders
+ * "Supported by Free For Charity | A project of Free For Charity" -- measured
+ * on newheightseducation.org's `main`, on all 793 pages. That pair is
+ * self-contradictory by FFC's own definitions, and the authoritative footer
+ * standard (FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md)
+ * has no parent-organization item at all.
+ *
+ * Same class as TEMPLATE_EIN below: a shipped default that is wrong for every
+ * site inheriting it, and wrong in the direction that misstates the charity.
+ *
+ * Inlined rather than imported because workflow 706 copies THIS file into
+ * charity repos whose `site.config` may not export the shared helper yet. So
+ * the rule lives HERE, in this file -- the charity-side `site.config.ts`
+ * carries an identical copy for its other two consumers, and a unit test in
+ * that repo asserts the two are the same code so they cannot drift apart
+ * silently.
+ *
+ * Compared on name OR url: a fork that retitles the block without repointing
+ * it, or repoints without retitling, is still the template default wearing a
+ * different label.
+ */
+function assertedParentOrg() {
+  const parent = siteConfig.parentOrg
+  if (!parent) return null
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\/+$/, '')
+  const same =
+    norm(parent.name) === norm(siteConfig.supportedBy.name) ||
+    norm(parent.url) === norm(siteConfig.supportedBy.url)
+  return same ? null : parent
+}
+
 const TEMPLATE_EIN = '46-2471893'
 const TEMPLATE_GUIDESTAR = 'https://www.guidestar.org/profile/46-2471893'
 export default function FfcFooter() {
   const year = new Date().getFullYear()
+  // Never the raw `siteConfig.parentOrg`: the template ships it pointing at
+  // the supporting organization, which is not a parent relationship at all.
+  // See `assertedParentOrg` in site.config.ts.
+  const parentOrg = assertedParentOrg()
   const rawEin = siteConfig.ein?.trim() ?? ''
   const ein = rawEin === TEMPLATE_EIN ? '' : rawEin
   const profileUrl = siteConfig.guidestar?.profileUrl
@@ -53,13 +102,41 @@ export default function FfcFooter() {
   // existing gates -- `ein && candidUrl`, the same condition that decides
   // whether the identity line above is wrapped in the Candid link -- so
   // this line can never appear without it (Copilot review, #1257).
-  const taxStatusLabel = ein && candidUrl ? 'a US 501(c)(3) Non-Profit' : ''
+  // The WORDING comes from the config, not from here. `taxStatusLabel` is a
+  // required SiteConfig field whose whole purpose is this line, and the
+  // template footer already renders it verbatim -- so hard-coding a second
+  // spelling meant the two footers stated the same claim two different ways
+  // on the same site. Measured on newheightseducation.org: the template
+  // footer said "a US 501c3 Non Profit" (its config value) while this one
+  // said "a US 501(c)(3) Non-Profit", and tests/copyright.spec.ts -- which
+  // builds its expectation from the config -- failed the moment a site
+  // switched from one footer to the other. The GATE is unchanged.
+  const taxStatusLabel = ein && candidUrl ? siteConfig.taxStatusLabel.trim() : ''
+  // The footer standard's "policy pages, minimum set", quoted from
+  // FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md: "privacy
+  // policy, cookie policy, terms of service, donation policies, vulnerability
+  // disclosure, security acknowledgements". Note the plural on "donation
+  // policies" where every other item is singular -- that is what says the
+  // charity's policy and FFC's are both expected, and the template ships a
+  // route for each. Two of those were missing here
+  // while the converter's own `restoreTemplateRoutes` docblock listed both as
+  // "the pages the footer standard links to" and restored them -- so a site
+  // that switched to this footer shipped two routes nothing linked, and a
+  // footer one item short of the standard it exists to satisfy. Measured on
+  // newheightseducation.org.
+  //
+  // The FFC donation policy is labelled "FFC Donation Policy" rather than by
+  // its page title: the charity repo's `check-drift` identity scan treats the
+  // literal "Free For Charity" outside its allowlist as leftover branding, and
+  // the abbreviation is clearer in a one-line strip regardless.
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
     { name: 'Cookie Policy', href: '/cookie-policy' },
     { name: 'Terms of Service', href: '/terms-of-service' },
     { name: 'Donation Policy', href: '/donation-policy' },
+    { name: 'FFC Donation Policy', href: '/free-for-charity-donation-policy' },
     { name: 'Vulnerability Disclosure', href: '/vulnerability-disclosure-policy' },
+    { name: 'Security Acknowledgements', href: '/security-acknowledgements' },
   ]
   const identity = ein ? `${siteConfig.name} — EIN ${ein}` : siteConfig.name
 
@@ -108,15 +185,32 @@ export default function FfcFooter() {
           <a href={siteConfig.supportedBy.url} target="_blank" rel="noopener noreferrer">
             {siteConfig.supportedBy.name}
           </a>
-          {siteConfig.parentOrg && (
+          {parentOrg && (
             <>
               {' | A project of '}
-              <a href={siteConfig.parentOrg.url} target="_blank" rel="noopener noreferrer">
-                {siteConfig.parentOrg.name}
+              <a href={parentOrg.url} target="_blank" rel="noopener noreferrer">
+                {parentOrg.name}
               </a>
             </>
           )}
         </p>
+
+        {/* Said in words, because "Supported by" alone has been read as
+            ownership. This is an FFC-EX site: the charity is its own
+            organization and Free For Charity gives it a website. The line
+            renders only when there is NO asserted parent -- a site that
+            genuinely is a project of an umbrella org must not claim to be
+            independent, and the "A project of" clause above already states
+            that relationship. */}
+        {!parentOrg && (
+          <p className="ffc-footer__relationship">
+            <a href={siteConfig.supportedBy.url} target="_blank" rel="noopener noreferrer">
+              {siteConfig.supportedBy.name}
+            </a>{' '}
+            provides this website and its domain services at no cost. {siteConfig.name} is an
+            independent organization, responsible for its own content and operations.
+          </p>
+        )}
       </div>
     </footer>
   )

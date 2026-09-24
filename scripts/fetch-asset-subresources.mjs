@@ -102,7 +102,24 @@ export function isFollowableRelativeRef(ref) {
   // different file, and the capture writes the file under its bare path.
   const bare = value.split('#')[0].split('?')[0];
   if (!bare) return false;
-  if (bare.split('/').includes('..')) return false;
+  // Traversal is tested on the DECODED segment, not the literal one.
+  //
+  // `%2e%2e` decodes to `..`, and `encodeURIComponent('..')` is `..` — dots are
+  // unreserved, so they do not re-encode. Once `sourceUrlFor` decodes a segment
+  // to avoid double-encoding, a literal-only test lets an embed smuggle a live
+  // `..` into the fetch URL: the file resolves on disk under the inert name
+  // `%2e%2e` while the request goes somewhere else entirely. The decode and
+  // this check have to agree about what a segment MEANS, or the guard is
+  // checking a different string from the one that gets sent.
+  for (const segment of bare.split('/')) {
+    let meaning = segment;
+    try {
+      meaning = decodeURIComponent(segment);
+    } catch {
+      // Not decodable, so it cannot become `..` on the way out either.
+    }
+    if (meaning === '..' || meaning === '.') return false;
+  }
   return true;
 }
 
@@ -225,6 +242,55 @@ export function planFetches(assetsRoot) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Fetch, following redirects ONLY while the host does not change.
+ *
+ * `redirect: 'follow'` would have made the "never invents a host" bound a
+ * statement about the FIRST request rather than about this pass: the host it
+ * lands on is then chosen by whatever the origin returns, not by the capture.
+ * And a stalled origin with no timeout hangs a job that has already spent a
+ * multi-hour crawl.
+ *
+ * So redirects are handled here rather than by the runtime: each hop is
+ * checked against the host the capture already reached, a cross-host hop is
+ * reported as a miss instead of being followed, and every request carries a
+ * deadline.
+ *
+ * `fetchImpl` is injectable so the hop logic is tested without a network —
+ * otherwise the one part of this file with a real security bound would be the
+ * one part no test could reach.
+ */
+export async function fetchSameHost(url, opts = {}) {
+  const { fetchImpl = fetch, maxHops = 3, timeoutMs = 20000 } = opts;
+  const origin = new URL(url);
+  let current = url;
+  for (let hop = 0; hop <= maxHops; hop += 1) {
+    const res = await fetchImpl(current, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const status = res.status ?? 0;
+    if (status >= 300 && status < 400) {
+      const location = res.headers?.get?.('location');
+      if (!location) return { ok: false, reason: `HTTP ${status} with no Location` };
+      let next;
+      try {
+        next = new URL(location, current);
+      } catch {
+        return { ok: false, reason: `HTTP ${status} to an unparseable Location` };
+      }
+      if (next.hostname !== origin.hostname) {
+        return { ok: false, reason: `redirect to a different host (${next.hostname})` };
+      }
+      current = next.toString();
+      continue;
+    }
+    if (!res.ok) return { ok: false, reason: `HTTP ${status}` };
+    return { ok: true, body: Buffer.from(await res.arrayBuffer()) };
+  }
+  return { ok: false, reason: `more than ${maxHops} redirects` };
+}
+
 async function main(argv) {
   const arg = (name, fallback = null) => {
     const i = argv.indexOf(name);
@@ -234,6 +300,7 @@ async function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const delayMs = Number(arg('--delay-ms', '250')) || 0;
   const max = Number(arg('--max', '200')) || 200;
+  const timeoutMs = Number(arg('--timeout-ms', '20000')) || 20000;
 
   if (!site) {
     console.error('::error::--site is required (the directory that contains _ffc-assets).');
@@ -263,15 +330,14 @@ async function main(argv) {
       continue;
     }
     try {
-      const res = await fetch(item.url, { redirect: 'follow' });
+      const res = await fetchSameHost(item.url, { timeoutMs });
       if (!res.ok) {
-        console.log(`  MISS ${shown} — HTTP ${res.status} from ${item.url}`);
+        console.log(`  MISS ${shown} — ${res.reason} from ${item.url}`);
         failed += 1;
       } else {
-        const body = Buffer.from(await res.arrayBuffer());
         mkdirSync(dirname(item.target), { recursive: true });
-        writeFileSync(item.target, body);
-        console.log(`  GOT  ${shown} (${body.length} bytes)`);
+        writeFileSync(item.target, res.body);
+        console.log(`  GOT  ${shown} (${res.body.length} bytes)`);
         fetched += 1;
       }
     } catch (err) {
@@ -315,6 +381,17 @@ function selfTest() {
   eq('a data: URI is not', isFollowableRelativeRef('data:text/js,alert(1)'), false);
   eq('a fragment is not', isFollowableRelativeRef('#top'), false);
   eq('a traversal is not', isFollowableRelativeRef('../../etc/passwd'), false);
+  // `%2e%2e` decodes to `..`, and `..` does not re-encode — so before this was
+  // tested on the decoded segment, an embed could put a live traversal into the
+  // fetch URL. The double-encoding fix is what made it reachable.
+  eq(
+    'a percent-encoded traversal is not, either',
+    isFollowableRelativeRef('%2e%2e/%2e%2e/secret'),
+    false,
+  );
+  eq('a mixed-case percent-encoded traversal is not', isFollowableRelativeRef('%2E%2e/x'), false);
+  eq('a percent-encoded single dot is not', isFollowableRelativeRef('%2e/x'), false);
+  eq('a filename that merely CONTAINS dots is fine', isFollowableRelativeRef('a..b/x.js'), true);
   eq('an empty reference is not', isFollowableRelativeRef('   '), false);
 
   eq(
@@ -436,6 +513,101 @@ function selfTest() {
     rmSync(dir, { recursive: true, force: true });
   }
 
+  return failures;
+}
+
+/** The redirect bound, exercised with a fake network. */
+async function selfTestFetch() {
+  let failures = 0;
+  const eq = (label, actual, expected) => {
+    const a = JSON.stringify(actual);
+    const e = JSON.stringify(expected);
+    if (a === e) {
+      console.log(`ok   ${label}`);
+    } else {
+      console.log(`FAIL ${label}\n  expected ${e}\n  actual   ${a}`);
+      failures += 1;
+    }
+  };
+
+  const res = (status, headers = {}, body = '') => ({
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: (k) => headers[k.toLowerCase()] ?? null },
+    arrayBuffer: async () => Buffer.from(body),
+  });
+  const scripted = (map) => {
+    const seen = [];
+    const impl = async (url) => {
+      seen.push(url);
+      return map[url] ?? res(404);
+    };
+    impl.seen = seen;
+    return impl;
+  };
+
+  {
+    const impl = scripted({ 'https://ex.com/a.js': res(200, {}, 'body') });
+    const r = await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq('a plain 200 is fetched', [r.ok, r.body.toString()], [true, 'body']);
+  }
+  {
+    const impl = scripted({
+      'https://ex.com/a.js': res(302, { location: '/b.js' }),
+      'https://ex.com/b.js': res(200, {}, 'moved'),
+    });
+    const r = await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq('a same-host redirect is followed', [r.ok, r.body.toString()], [true, 'moved']);
+  }
+  {
+    const impl = scripted({
+      'https://ex.com/a.js': res(302, { location: 'https://evil.example/x.js' }),
+      'https://evil.example/x.js': res(200, {}, 'PAYLOAD'),
+    });
+    const r = await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq(
+      'a CROSS-host redirect is refused',
+      [r.ok, r.reason],
+      [false, 'redirect to a different host (evil.example)'],
+    );
+    eq('...and the other host is never requested', impl.seen, ['https://ex.com/a.js']);
+  }
+  {
+    const impl = scripted({
+      'https://ex.com/a.js': res(302, { location: '/a.js' }),
+    });
+    const r = await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl, maxHops: 2 });
+    eq('a redirect loop stops', [r.ok, r.reason], [false, 'more than 2 redirects']);
+  }
+  {
+    const impl = scripted({ 'https://ex.com/a.js': res(404) });
+    const r = await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq('a 404 is a miss, named', [r.ok, r.reason], [false, 'HTTP 404']);
+  }
+  {
+    let sawSignal = false;
+    const impl = async (_u, init) => {
+      sawSignal = !!init?.signal;
+      return res(200, {}, 'x');
+    };
+    await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq('every request carries a deadline', sawSignal, true);
+  }
+  {
+    let sawManual = false;
+    const impl = async (_u, init) => {
+      sawManual = init?.redirect === 'manual';
+      return res(200, {}, 'x');
+    };
+    await fetchSameHost('https://ex.com/a.js', { fetchImpl: impl });
+    eq("redirects are ours to decide, not the runtime's", sawManual, true);
+  }
+
+  return failures;
+}
+
+async function runSelfTests() {
+  const failures = selfTest() + (await selfTestFetch());
   console.log('');
   console.log(failures ? `${failures} self-test(s) failed` : 'all self-tests passed');
   return failures ? 1 : 0;
@@ -443,7 +615,7 @@ function selfTest() {
 
 const argv = process.argv.slice(2);
 if (argv.includes('--self-test')) {
-  process.exit(selfTest());
+  runSelfTests().then((code) => process.exit(code));
 } else {
   main(argv).catch((err) => {
     console.error(`::error::${err?.stack ?? err}`);

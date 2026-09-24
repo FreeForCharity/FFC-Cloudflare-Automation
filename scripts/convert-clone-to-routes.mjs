@@ -644,6 +644,19 @@ function main() {
     console.log('Lighthouse URLs retargeted:');
     for (const u of shape.lighthouse.urls) console.log(`  ${u}`);
   }
+  // Say what the wiring did, always -- including when it did nothing. The
+  // defect this step exists to prevent is a component that is generated,
+  // committed, and imported by nothing: `clone-enhance` is the captured
+  // pages' entire client-side runtime, and while it sat unwired a phone could
+  // not open the menu on any of newheightseducation.org's 793 pages. That
+  // failure is invisible in a build, in a link check and in a page's markup.
+  // A step whose whole purpose is to close a silent gap cannot itself report
+  // silently.
+  if (shape.wiredComponents) {
+    const report = describeWiring(shape.wiredComponents);
+    console.log(report.headline);
+    for (const n of report.notes) console.log(`  ${n}`);
+  }
   if (dryRun) console.log('(dry run — nothing was written)');
 
   // A page that reached no route, or an HTML file left where a second copy of
@@ -653,6 +666,26 @@ function main() {
   // link to each other with a trailing slash, so without it the migrated site's
   // own navigation 404s. Reporting that and exiting 0 would hand back a
   // "successful" conversion that does not work.
+  // A missing anchor is not "nothing to do" -- it means the layout this repo
+  // actually has does not match what the step knows how to edit, so the
+  // components were generated and left unreferenced. Treated the same way as
+  // trailingSlash above and for the same reason: reporting it in a line that
+  // scrolls past, and exiting 0, is how the gap lasted from the migration
+  // until someone rendered the site at 390px by hand.
+  const wiredWarnings = describeWiring(shape.wiredComponents).warnings;
+  if (!dryRun && wiredWarnings.length) {
+    console.error(
+      `could not wire ${wiredWarnings.length} generated component(s) into src/app/layout.tsx:`,
+    );
+    for (const w of wiredWarnings) console.error(`  ${w}`);
+    console.error(
+      'The component was written to src/components/ and nothing imports it, so it will not' +
+        ' run on any page. Wire it by hand in src/app/layout.tsx and re-run, or fix the' +
+        ' anchor this step looks for.',
+    );
+    process.exit(1);
+  }
+
   const ts = shape.trailingSlash;
   if (!dryRun && ts && !ts.changed && ts.reason !== 'already set') {
     console.error(
@@ -837,6 +870,31 @@ function restoreTemplateRoutes(repo) {
  * Idempotent: 706 re-runs over a repo it has already converted, so each edit
  * checks for its own result first.
  */
+/**
+ * Turn a `wireGeneratedComponents` result into what the run should say about it.
+ *
+ * Pure, and separate from both callers, so the self-tests below exercise the
+ * thing that actually decides -- a test that re-derived "is this a warning?"
+ * from the notes itself would pass while the summary printed nothing.
+ *
+ * `warnings` is what the conversion exits non-zero on. A note is a warning
+ * when the step could not find the anchor it edits, which means the component
+ * was generated into src/components/ and left imported by nothing: the exact
+ * state `clone-enhance` was in on newheightseducation.org, where the captured
+ * pages' entire client-side runtime never ran and a phone could not open the
+ * menu on any of 793 pages.
+ */
+function describeWiring(wired) {
+  if (!wired) return { headline: 'layout.tsx wiring  not attempted', notes: [], warnings: [] };
+  const notes = Array.isArray(wired.notes) ? wired.notes : [];
+  const state = wired.changed ? 'edited' : (wired.reason ?? 'no change');
+  return {
+    headline: `layout.tsx wiring  ${state}`,
+    notes,
+    warnings: notes.filter((n) => String(n).startsWith('WARNING')),
+  };
+}
+
 function wireGeneratedComponents(repo) {
   const path = join(repo, 'src', 'app', 'layout.tsx');
   let source;
@@ -1379,9 +1437,34 @@ function selfTest() {
           r.notes.some((n) => n.startsWith('WARNING')),
           true,
         );
+        // ...and the warning has to reach the run, which is a separate
+        // property: the notes existed from the first version of this step and
+        // no caller read them, so the conversion reported success while the
+        // components it had just written were imported by nothing.
+        const bad = describeWiring(r);
+        eq('wire: the warning is what the conversion exits on', bad.warnings.length > 0, true);
+        eq('wire: ...and every note is printed, not just the warnings', bad.notes, r.notes);
       } finally {
         rmSync(odd, { recursive: true, force: true });
       }
+
+      // The healthy run has to say so too. A reporter that speaks only on
+      // failure leaves "wired" and "the step never ran" identical in the log.
+      const good = describeWiring(second);
+      eq('wire: a clean re-run still reports a headline', good.headline.length > 0, true);
+      eq('wire: ...with no warnings', good.warnings.length, 0);
+      eq(
+        'wire: ...and names what it found rather than staying silent',
+        good.notes.length > 0,
+        true,
+      );
+      // A step that never ran is distinguishable from one that ran cleanly.
+      eq(
+        'wire: an absent result is reported as not attempted',
+        describeWiring(undefined).headline,
+        'layout.tsx wiring  not attempted',
+      );
+      eq('wire: ...and carries no warnings to exit on', describeWiring(undefined).warnings, []);
     } finally {
       rmSync(wd, { recursive: true, force: true });
     }

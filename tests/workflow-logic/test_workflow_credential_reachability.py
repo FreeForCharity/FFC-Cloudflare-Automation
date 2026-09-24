@@ -686,38 +686,52 @@ def test_the_real_tree_reaches_credentials():
     assert not unreadable and scanned > 50, (scanned, unreadable)
     sites = guard.reachability_by_site(findings)
 
-    # The floor is DERIVED from the freeze, never a literal.
+    # The floor is DERIVED from the freeze, never a literal, and it is allowed
+    # to reach ZERO.
     #
-    # It was `> 10`, and that made this module a second mutex on the #1080
+    # It was `> 10`, which made this module a second mutex on the #1080
     # burn-down (#1210, one file over): every lane removes call sites, so a hard
     # floor goes red on a CORRECT tree the moment the freeze drops past it, and
     # becomes permanently unsatisfiable once the burn-down finishes. Lane 26 is
     # where it happened — 9 sites, and the message said "check the extractor"
     # about an extractor that was working perfectly.
     #
-    # The vacuity this guard exists to catch is an extractor that has stopped
-    # matching, which drives the count to ZERO while findings remain. That is
-    # what the floor has to separate from a shrinking freeze, and half the
-    # frozen workflows does it: a dead extractor scores 0 against a floor of
-    # `max(1, n // 2)` at every size the freeze will ever take, while a lane
-    # that merely removes entries drags floor and count down together.
+    # The first fix derived the floor but kept a `max(1, …)` clamp, which is the
+    # same defect deferred to the end of the burn-down: at one or two frozen
+    # workflows the clamp demands a non-empty result from a set that may
+    # legitimately have none. Copilot caught it on #1361, and the decisive
+    # evidence is that the guard's own `reachability_paragraph` already treats
+    # `sites == {}` as a normal post-burn-down state in as many words — "if it
+    # appears after a burn-down, the lanes that held credentials were fixed."
+    # A test asserting that state is impossible contradicts the code it tests.
+    #
+    # So the floor is `n // 2` with no clamp, and below 4 frozen workflows it is
+    # 0 and the count assertions DO NOT RUN. That is not a gap being tolerated:
+    # at that size a count cannot distinguish a dead extractor (0) from a
+    # correct empty answer (0), so any assertion here would be deciding by
+    # coin-flip and reporting the wrong subsystem when it lost. The
+    # discrimination that does not shrink lives in the ~30 synthetic per-shape
+    # cases above and in the two mutation controls beside them
+    # (`test_deleting_306s_export_…`, `test_deleting_101s_azure_login_…`), which
+    # build their own fixtures and are unaffected by the freeze size.
     frozen_workflows = len(guard.KNOWN_UNGUARDED)
     assert frozen_workflows > 0, (
         "the freeze is empty, so this module can no longer tell a working "
         "extractor from a dead one — #1080 is finished and this guard needs "
         "retiring rather than relaxing"
     )
-    floor = max(1, frozen_workflows // 2)
-    assert len(sites) >= floor, (
-        f"only {len(sites)} of {frozen_workflows} frozen workflows' sites reach "
-        f"a credential (floor {floor}) — check the extractor"
-    )
-    hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
-    assert len(hidden) >= floor, (
-        f"only {len(hidden)} sites reach a credential through GITHUB_ENV or an "
-        f"acquired CLI session (floor {floor}), which is the path this whole "
-        "resolver exists to surface"
-    )
+    floor = frozen_workflows // 2
+    if floor:
+        assert len(sites) >= floor, (
+            f"only {len(sites)} of {frozen_workflows} frozen workflows' sites "
+            f"reach a credential (floor {floor}) — check the extractor"
+        )
+        hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
+        assert len(hidden) >= floor, (
+            f"only {len(hidden)} sites reach a credential through GITHUB_ENV or "
+            f"an acquired CLI session (floor {floor}), which is the path this "
+            "whole resolver exists to surface"
+        )
 
 
 def test_the_report_neither_creates_nor_clears_a_finding():

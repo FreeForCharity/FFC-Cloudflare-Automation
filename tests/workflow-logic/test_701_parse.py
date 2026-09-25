@@ -168,6 +168,104 @@ def test_domain_registrar_label_matches_the_issue_template():
     assert re.search(r"enom|cloudflare", options), "dropdown lost the already-FFC option"
 
 
+def test_footer_mission_and_links_from_manual_dispatch():
+    r = run_parse(
+        ctx(
+            "workflow_dispatch",
+            {
+                "inputs": {
+                    "domain": "example.org",
+                    "mission": "We feed families.\nEvery week.",
+                    "donation_url": "https://www.zeffy.com/donate/example",
+                    "volunteer_url": "",
+                }
+            },
+        )
+    )
+    assert r["failed"] is None, r
+    # A pasted multi-line mission collapses to the single footer line.
+    assert r["outputs"]["mission"] == "We feed families. Every week.", r
+    assert r["outputs"]["donation_url"] == "https://www.zeffy.com/donate/example", r
+    # Blank is valid: the footer link then emails the charity.
+    assert r["outputs"]["volunteer_url"] == "", r
+
+
+def test_footer_link_must_be_https():
+    r = run_parse(
+        ctx(
+            "workflow_dispatch",
+            {"inputs": {"domain": "example.org", "volunteer_url": "http://example.org/help"}},
+        )
+    )
+    assert r["failed"] and "Volunteer Page URL must start with https://" in r["failed"], r
+
+
+def test_footer_fields_from_repository_dispatch_payload():
+    payload = {
+        "action": "ffcadmin-website-provision",
+        "client_payload": {"domain": "charity.org", "mission": "We shelter families."},
+    }
+    r = run_parse(ctx("repository_dispatch", payload))
+    assert r["failed"] is None, r
+    assert r["outputs"]["mission"] == "We shelter families.", r
+    assert r["outputs"]["donation_url"] == "", r
+
+
+def test_footer_fields_from_issue_form():
+    body = "\n\n".join(
+        [
+            "### Website Domain (no http://)\n\nexample.org",
+            "### Mission Statement (one sentence)\n\nWe feed families.",
+            "### Donation Page URL (optional)\n\nhttps://www.zeffy.com/donate/example",
+            "### Volunteer Page URL (optional)\n\n_No response_",
+        ]
+    )
+    payload = {
+        "action": "assigned",
+        "issue": {
+            "number": 7,
+            "title": "[WEBSITE REQUEST] example.org",
+            "body": body,
+            "labels": [{"name": "website-request"}, {"name": "admin-provision"}],
+            "user": {"login": "reporter"},
+        },
+    }
+    r = run_parse(ctx("issues", payload))
+    assert r["failed"] is None, r
+    assert r["outputs"]["mission"] == "We feed families.", r
+    assert r["outputs"]["donation_url"] == "https://www.zeffy.com/donate/example", r
+    assert r["outputs"]["volunteer_url"] == "", r
+
+
+def test_footer_field_labels_match_the_issue_template():
+    # The issue path reads these by rendered label; a drift between template
+    # and parser would silently drop the charity's mission and links.
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "701-website-provision.yml").read_text(
+        encoding="utf-8"
+    )
+    template = yaml.safe_load(
+        (root / ".github" / "ISSUE_TEMPLATE" / "02-website-request.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    labels = {b["attributes"].get("label") for b in template["body"] if b.get("type") == "input"}
+    for label in (
+        "Mission Statement (one sentence)",
+        "Donation Page URL (optional)",
+        "Volunteer Page URL (optional)",
+    ):
+        assert f"extractSection('{label}')" in workflow, f"parser does not read {label!r}"
+        assert label in labels, f"issue template is missing the {label!r} field"
+
+
+def test_default_template_is_footer_only():
+    r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org"}}))
+    assert r["outputs"]["template_repo"] == "FreeForCharity/FFC-IN-Footer_Only_Template", r
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

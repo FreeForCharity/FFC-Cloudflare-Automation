@@ -400,7 +400,8 @@ If the marker is already present, the workflow skips provisioning.
 For simplicity, this workflow currently hardcodes:
 
 - Target org: `FreeForCharity`
-- Template repo: `FreeForCharity/FFC_Single_Page_Template`
+- Template repo: `FreeForCharity/FFC-IN-Footer_Only_Template` (footer with mission line + Donate /
+  Volunteer links; the content job writes the charity's details into its `src/lib/site.config.ts`)
 
 ## Deprecated workflows (backups only)
 

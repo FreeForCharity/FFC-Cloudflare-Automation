@@ -1452,7 +1452,7 @@ jobs:
       # capture of a site that may have changed since. This is also the only
       # network read `deliver` performs against anything but GitHub.
       - name: Download the capture that passed the gate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wp-capture-${{ github.run_id }}
           path: ${{ runner.temp }}/capture

@@ -24,7 +24,18 @@ param(
 
     [string[]]$FooterSocial = @(),
 
-    [string[]]$LeadershipLines = @()
+    [string[]]$LeadershipLines = @(),
+
+    # One-sentence mission, shown under the charity name in the footer of the
+    # config-driven templates. Blank falls back to a generic sentence naming
+    # the charity, never to the template's own (FFC) mission.
+    [string]$Mission,
+
+    # https URLs for the footer Donate / Volunteer links. Blank (or not https)
+    # leaves the template's fallback in place: a mailto: to the contact email.
+    [string]$DonationUrl,
+
+    [string]$VolunteerUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -449,9 +460,397 @@ export default index
     Set-Content -LiteralPath $teamSectionFile -Value $teamComponent -Encoding utf8
 }
 
+# ---- Config-driven templates (src/lib/site.config.ts) ----
+# Both current FFC templates (FFC-IN-Footer_Only_Template, the provisioning
+# default, and FFC-IN-FFC_Single_Page_Template) render the footer from the
+# `siteConfig` object and type team members as { name, role, linkedinUrl }.
+# The regex footer patch above targets the older hard-coded footer and matches
+# nothing there, and its { title, imageUrl } team JSON fails the TypeScript
+# build. For these templates the values are written into siteConfig instead.
+
+function Write-LfFile {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    # The templates enforce LF (.prettierrc endOfLine) and this runs on
+    # windows-latest, where Set-Content would write CRLF.
+    $normalized = ($Text -replace "`r`n", "`n")
+    if (-not $normalized.EndsWith("`n")) { $normalized += "`n" }
+    [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
+}
+
+function ConvertTo-TsString {
+    param([AllowEmptyString()][string]$Value)
+    if ($null -eq $Value) { $Value = '' }
+    $v = ($Value -replace "`r`n|`r|`n", ' ').Trim()
+    return "'" + $v.Replace('\', '\\').Replace("'", "\'") + "'"
+}
+
+function Get-TsScanEnd {
+    # Returns the index of the first character at bracket depth 0 that is one
+    # of $StopChars, scanning from $Start and skipping strings and comments.
+    param([string]$Source, [int]$Start, [char[]]$StopChars)
+    $depth = 0
+    $i = $Start
+    while ($i -lt $Source.Length) {
+        $ch = $Source[$i]
+        $next = if ($i + 1 -lt $Source.Length) { $Source[$i + 1] } else { [char]0 }
+        if ($ch -eq '/' -and $next -eq '/') {
+            $i = $Source.IndexOf("`n", $i)
+            if ($i -lt 0) { break }
+            continue
+        }
+        if ($ch -eq '/' -and $next -eq '*') {
+            $i = $Source.IndexOf('*/', $i + 2)
+            if ($i -lt 0) { break }
+            $i += 2
+            continue
+        }
+        if ($ch -eq "'" -or $ch -eq '"' -or $ch -eq '`') {
+            $i++
+            while ($i -lt $Source.Length -and $Source[$i] -ne $ch) {
+                if ($Source[$i] -eq '\') { $i++ }
+                $i++
+            }
+            $i++
+            continue
+        }
+        if ($depth -eq 0 -and $StopChars -contains $ch) { return $i }
+        if ('([{'.Contains($ch)) { $depth++ }
+        elseif (')]}'.Contains($ch)) { $depth-- }
+        $i++
+    }
+    throw 'Unbalanced brackets while scanning src/lib/site.config.ts.'
+}
+
+function Get-SiteConfigProperties {
+    # Maps each top-level siteConfig key to the [start, end) span of its value.
+    param([Parameter(Mandatory = $true)][string]$Source)
+
+    $m = [regex]::Match($Source, 'export const siteConfig\s*(?::\s*SiteConfig)?\s*=\s*\{')
+    if (-not $m.Success) {
+        throw 'Could not find "export const siteConfig ... = {" in src/lib/site.config.ts.'
+    }
+    $bodyStart = $m.Index + $m.Length
+    $bodyEnd = Get-TsScanEnd -Source $Source -Start $bodyStart -StopChars @('}')
+
+    $props = @{}
+    $pos = $bodyStart
+    while ($pos -lt $bodyEnd) {
+        # Skip whitespace and comments between properties.
+        $gap = [regex]::Match($Source.Substring($pos, $bodyEnd - $pos), '^(?:\s+|//[^\n]*|/\*.*?\*/)*', 'Singleline')
+        $pos += $gap.Length
+        if ($pos -ge $bodyEnd) { break }
+
+        $key = [regex]::Match($Source.Substring($pos, $bodyEnd - $pos), '^([A-Za-z_$][\w$]*)\??\s*:')
+        if (-not $key.Success) {
+            throw "Unexpected syntax in siteConfig near: $($Source.Substring($pos, [Math]::Min(40, $bodyEnd - $pos)))"
+        }
+        $valueStart = $pos + $key.Length
+        $valueEnd = Get-TsScanEnd -Source $Source -Start $valueStart -StopChars @(',', '}')
+        $props[$key.Groups[1].Value] = [pscustomobject]@{ KeyStart = $pos; Start = $valueStart; End = $valueEnd }
+        $pos = $valueEnd + 1
+    }
+    return $props
+}
+
+function Set-SiteConfigValue {
+    # Replaces one top-level siteConfig value. A key the template does not
+    # declare throws, unless -Optional (keys added in newer template versions).
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$ValueTs,
+        [switch]$Optional
+    )
+    $props = Get-SiteConfigProperties -Source $Source
+    if (-not $props.ContainsKey($Key)) {
+        if ($Optional) {
+            Write-Warning "siteConfig has no '$Key' key (older template); leaving it out."
+            return $Source
+        }
+        throw "siteConfig has no '$Key' key; the template changed shape. Update Apply-WebsiteReactTemplate.ps1."
+    }
+    $span = $props[$Key]
+    return $Source.Substring(0, $span.Start) + ' ' + $ValueTs + $Source.Substring($span.End)
+}
+
+function Remove-SiteConfigValue {
+    # Drops an optional top-level key (and its trailing comma) if present.
+    param([Parameter(Mandatory = $true)][string]$Source, [Parameter(Mandatory = $true)][string]$Key)
+    $props = Get-SiteConfigProperties -Source $Source
+    if (-not $props.ContainsKey($Key)) { return $Source }
+    $span = $props[$Key]
+    $end = $span.End
+    if ($Source[$end] -eq ',') { $end++ }
+    $lineStart = $Source.LastIndexOf("`n", $span.KeyStart) + 1
+    $lineEnd = $Source.IndexOf("`n", $end)
+    if ($lineEnd -lt 0) { $lineEnd = $end } else { $lineEnd++ }
+    return $Source.Substring(0, $lineStart) + $Source.Substring($lineEnd)
+}
+
+function Get-SocialEntries {
+    # "platform: https://..." lines -> ordered { label, href } for siteConfig.social.
+    param([string[]]$Social)
+    $labels = [ordered]@{
+        facebook  = 'Facebook'
+        x         = 'X (Twitter)'
+        twitter   = 'X (Twitter)'
+        linkedin  = 'LinkedIn'
+        github    = 'GitHub'
+        instagram = 'Instagram'
+        youtube   = 'YouTube'
+    }
+    $entries = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    foreach ($line in $Social) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $clean = ($line.Trim() -replace '^[\*-]\s+', '')
+        $m = [regex]::Match($clean, '^(?<k>[A-Za-z /()]+?)\s*:\s*(?<v>https://\S+)$')
+        if (-not $m.Success) { continue }
+        $k = $m.Groups['k'].Value.Trim().ToLowerInvariant() -replace '\s*/\s*twitter$|\s*\(twitter\)$', ''
+        $label = if ($labels.Contains($k)) { $labels[$k] } else { (Get-Culture).TextInfo.ToTitleCase($k) }
+        if ($seen.ContainsKey($label)) { continue }
+        $seen[$label] = $true
+        $entries.Add([pscustomobject]@{ Label = $label; Href = $m.Groups['v'].Value.Trim() })
+    }
+    return , $entries
+}
+
+function Update-SiteConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigFile,
+        [Parameter(Mandatory = $true)][string]$CharityName,
+        [Parameter(Mandatory = $true)][string]$Email,
+        [string]$Phone,
+        [string]$Address,
+        [string]$Ein,
+        [string]$GuideStarProfileUrl,
+        [string]$GuideStarDirectProfileUrl,
+        [string[]]$Social,
+        [string]$Mission,
+        [string]$DonationUrl,
+        [string]$VolunteerUrl
+    )
+
+    $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
+
+    $missionText = if ([string]::IsNullOrWhiteSpace($Mission)) {
+        "$CharityName is a nonprofit organization."
+    }
+    else { ($Mission -replace "`r`n|`r|`n", ' ').Trim() }
+    $missionTs = ConvertTo-TsString $missionText
+
+    $text = Set-SiteConfigValue -Source $text -Key 'name' -ValueTs (ConvertTo-TsString $CharityName)
+    $text = Set-SiteConfigValue -Source $text -Key 'mission' -ValueTs $missionTs -Optional
+    # The template's description is FFC's own; the charity's mission is the
+    # honest replacement for the meta and social-card descriptions.
+    $text = Set-SiteConfigValue -Source $text -Key 'description' -ValueTs $missionTs
+    $text = Set-SiteConfigValue -Source $text -Key 'shortDescription' -ValueTs $missionTs
+    # A provisioned charity is standalone: the template's "a project of Free
+    # For Charity" parentOrg (Single Page template) is FFC's own relationship.
+    # FFC attribution stays via the permanent supportedBy key.
+    $text = Remove-SiteConfigValue -Source $text -Key 'parentOrg'
+    $text = Set-SiteConfigValue -Source $text -Key 'contactEmail' -ValueTs (ConvertTo-TsString $Email)
+
+    foreach ($pair in @(@('donationUrl', $DonationUrl), @('volunteerUrl', $VolunteerUrl))) {
+        $url = [string]$pair[1]
+        # Only https URLs; anything else keeps the template's mailto fallback.
+        $url = if ($url -match '^https://\S+$') { $url.Trim() } else { '' }
+        $text = Set-SiteConfigValue -Source $text -Key $pair[0] -ValueTs (ConvertTo-TsString $url) -Optional
+    }
+
+    # The shared schema requires a non-empty EIN, so a blank cannot be written;
+    # keeping the template's would publish FFC's tax ID as the charity's.
+    if ([string]::IsNullOrWhiteSpace($Ein)) {
+        throw 'No EIN supplied; refusing to leave the template EIN on the charity site.'
+    }
+    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $Ein.Trim())
+
+    # An empty phone is the template's documented "no phone" state (no block).
+    $telDigits = Get-TelDigits -Phone $Phone
+    $phoneTs = if ($telDigits) {
+        '{ display: ' + (ConvertTo-TsString $Phone) + ', tel: ' + (ConvertTo-TsString $telDigits) + ' }'
+    }
+    else { "{ display: '', tel: '' }" }
+    $text = Set-SiteConfigValue -Source $text -Key 'phone' -ValueTs $phoneTs
+
+    $addrLines = @()
+    if (-not [string]::IsNullOrWhiteSpace($Address)) {
+        $addrLines = @($Address -split "`r`n|`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    $addressesTs = if ($addrLines.Count -gt 0) {
+        $mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + (Convert-AddressToMapsQuery -Address $Address)
+        $linesTs = ($addrLines | ForEach-Object { ConvertTo-TsString $_ }) -join ', '
+        "[`n    {`n      label: 'Main Address',`n      lines: [$linesTs],`n      mapUrl: $(ConvertTo-TsString $mapUrl),`n    },`n  ]"
+    }
+    else { '[]' }
+    $text = Set-SiteConfigValue -Source $text -Key 'addresses' -ValueTs $addressesTs
+
+    # The shared SiteConfig schema requires both Candid URLs, so blanks cannot
+    # be written. When 701 has none (pre-501(c)(3) applications may omit them)
+    # use Candid's profile-by-EIN URL -- the same form as FFC's own -- rather
+    # than leaving FFC's profile on the charity's site.
+    $candidByEin = if (-not [string]::IsNullOrWhiteSpace($Ein)) { "https://www.guidestar.org/profile/$($Ein.Trim())" } else { '' }
+    $profileUrl = if ($GuideStarProfileUrl -match '^https://\S+$') { $GuideStarProfileUrl.Trim() } else { $candidByEin }
+    $directUrl = if ($GuideStarDirectProfileUrl -match '^https://\S+$') { $GuideStarDirectProfileUrl.Trim() } else { $profileUrl }
+    if ($profileUrl) {
+        $guidestarTs = "{`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
+        $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
+    }
+    else {
+        Write-Warning 'No Candid URL and no EIN; siteConfig.guidestar keeps the template value.'
+    }
+
+    $socialEntries = Get-SocialEntries -Social $Social
+    $socialTs = if ($socialEntries.Count -gt 0) {
+        "[`n" + (($socialEntries | ForEach-Object {
+                    "    { label: $(ConvertTo-TsString $_.Label), href: $(ConvertTo-TsString $_.Href) },"
+                }) -join "`n") + "`n  ]"
+    }
+    else { '[]' }
+    $text = Set-SiteConfigValue -Source $text -Key 'social' -ValueTs $socialTs
+
+    $xLink = $socialEntries | Where-Object { $_.Label -eq 'X (Twitter)' } | Select-Object -First 1
+    $handle = if ($xLink) { [regex]::Match($xLink.Href, '^https://(?:www\.)?(?:x|twitter)\.com/@?(?<h>[A-Za-z0-9_]{1,15})(?:[/?#]|$)').Groups['h'].Value } else { '' }
+    $text = Set-SiteConfigValue -Source $text -Key 'twitterHandle' -ValueTs (ConvertTo-TsString ($(if ($handle) { "@$handle" } else { '' })))
+
+    Write-LfFile -Path $ConfigFile -Text $text
+}
+
+function Update-SecurityTxtContact {
+    # The templates' drift check requires security.txt's Contact line to match
+    # siteConfig.contactEmail. Other fields are left as the template ships them.
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$Email)
+    foreach ($rel in @('public/security.txt', 'public/.well-known/security.txt')) {
+        $path = Join-Path $RepoRoot $rel
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $body = Get-Content -LiteralPath $path -Raw -Encoding utf8
+        $updated = [regex]::Replace($body, '(?m)^Contact:\s*mailto:\S+', "Contact: mailto:$Email")
+        Write-LfFile -Path $path -Text $updated
+    }
+}
+
+function Update-TeamData {
+    # Config-driven templates: team members are { name, role, linkedinUrl }
+    # JSON files aggregated by src/data/team.ts; the component reads them, so
+    # it is left untouched.
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [string[]]$LeadershipLines
+    )
+
+    $teamDataDir = Join-Path $RepoRoot 'src/data/team'
+    $teamIndexFile = Join-Path $RepoRoot 'src/data/team.ts'
+    Assert-FileExists -Path $teamIndexFile
+    if (-not (Test-Path -LiteralPath $teamDataDir)) { throw "Required folder not found: $teamDataDir" }
+
+    $members = @()
+    foreach ($line in ($LeadershipLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $m = Parse-LeadershipLine -Line $line
+        if ($null -ne $m) { $members += $m }
+    }
+    # Neither outcome of carrying on is acceptable: keeping the template's
+    # sample members publishes FFC's own people as the charity's leadership,
+    # and an empty team breaks the templates' own team tests and /#team link.
+    if ($members.Count -eq 0) {
+        throw 'No usable leadership lines (each needs a name); refusing to leave the template team on the charity site.'
+    }
+
+    # Only the JSON imports and the `team` array are replaced; everything else
+    # in team.ts (the TeamMember type, derived exports such as the Single Page
+    # template's `configuredTeam`) is the template's and is kept as-is.
+    $indexText = Get-Content -LiteralPath $teamIndexFile -Raw -Encoding utf8
+    $importRe = "(?m)^import\s+\w+\s+from\s+'\./team/[^']+\.json'\r?\n"
+    $arrayRe = '(?s)(export const team\s*(?::\s*TeamMember\[\])?\s*=\s*\[).*?(\n\])'
+    if (-not [regex]::IsMatch($indexText, $importRe) -or -not [regex]::IsMatch($indexText, $arrayRe)) {
+        throw 'src/data/team.ts no longer has ./team/*.json imports and an "export const team = [ ... ]" array; the template changed shape.'
+    }
+
+    # Replace the template's sample members (FFC's own team).
+    Get-ChildItem -LiteralPath $teamDataDir -Filter '*.json' | Remove-Item -Force
+
+    $usedSlugs = @{}
+    $imports = New-Object System.Collections.Generic.List[string]
+    $vars = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $members.Count; $i++) {
+        $baseSlug = Convert-ToKebabCase -Value $members[$i].Name
+        $slug = $baseSlug
+        $n = 2
+        while ($usedSlugs.ContainsKey($slug)) { $slug = "{0}-{1}" -f $baseSlug, $n; $n++ }
+        $usedSlugs[$slug] = $true
+
+        $obj = [ordered]@{ name = $members[$i].Name; role = $members[$i].Title }
+        if ($members[$i].LinkedIn) { $obj.linkedinUrl = $members[$i].LinkedIn }
+        Write-LfFile -Path (Join-Path $teamDataDir "$slug.json") -Text ($obj | ConvertTo-Json -Depth 5)
+
+        $var = 'member{0}' -f ($i + 1)
+        $imports.Add("import $var from './team/$slug.json'")
+        $vars.Add("  $var,")
+    }
+
+    # Drop the old imports, then put the new ones where the first one was.
+    $firstImport = [regex]::Match($indexText, $importRe).Index
+    $withoutImports = [regex]::Replace($indexText, $importRe, '')
+    $teamTs = $withoutImports.Substring(0, $firstImport) + ($imports -join "`n") + "`n" + $withoutImports.Substring($firstImport)
+    $arrayBody = "`n" + ($vars -join "`n")
+    $teamTs = [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + $m.Groups[2].Value }, 'None')
+    Write-LfFile -Path $teamIndexFile -Text $teamTs
+}
+
+function Invoke-RepoPrettier {
+    # Generated files must pass the new repo's own `format:check`. Uses the
+    # prettier version the repo pins; best-effort, since formatting is not
+    # worth failing a provision over (CI will name any remaining file).
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string[]]$Paths)
+
+    $pkgFile = Join-Path $RepoRoot 'package.json'
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue) -or -not (Test-Path -LiteralPath $pkgFile)) {
+        Write-Warning 'npx or package.json not available; generated files were not run through prettier.'
+        return
+    }
+    $pkg = Get-Content -LiteralPath $pkgFile -Raw -Encoding utf8 | ConvertFrom-Json
+    $version = [string]$pkg.devDependencies.prettier
+    $version = ($version -replace '^[\^~>=\s]+', '')
+    $spec = if ($version -match '^\d+\.\d+\.\d+$') { "prettier@$version" } else { 'prettier@3' }
+
+    Push-Location $RepoRoot
+    try {
+        & npx --yes $spec --write @Paths 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { Write-Warning "prettier exited $LASTEXITCODE; generated files may need formatting." }
+    }
+    finally { Pop-Location }
+}
+
 # ---- Main ----
 $repoRoot = (Resolve-Path -LiteralPath $RepoPath).Path
 
+$siteConfigFile = Join-Path $repoRoot 'src/lib/site.config.ts'
+if (Test-Path -LiteralPath $siteConfigFile) {
+    Write-Host 'Config-driven template detected (src/lib/site.config.ts); writing siteConfig + team data.'
+    Update-SiteConfig `
+        -ConfigFile $siteConfigFile `
+        -CharityName $CharityName `
+        -Email $FooterEmail `
+        -Phone $FooterPhone `
+        -Address $FooterAddress `
+        -Ein $FooterEin `
+        -GuideStarProfileUrl $GuideStarProfileUrl `
+        -GuideStarDirectProfileUrl $GuideStarDirectProfileUrl `
+        -Social $FooterSocial `
+        -Mission $Mission `
+        -DonationUrl $DonationUrl `
+        -VolunteerUrl $VolunteerUrl
+
+    Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail
+
+    Update-TeamData -RepoRoot $repoRoot -LeadershipLines $LeadershipLines
+
+    Invoke-RepoPrettier -RepoRoot $repoRoot -Paths @('src/lib/site.config.ts', 'src/data/team.ts', 'src/data/team')
+
+    Write-Host 'Config-driven template content updated successfully.' -ForegroundColor Green
+    return
+}
+
+# Legacy hard-coded footer (pre-site.config.ts repos).
 $footerFile = Join-Path $repoRoot 'src/components/footer/index.tsx'
 
 Update-FooterComponent `

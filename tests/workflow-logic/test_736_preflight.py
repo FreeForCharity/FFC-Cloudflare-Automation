@@ -35,7 +35,7 @@ ARCHIVED_META = (
 
 BASE_ENV = {
     "TARGET_ORG": "FreeForCharity",
-    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template .github",
+    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-Footer_Only_Template .github",
     "THIS_REPO": "FreeForCharity/FFC-Cloudflare-Automation",
     "IN_REPO": "FFC-EX-example.org",
     "IN_DRY_RUN": "false",

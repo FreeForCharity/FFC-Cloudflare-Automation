@@ -815,23 +815,66 @@ def test_the_workflow_is_scheduled_and_dispatchable():
 
 
 def test_the_schedule_polls_faster_than_the_alert_threshold():
-    """A 12h threshold polled daily is a 12-36h detector."""
+    """A 12h threshold polled daily is a 12-36h detector.
+
+    This asserted only that the hour field contains a `/`, which is a statement
+    about the field's *spelling* and not about the contract in the test's own
+    name. `19 */12 * * *` contains a slash and polls exactly as slowly as the
+    alert threshold, so the monitor would report a stall up to 24h after it
+    began — the latency failure #1339 is about, passing a test named for
+    preventing it. Copilot's finding; third instance on this PR of a test
+    asserting that a mechanism *exists* rather than that it is *right*.
+
+    Measure the real quantity — the longest wait between consecutive fires — and
+    compare it against the threshold read from the library, so the guard tracks
+    `SILENCE_ALERT_HOURS` instead of pinning a literal that can drift away from
+    it.
+    """
     on = load_workflow(WF_FILE).get(True, load_workflow(WF_FILE).get("on"))
     crons = [s["cron"] for s in on["schedule"]]
-    assert any("/" in c.split()[1] for c in crons), crons
+    alert = const("SILENCE_ALERT_HOURS")
+    worst = min(_max_gap_hours(c.split()[1]) for c in crons)
+    assert worst < alert, (
+        f"longest gap between polls is {worst}h against a {alert}h alert "
+        f"threshold, so a stall is reported up to {worst + alert}h late",
+        crons,
+    )
 
 
-def _cron_minutes(field):
-    """Expand a cron minute field to the concrete set of minutes it fires on.
+def test_the_poll_gap_measure_is_not_satisfied_by_a_slash():
+    """The guard above is only as strong as `_max_gap_hours`.
 
-    Comparing the raw field STRING is what this guard did first, and it is weaker
-    than it reads: `19` and `19,49` are different strings and the same collision.
-    740 already schedules `9,39` in this repo, so the list form is not
+    Pin the spellings that decide it, including the one that used to pass: a
+    slash is not evidence of anything, a single literal hour is a 24h gap rather
+    than a 0h one, and the shipped schedule must come out well under the
+    threshold rather than merely under it.
+    """
+    assert _max_gap_hours("*/2") == 2
+    assert _max_gap_hours("*/12") == 12  # contains a slash, and is NOT fast enough
+    assert _max_gap_hours("*") == 1
+    assert _max_gap_hours("3") == 24  # once a day, not a zero-length gap
+    assert _max_gap_hours("0,12") == 12
+    assert _max_gap_hours("0,6,12,18") == 6
+    # The shipped schedule, against the shipped threshold.
+    on = load_workflow(WF_FILE).get(True, load_workflow(WF_FILE).get("on"))
+    shipped = [s["cron"] for s in on["schedule"]]
+    assert min(_max_gap_hours(c.split()[1]) for c in shipped) == 2, shipped
+    assert const("SILENCE_ALERT_HOURS") == 12
+
+
+def _cron_field(field, ceiling):
+    """Expand one cron field to the concrete set of values it fires on.
+
+    Comparing the raw field STRING is what the collision guard did first, and it
+    is weaker than it reads: `19` and `19,49` are different strings and the same
+    collision. 740 already schedules `9,39` in this repo, so the list form is not
     hypothetical — it simply happens not to overlap :19 today, which is exactly
     the kind of accident that stops being true on someone else's edit.
 
     Handles the four field shapes cron allows: a literal, a `a,b` list, an `a-b`
-    range, and a `*`/`a-b` with a `/n` step.
+    range, and a `*`/`a-b` with a `/n` step. `ceiling` is the field's inclusive
+    maximum — 59 for minutes, 23 for hours — so the same parser serves both
+    rather than each guard growing its own.
     """
     out = set()
     for part in field.split(","):
@@ -841,7 +884,7 @@ def _cron_minutes(field):
             part, _, raw_step = part.partition("/")
             step = int(raw_step)
         if part == "*":
-            lo, hi = 0, 59
+            lo, hi = 0, ceiling
         elif "-" in part:
             lo_text, _, hi_text = part.partition("-")
             lo, hi = int(lo_text), int(hi_text)
@@ -849,6 +892,30 @@ def _cron_minutes(field):
             lo = hi = int(part)
         out.update(range(lo, hi + 1, step))
     return out
+
+
+def _cron_minutes(field):
+    """The minute field, as the collision guard reads it."""
+    return _cron_field(field, 59)
+
+
+def _max_gap_hours(hour_field):
+    """The longest wait between two consecutive fires, in hours.
+
+    This is the quantity the schedule's contract is actually about, and reading
+    the field's *spelling* does not produce it. `*/12` and `*/2` both "contain a
+    slash"; one leaves a 12-hour blind window and the other a 2-hour one. The gap
+    wraps midnight, so a single literal hour is a 24-hour gap rather than a
+    zero-hour one, which is the case a naive max-minus-min would score as best.
+    """
+    hours = sorted(_cron_field(hour_field, 23))
+    if not hours:
+        return 24
+    if len(hours) == 1:
+        return 24
+    gaps = [b - a for a, b in zip(hours, hours[1:])]
+    gaps.append(24 - hours[-1] + hours[0])  # the wrap across midnight
+    return max(gaps)
 
 
 def test_the_minute_expander_sees_through_every_cron_spelling():

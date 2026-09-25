@@ -1530,9 +1530,23 @@ def test_a_shrunk_pdf_keeps_its_name():
     it, including links in places the capture never parses, such as a sitemap
     or a PDF that links to another PDF."""
     src = _capture_script_text()
-    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split("usedAssetNames.add(name)")[0]
+    # The window ends at the write-time collision guard, not at
+    # `usedAssetNames.add(name)`. The guard DOES reassign `name`, legitimately
+    # and for an unrelated reason, and it sits between the PDF pass and the
+    # claim -- so terminating on the claim would read the guard as a PDF-pass
+    # rename. This is a narrower window than before, so the gap it gives up is
+    # asserted separately below rather than dropped.
+    GUARD = "if (usedAssetNames.has(name)) {"
+    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split(GUARD)[0]
     assert "name = " not in call, f"the PDF pass must not reassign the local name:\n{call}"
     assert "buf = shrunk.buffer;" in call
+
+    # The gap: between the guard and the claim there must be nothing but the
+    # guard itself, or a future rename could hide in it and this test would
+    # never look.
+    gap = src.split(GUARD)[1].split("usedAssetNames.add(name);")[0]
+    assert gap.count("name = ") == 1, f"only the guard may reassign the name here:\n{gap}"
+    assert "name = alternative;" in gap, gap
 
 
 def test_ghostscript_absence_is_distinguished_from_a_bad_pdf():
@@ -1649,6 +1663,44 @@ def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
         "a zero-byte rescue is refused",
     ):
         assert f"ok   {name}" in out, f"missing self-test: {name}\n{out[-2000:]}"
+
+
+def test_a_webp_rename_cannot_be_overwritten_by_the_file_it_displaced():
+    """`assetLocalName` is injective on the source URL, so two assets can only
+    want one local name through the `.jpg -> .webp` rename -- which invents a
+    name the site may genuinely ship.
+
+    `disambiguatedWebpName` covers one order: the real `x.webp` is downloaded
+    first, so it is in `usedAssetNames` and the rename sees the collision. The
+    other order has no such signal. The oversized `x.jpg` is re-encoded to
+    `x.webp` while the set is still empty, and the genuine `x.webp` arriving
+    later would write straight over it -- leaving the JPEG's page pointing at a
+    DIFFERENT image, which is worse than the oversized file the pass exists to
+    avoid. Which order the REST inventory yields is not the capture's to
+    control.
+
+    What makes this testable as a SHAPE rather than a behaviour is that the
+    whole property is positional: the guard is worth nothing unless it runs
+    after the rename has settled `name` and before anything is written under
+    it. So this asserts the order of those three points in the source, not
+    merely that a guard exists somewhere. The decision it delegates to
+    (`disambiguatedAssetName`) is behaviourally tested in the library's own
+    self-test."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+
+    rename = src.index("let target = webpName(name);")
+    guard = src.index("if (usedAssetNames.has(name)) {")
+    claim = src.index("usedAssetNames.add(name);")
+    write = src.index("writeFileSync(dest, buf)")
+
+    assert rename < guard, "the guard must run after the rename has settled `name`"
+    assert guard < claim, "the guard must run before the name is claimed"
+    assert claim < write, "the name must be claimed before anything is written"
+
+    # And it must actually yield a different name rather than, say, logging.
+    body = src[guard : guard + 900]
+    assert "disambiguatedAssetName(name)" in body, body
+    assert "name = alternative;" in body, body
 
 
 def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():

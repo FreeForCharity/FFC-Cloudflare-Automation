@@ -1654,6 +1654,27 @@ export function disambiguatedWebpName(name) {
 }
 
 /**
+ * The name to fall back to when another URL already holds this one.
+ *
+ * `assetLocalName` is injective on the source URL, so two different assets
+ * cannot normally want the same local name -- the one exception is the
+ * `.jpg -> .webp` rename, which invents a name the site may genuinely ship.
+ * `disambiguatedWebpName` handles that when the genuine file is downloaded
+ * FIRST. This handles the other order, where the rename has already taken
+ * `x.webp` and the real `x.webp` arrives afterwards.
+ *
+ * Deliberately a separate function from `disambiguatedWebpName` rather than a
+ * refactor of it: that one hashes the name BEFORE the rename (`x.jpg`), so a
+ * re-encode's suffix is stable against its source file, and changing what it
+ * hashes would move every already-published file it has named.
+ */
+export function disambiguatedAssetName(name) {
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  const ext = extname(name);
+  return ext ? `${name.slice(0, -ext.length)}__${hash}${ext}` : `${name}__${hash}`;
+}
+
+/**
  * Whether to keep a re-encoded image.
  *
  * `worthReencoding`'s 25% floor buys one thing: it pays for the RENAME, since
@@ -2806,6 +2827,42 @@ function selfTest() {
       dead,
     ).css.includes('base64,AA=='),
     true,
+  );
+
+  // The write-time guard's helper. Two different source URLs can only want one
+  // local name via the `.webp` rename, and whoever arrives second takes this.
+  eq(
+    'a disambiguated asset name keeps the stem and the extension',
+    /^x\/a\/photo__[0-9a-f]{8}\.webp$/.test(disambiguatedAssetName('x/a/photo.webp')),
+    true,
+  );
+  eq(
+    'it differs from the name it exists to avoid',
+    disambiguatedAssetName('x/a/photo.webp') === 'x/a/photo.webp',
+    false,
+  );
+  eq(
+    'it is deterministic',
+    disambiguatedAssetName('x/a/photo.webp'),
+    disambiguatedAssetName('x/a/photo.webp'),
+  );
+  eq(
+    'two different names get different suffixes',
+    disambiguatedAssetName('x/a/photo.webp') === disambiguatedAssetName('x/b/photo.webp'),
+    false,
+  );
+  eq(
+    'an extensionless name still gets a suffix',
+    /^x\/a\/blob__[0-9a-f]{8}$/.test(disambiguatedAssetName('x/a/blob')),
+    true,
+  );
+  // It must NOT agree with the re-encode's own disambiguator, or the two
+  // fallbacks would land on one file. They hash different inputs on purpose:
+  // the rename hashes the PRE-rename name so its suffix tracks its source.
+  eq(
+    'the rename fallback and the write-time fallback do not collide',
+    disambiguatedWebpName('x/a/photo.jpg') === disambiguatedAssetName('x/a/photo.webp'),
+    false,
   );
 
   // A collision must not end in shipping the oversized original.
@@ -4693,6 +4750,7 @@ async function capture() {
   // alone, or two runs of the same capture disagree about what the site has.
   const assetStatus = new Map();
   const deadFontFaces = { rules: 0, sources: 0 };
+  let nameCollisionsAvoided = 0;
   const imageRecode = {
     recoded: 0,
     declined: 0,
@@ -5075,6 +5133,35 @@ async function capture() {
       }
     }
 
+    // Last line of defence before the write, and the ONLY thing standing
+    // between a `.webp` rename and the file it may be about to clobber.
+    //
+    // `disambiguatedWebpName` above only fires when the genuine `x.webp` has
+    // already been processed, because that is what puts it in this set. In the
+    // other order -- oversized `x.jpg` first, genuine `x.webp` second -- the
+    // rename sees no collision, takes `x.webp`, and the real one would then
+    // overwrite it here. The page that referenced the JPEG would silently show
+    // a DIFFERENT image, which is worse than the oversized file this pass
+    // exists to avoid, and which order the REST inventory happens to yield is
+    // not something the capture controls.
+    //
+    // Whoever arrives second yields, and yielding is safe precisely because
+    // `localizeAsset` returns the name it used: the caller rewrites every
+    // reference from that return value, so a suffixed name cannot strand one.
+    // Reported by copilot-pull-request-reviewer on #1382; the same hazard is
+    // on `main`, which takes this branch identically.
+    if (usedAssetNames.has(name)) {
+      const alternative = disambiguatedAssetName(name);
+      if (usedAssetNames.has(alternative)) {
+        // Two distinct URLs would have to hash-collide on top of colliding by
+        // name. Refusing beats overwriting a file that is already referenced.
+        console.error(`[asset] refusing to overwrite ${name}: both names taken`);
+        assetFailures.push({ url: absUrl, status: -3 });
+        return null;
+      }
+      nameCollisionsAvoided += 1;
+      name = alternative;
+    }
     usedAssetNames.add(name);
 
     if (!isContainedPath(assetsRoot, name)) {
@@ -5322,6 +5409,12 @@ async function capture() {
         ' no encoder was available. This is NOT a judgement that they were already optimal:' +
         ' nothing tried. Install sharp before the capture step.',
     );
+  if (nameCollisionsAvoided)
+    console.error(
+      `[capture] ${nameCollisionsAvoided} asset(s) took a disambiguated name because a` +
+        ' .webp rename had already claimed the one they wanted. Without this they would' +
+        ' have overwritten it, and a page would show a different image than it captured.',
+    );
   if (deadFontFaces.sources)
     console.error(
       `[capture] dropped ${deadFontFaces.sources} @font-face source(s) the origin 404s,` +
@@ -5468,6 +5561,7 @@ async function capture() {
       stillOverBudget: imageRecode.stillOverBudget,
       collisions: imageRecode.collisions.length,
       disambiguated: imageRecode.disambiguated,
+      nameCollisionsAvoided,
       deadFontFaceRulesRemoved: deadFontFaces.rules,
       deadFontFaceSourcesRemoved: deadFontFaces.sources,
       bytesBefore: imageRecode.bytesBefore,

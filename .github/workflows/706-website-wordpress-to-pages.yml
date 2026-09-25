@@ -514,6 +514,7 @@ jobs:
           node scripts/assess-capture-completeness.mjs --self-test
           node scripts/dedupe-capture-assets.mjs --self-test
           node scripts/heal-missing-asset-refs.mjs --self-test
+          node scripts/fetch-asset-subresources.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
@@ -930,6 +931,29 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/heal-missing-asset-refs.mjs --site "$RUNNER_TEMP/capture/site"
+
+      # AFTER the heal, deliberately: the heal repoints a reference at a file
+      # the capture already has, which costs nothing and touches no network.
+      # Only what is still absent after that is worth a request.
+      #
+      # The capture rewrites a PAGE's reference to a third-party HTML asset but
+      # never reads that asset and follows what IT references. A relative `src`
+      # inside one therefore resolves, at serve time, against a directory
+      # nothing ever wrote to. Measured on newheightseducation.org run
+      # 36045432773: the localized Animoto player page asks for
+      # `js/main-48d3ed6a76.js`, and `/volunteer-with-nheg/` was the one page of
+      # 120 that failed the self-containment gate for it.
+      #
+      # The URL is built from the asset's own path under `_ffc-assets/<host>/`,
+      # so this can only request a host the capture already downloaded from —
+      # the document chooses a path, never a host.
+      - name: Fetch sub-resources a localized document asks for
+        working-directory: automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/fetch-asset-subresources.mjs \
+            --site "$RUNNER_TEMP/capture/site" --delay-ms 250
 
       # Runs BEFORE integration, so the forms are dead in the artifact too and
       # a later stage cannot accidentally publish the un-neutralized capture.

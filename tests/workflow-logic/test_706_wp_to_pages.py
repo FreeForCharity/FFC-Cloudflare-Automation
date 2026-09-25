@@ -1530,9 +1530,23 @@ def test_a_shrunk_pdf_keeps_its_name():
     it, including links in places the capture never parses, such as a sitemap
     or a PDF that links to another PDF."""
     src = _capture_script_text()
-    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split("usedAssetNames.add(name)")[0]
+    # The window ends at the write-time collision guard, not at
+    # `usedAssetNames.add(name)`. The guard DOES reassign `name`, legitimately
+    # and for an unrelated reason, and it sits between the PDF pass and the
+    # claim -- so terminating on the claim would read the guard as a PDF-pass
+    # rename. This is a narrower window than before, so the gap it gives up is
+    # asserted separately below rather than dropped.
+    GUARD = "if (usedAssetNames.has(name)) {"
+    call = src.split("if (optimizePdfs && shouldShrinkPdf(")[1].split(GUARD)[0]
     assert "name = " not in call, f"the PDF pass must not reassign the local name:\n{call}"
     assert "buf = shrunk.buffer;" in call
+
+    # The gap: between the guard and the claim there must be nothing but the
+    # guard itself, or a future rename could hide in it and this test would
+    # never look.
+    gap = src.split(GUARD)[1].split("usedAssetNames.add(name);")[0]
+    assert gap.count("name = ") == 1, f"only the guard may reassign the name here:\n{gap}"
+    assert "name = alternative;" in gap, gap
 
 
 def test_ghostscript_absence_is_distinguished_from_a_bad_pdf():
@@ -1609,12 +1623,84 @@ def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
     its name, so that floor buys nothing there and costs something real: it
     discards a result that lands UNDER BUDGET for saving only 20%, and ships
     the oversized original instead. Same reasoning `worthShrinking` already
-    carries for a downsampled PDF, which also keeps its name."""
+    carries for a downsampled PDF, which also keeps its name.
+
+    This used to read the call site and assert the three names appeared in it
+    literally. That pinned a SPELLING, not the property: the decision has since
+    moved into `keepReencoded`, and the text check went red on a refactor that
+    preserved the rule exactly and extended it. Asserting the wiring plus the
+    library's own self-test covers the same property and more -- including the
+    budget override the text form could not express at all.
+    """
     src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
     keep = src.split("const keep = encoded", 1)[1].split("if (keep) {", 1)[0]
-    assert "target === name" in keep, keep
-    assert "worthShrinking(buf.length, encoded.buffer.length)" in keep, keep
-    assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
+    # The renamed/not-renamed distinction still has to REACH the decision.
+    assert "keepReencoded(" in keep, keep
+    assert "target !== name" in keep, keep
+    assert "maxImageBytes" in keep, keep
+
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        # Keeps its name -> worthShrinking, no rename floor. The original rule.
+        "an un-renamed encode uses worthShrinking",
+        "an un-renamed LARGER encode is still refused",
+        # Renamed -> the floor applies, EXCEPT where the result lands under
+        # budget, because the alternative is publishing an oversized image.
+        "a renamed encode landing UNDER budget is kept on a 17.6% saving",
+        "...which is exactly the pair worthReencoding refuses on its own",
+        "a renamed encode still OVER budget is refused on a 10% saving",
+        "a renamed encode still over budget is kept when it clears the floor",
+        "an original already under budget gets no rescue, only the floor",
+        # The rescue must not undercut the non-positive refusal.
+        "a zero-byte rescue is refused",
+    ):
+        assert f"ok   {name}" in out, f"missing self-test: {name}\n{out[-2000:]}"
+
+
+def test_a_webp_rename_cannot_be_overwritten_by_the_file_it_displaced():
+    """`assetLocalName` is injective on the source URL, so two assets can only
+    want one local name through the `.jpg -> .webp` rename -- which invents a
+    name the site may genuinely ship.
+
+    `disambiguatedWebpName` covers one order: the real `x.webp` is downloaded
+    first, so it is in `usedAssetNames` and the rename sees the collision. The
+    other order has no such signal. The oversized `x.jpg` is re-encoded to
+    `x.webp` while the set is still empty, and the genuine `x.webp` arriving
+    later would write straight over it -- leaving the JPEG's page pointing at a
+    DIFFERENT image, which is worse than the oversized file the pass exists to
+    avoid. Which order the REST inventory yields is not the capture's to
+    control.
+
+    What makes this testable as a SHAPE rather than a behaviour is that the
+    whole property is positional: the guard is worth nothing unless it runs
+    after the rename has settled `name` and before anything is written under
+    it. So this asserts the order of those three points in the source, not
+    merely that a guard exists somewhere. The decision it delegates to
+    (`disambiguatedAssetName`) is behaviourally tested in the library's own
+    self-test."""
+    src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
+
+    rename = src.index("let target = webpName(name);")
+    guard = src.index("if (usedAssetNames.has(name)) {")
+    claim = src.index("usedAssetNames.add(name);")
+    write = src.index("writeFileSync(dest, buf)")
+
+    assert rename < guard, "the guard must run after the rename has settled `name`"
+    assert guard < claim, "the guard must run before the name is claimed"
+    assert claim < write, "the name must be claimed before anything is written"
+
+    # And it must actually yield a different name rather than, say, logging.
+    body = src[guard : guard + 900]
+    assert "disambiguatedAssetName(name)" in body, body
+    assert "name = alternative;" in body, body
 
 
 def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():

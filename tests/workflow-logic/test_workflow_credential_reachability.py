@@ -777,12 +777,53 @@ def _frozen_workflows_with_a_kv_credential() -> list[str]:
             # parse problem cannot quietly disarm the check.
             found.append(name)
             continue
-        for job in (doc.get("jobs") or {}).values():
-            for step in (job.get("steps") or []):
-                if "-from-kv" in str((step or {}).get("uses", "")):
-                    found.append(name)
-                    break
+
+        # EVERY shape below is checked, and that is not defensive habit. This
+        # helper runs OUTSIDE any assertion, and the module runner catches
+        # `AssertionError` and nothing else — so an `AttributeError` from a
+        # `.get()` on a non-dict does not fail this case, it ABORTS the module
+        # mid-roster, and a reviewer counting FAIL lines scores the tests that
+        # never reported as passing (ledger L194). A malformed workflow must
+        # reach the same fail-toward-asserting branch as an unparseable one.
+        if not isinstance(doc, dict):
+            found.append(name)
+            continue
+        jobs = doc.get("jobs")
+        if not isinstance(jobs, dict):
+            found.append(name)
+            continue
+
+        for job in jobs.values():
+            if not isinstance(job, dict):
+                continue
+            steps = job.get("steps")
+            if not isinstance(steps, list):
+                continue
+            if any(_is_local_kv_action(step) for step in steps):
+                found.append(name)
+                break
     return found
+
+
+def _is_local_kv_action(step: object) -> bool:
+    """Is this step a LOCAL `*-from-kv` composite action?
+
+    The `./` prefix is the whole point and was missing for one commit: a bare
+    `"-from-kv" in uses` also matches a hypothetical remote
+    `someorg/x-from-kv@v1`, whose export behaviour this repo knows nothing
+    about. That made the oracle broader than its own docstring claimed and
+    could have asserted an arrival on a correct tree — the third false-red in
+    this one gate. Raised by Copilot on #1361.
+
+    Only the local actions under `.github/actions/` are in this tree and can be
+    read; those are the ones that unconditionally export through GITHUB_ENV.
+    """
+    if not isinstance(step, dict):
+        return False
+    uses = step.get("uses")
+    if not isinstance(uses, str):
+        return False
+    return uses.startswith("./.github/actions/") and "-from-kv" in uses
 
 
 def test_the_guard_still_exits_zero_and_prints_the_frozen_counts():

@@ -757,6 +757,34 @@ def test_the_report_neither_creates_nor_clears_a_finding():
     assert "credential reachability (#1188)" in paragraph
 
 
+def _frozen_workflows_with_a_kv_credential() -> list[str]:
+    """Frozen workflows whose job `uses:` a local `*-from-kv` composite action.
+
+    An independent oracle for "does this freeze contain a credential to
+    report?", read from the workflow YAML rather than from the resolver, so a
+    broken resolver cannot switch the assertion off. Conservative by design:
+    only the local from-kv actions count, because those unconditionally export
+    to GITHUB_ENV. A credential reaching a step any other way leaves this
+    silent, which is the safe direction for a gate.
+    """
+    found = []
+    for name in guard.KNOWN_UNGUARDED:
+        path = REPO_ROOT / ".github" / "workflows" / name
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            # Unreadable is not "no credential": fail toward asserting, so a
+            # parse problem cannot quietly disarm the check.
+            found.append(name)
+            continue
+        for job in (doc.get("jobs") or {}).values():
+            for step in (job.get("steps") or []):
+                if "-from-kv" in str((step or {}).get("uses", "")):
+                    found.append(name)
+                    break
+    return found
+
+
 def test_the_guard_still_exits_zero_and_prints_the_frozen_counts():
     """End to end, as CI runs it."""
     proc = _run_checker()
@@ -772,25 +800,46 @@ def test_the_guard_still_exits_zero_and_prints_the_frozen_counts():
     # comment above now claims nothing below it fails at that state, and that
     # claim has to be true.
     #
-    # The gate reads the FREEZE, not the guard's own output, and that is the
-    # whole of why it is written this way. Gating on the printed no-sites
-    # sentence — which is what this first tried — lets the subject of the test
-    # decide whether the test runs: a DEAD extractor prints that same sentence
-    # at any freeze size, so the gate swallows exactly the failure the
-    # assertion exists to catch. Measured: with `reachability_by_site` stubbed
-    # to {} at today's freeze of 8, the output-gated form dropped detection
-    # from two cases to one.
+    # The gate must satisfy TWO things at once, and the obvious spellings each
+    # satisfy one and break the other:
     #
-    # `KNOWN_UNGUARDED` is a literal the extractor cannot influence, so an
-    # empty-freeze skip cannot be manufactured by breaking the thing under
-    # test.
-    if guard.KNOWN_UNGUARDED:
+    #   gate on the guard's own output   a DEAD extractor prints the no-sites
+    #                                    sentence at ANY freeze size, so the
+    #                                    gate swallows the failure this
+    #                                    assertion exists for. Measured: with
+    #                                    `reachability_by_site` stubbed to {}
+    #                                    at a freeze of 8, detection fell from
+    #                                    two cases to one.
+    #   gate on `KNOWN_UNGUARDED`        cannot be manufactured by breaking the
+    #                                    extractor -- but a NON-EMPTY freeze in
+    #                                    which no entry holds a credential is a
+    #                                    correct tree, and this would fail it.
+    #                                    Raised by Copilot on #1361.
+    #
+    # So gate on an oracle the extractor cannot influence that answers the
+    # question actually being asked: does this freeze CONTAIN a credential to
+    # report? Read straight from the workflow YAML -- a job that `uses:` one of
+    # the local `*-from-kv` composite actions always exports its credential
+    # through GITHUB_ENV, which is exactly the arrival this asserts on.
+    #
+    # Deliberately CONSERVATIVE, and that is what keeps it from becoming a
+    # third false-red: it looks only for the local from-kv actions, so a
+    # credential arriving some other way makes it stay quiet rather than assert
+    # something it cannot stand behind. It is not a reimplementation of the
+    # resolver -- it decides whether the assertion applies, never what the
+    # answer is.
+    #
+    # Today it answers yes for all 8 frozen workflows, which is also why
+    # Copilot's state is not reachable by BURNING DOWN: every current entry
+    # carries a from-kv action, so every subset does too. It becomes reachable
+    # when a new credential-free workflow joins the freeze, which is an
+    # ordinary event -- the freeze exists to catch new instances.
+    if _frozen_workflows_with_a_kv_credential():
         assert "GITHUB_ENV from step" in proc.stdout, (
-            "the arrival path must reach the operator, not just the library. "
-            "Either the extractor stopped reporting arrivals, or the freeze has "
-            "reached a state where no frozen site reaches a credential through "
-            "GITHUB_ENV or an acquired session — the second is new and wants a "
-            "decision here, not a relaxed assertion"
+            "the freeze contains a workflow whose job uses a local *-from-kv "
+            "action, so that credential's GITHUB_ENV arrival must reach the "
+            "operator and not just the library — the extractor has stopped "
+            "reporting arrivals"
         )
 
 

@@ -23,6 +23,16 @@
 # `whmcs/theme/six_ffc/**` bundle) never register unless a PR actually rewrites
 # them -- and the allowlist covers that case.
 #
+# Two failures, two messages (#1243)
+# -----------------------------------
+# "A binary was swept in by `git add -A`" and "a text file the repo already
+# tracks grew past the limit" are different mistakes with different remedies,
+# and this guard used to describe only the first -- so the second was handed a
+# diagnosis about somebody else's mistake, plus instructions to delete a file
+# that has to stay. Each offender is therefore classified on two independent
+# axes, tracked-on-base vs new, and text vs binary, and the report names the
+# base size, the head size, the limit and the overage.
+#
 # Usage:  check-large-blobs.sh <base-ref> <head-ref>
 # Env:    MAX_BLOB_BYTES     (default 1048576 = 1 MiB)
 #         BLOB_ALLOWLIST     (default .github/large-blob-allowlist.txt)
@@ -71,11 +81,79 @@ is_allowlisted() {
   return 1
 }
 
+# "Is this blob text?" -- it contains no NUL byte, which is the heuristic git
+# itself uses to decide whether a path gets a diff. Takes the blob's sha and the
+# size `cat-file --batch-check` already reported for it, so nothing is measured
+# twice. Returns 0 = text, 1 = binary, 2 = could not read.
+#
+# Deliberately no `head -c <window>` and no scratch file. Sniffing a window
+# would mean either a pipeline whose consumer closes early -- leaving `git` with
+# SIGPIPE, which `set -o pipefail` turns into a failure for every blob larger
+# than the window, i.e. every blob this guard ever reports -- or a temp file,
+# whose creation is one more thing that can fail on a run that is trying to
+# report something else. `tr` consumes the whole stream, so neither applies, and
+# reading a couple of megabytes on a run that is already failing costs nothing.
+# Scanning the whole blob rather than a prefix is also strictly the more
+# accurate answer; git's window exists for speed this script does not need.
+is_text_blob() {
+  local sha="$1" size="$2" stripped
+  if ! stripped="$(git cat-file blob "$sha" | LC_ALL=C tr -d '\000' | wc -c)"; then
+    return 2
+  fi
+  # `wc` right-aligns its count on some implementations, so this can arrive as
+  # "  1200000". GNU coreutils 9.4 reading stdin does not pad -- measured -- but
+  # the comparison is against `cat-file --batch-check`'s unpadded size, so a
+  # string compare would read every text blob on a padding `wc` as binary.
+  # Normalize, then refuse rather than guess if what is left is not a number.
+  stripped="${stripped//[[:space:]]/}"
+  case "$stripped" in
+    '' | *[!0-9]*) return 2 ;;
+  esac
+  [ "$size" -eq "$stripped" ]
+}
+
+# Size of <path> as it stands on the base ref, or "" if there is no blob there.
+# A path absent on the base is new to this PR. A path that IS there is one the
+# repository already tracks, whatever this PR did to its size -- the caller
+# compares the two numbers and says which way it moved. Returning the size
+# rather than a grew/did-not verdict is deliberate: the distinction the report
+# turns on is tracked-vs-new, and the direction is a detail of the wording.
+#
+# `ls-tree` rather than the shorter `cat-file -s "<rev>:<path>"`, because MSYS
+# rewrites a `rev:path` argument whose path begins with a dot -- `origin/main:`
+# `.github/x` reaches git as `origin\main;.github\workflows\x` (CLAUDE.md). On
+# the Windows host that runs this suite, every `.github/...` file would have
+# come back absent and been reported as NEW: silently, and in the direction of
+# the old message this change exists to stop.
+#
+# Anything that is not a blob with a numeric size answers "not there". A tree
+# entry reports its size as `-`, which would otherwise reach the caller's
+# arithmetic and abort the guard with exit 1 -- the code reserved for "oversized
+# blob found".
+size_on_base() {
+  local path="$1" line _mode type _sha size _rest
+  line="$(git ls-tree -l "$BASE_REF" -- "$path" 2>/dev/null)" || return 0
+  [ -n "$line" ] || return 0
+  read -r _mode type _sha size _rest <<< "$line"
+  [ "$type" = "blob" ] || return 0
+  case "$size" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  printf '%s' "$size"
+}
+
 # `rev-list --objects` prints "<sha> [<path>]"; `cat-file --batch-check` then
 # resolves type and size. Joining them keeps this to two git invocations
 # regardless of how many objects the range contains.
 offenders=""
 allowed=""
+# Which SHAPES of offender were seen. The headline and the remedy differ: a
+# committed binary is removed, a tracked text file that grew past the limit is
+# not -- and until #1243 the message described only the first, so every reader
+# of the second was handed a diagnosis about somebody else's mistake.
+tracked_seen=0
+tracked_text_seen=0
+new_seen=0
 
 # An enumeration failure must never read as "no objects, therefore clean" -- that
 # is the exact false-OK this guard exists to prevent. Both git calls are checked.
@@ -124,9 +202,52 @@ if [ -n "$object_list" ]; then
     entry="$(printf '  %10s bytes  %s  (%s)' "$osize" "$path" "${sha:0:12}")"
     if is_allowlisted "$path"; then
       allowed="${allowed}${entry}"$'\n'
-    else
-      offenders="${offenders}${entry}"$'\n'
+      continue
     fi
+
+    # Classify the offender. This only shapes the message -- a classification
+    # that cannot be determined must never drop the file from the report, so
+    # every branch below still appends an entry.
+    base_size="$(size_on_base "$path")"
+    if is_text_blob "$sha" "$osize"; then
+      kind="text file"
+    elif [ "$?" = "1" ]; then
+      kind="binary file"
+    else
+      kind="file of unreadable content"
+    fi
+
+    over=$((osize - MAX_BLOB_BYTES))
+    if [ -n "$base_size" ]; then
+      tracked_seen=1
+      if [ "$kind" = "text file" ]; then
+        tracked_text_seen=1
+      fi
+      # Do not assume it grew. A file that is ALREADY over the limit on the base
+      # can be edited smaller and still be over it, and saying "GREW ... (+-500000)"
+      # to someone who just removed half a megabyte is the kind of sentence this
+      # whole change exists to stop printing.
+      delta=$((osize - base_size))
+      if [ "$delta" -gt 0 ]; then
+        change="GREW"
+        signed="+${delta}"
+      elif [ "$delta" -lt 0 ]; then
+        change="SHRANK and is still over"
+        signed="${delta}"
+      else
+        change="CHANGED without changing size"
+        signed="+0"
+      fi
+      # "in this PR", not "here": the oversized blob need not be in the tip
+      # tree. A branch that grew the file and shrank it again still carries it.
+      detail="$(printf '%14sTRACKED %s that %s: %s bytes on %s -> %s bytes in this PR (%s). Limit %s, over by %s.' \
+        "" "$kind" "$change" "$base_size" "$BASE_REF" "$osize" "$signed" "$MAX_BLOB_BYTES" "$over")"
+    else
+      new_seen=1
+      detail="$(printf '%14sNEW %s, not present on %s. Limit %s, over by %s.' \
+        "" "$kind" "$BASE_REF" "$MAX_BLOB_BYTES" "$over")"
+    fi
+    offenders="${offenders}${entry}"$'\n'"${detail}"$'\n'
   done <<< "$object_list"
 fi
 
@@ -141,9 +262,61 @@ if [ -z "$offenders" ]; then
   exit 0
 fi
 
-echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
-echo "Oversized blobs introduced in this PR's commits:"
+if [ "$tracked_seen" = 1 ] && [ "$new_seen" = 0 ]; then
+  # Nothing was added -- a file the repository already tracks crossed the line.
+  # Say so in the headline, because "this PR introduces a blob" reads as "you
+  # committed a binary by mistake" and sends the reader looking for one.
+  echo "::error::This PR pushes a file the repository already tracks past the" \
+    "${MAX_BLOB_BYTES}-byte blob limit. Nothing new was committed -- a file the repo" \
+    "already had is over it."
+else
+  echo "::error::This PR introduces one or more blobs over ${MAX_BLOB_BYTES} bytes."
+fi
+# Neutral wording on purpose. "introduced" contradicts the grown-file headline
+# two lines up, which says nothing new was committed -- and a message whose two
+# halves disagree is the defect this script was changed to stop producing.
+echo "Blobs over ${MAX_BLOB_BYTES} bytes in this PR's commits:"
 printf '%s' "$offenders"
+
+if [ "$tracked_text_seen" = 1 ]; then
+  # Scoped to the file(s) marked TRACKED above, never to the whole report: a PR
+  # can grow a tracked text file AND commit a binary in the same range, and an
+  # unqualified "there is no binary to delete" is then false about a blob this
+  # very message just printed -- telling the reader to skip the one remedy that
+  # does apply.
+  cat >&2 <<EOF
+
+A TRACKED TEXT FILE IS OVER THE LIMIT. For the file(s) marked TRACKED above,
+nothing was committed by accident and there is nothing to delete: the limit is
+${MAX_BLOB_BYTES} bytes and the file is simply over it. Shrink it or exempt it:
+
+  * Shrink the file -- split it, archive the older part, or move long content
+    into a linked file. Note that trimming a Markdown TABLE usually does not
+    shrink it: prettier re-pads every cell to the column width.
+  * If the file genuinely belongs in git at this size, add its path to
+    .github/large-blob-allowlist.txt in the same PR and say why in the
+    description. Also update whatever documentation states the old ceiling --
+    an exemption that is not written down keeps being obeyed after it is
+    lifted (#1243).
+
+WHICH ONE YOU PICK DECIDES WHETHER YOU ALSO NEED THE REWRITE BELOW. Allowlisting
+clears this check on its own. SHRINKING DOES NOT: the oversized blob is already
+reachable from this branch, so a follow-up commit that makes the file smaller
+leaves it exactly where it was and this check still fails. Shrink it in a
+rewritten history instead -- the recipe below, minus its \`rm -f\` step, because
+the file itself stays.
+EOF
+
+  if [ "$new_seen" = 1 ]; then
+    cat >&2 <<'EOF'
+
+THIS PR ALSO INTRODUCES A NEW OVERSIZED BLOB -- see the entries marked NEW
+above. The rewrite below applies to those in full, `rm -f` included, whatever
+you decide about the grown file. This report needs both remedies.
+EOF
+  fi
+fi
+
 cat >&2 <<'EOF'
 
 These may not appear in the "Files changed" tab. A blob added in one commit and

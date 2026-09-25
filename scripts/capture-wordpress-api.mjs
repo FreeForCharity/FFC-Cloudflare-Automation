@@ -1594,15 +1594,24 @@ export function disambiguatedWebpName(name) {
 export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
   if (!renamed) return worthShrinking(originalBytes, encodedBytes);
   if (worthReencoding(originalBytes, encodedBytes)) return true;
-  // No `encodedBytes < originalBytes` term: the two conditions below already
-  // imply it (encoded <= max < original), and a clause that cannot change an
-  // answer reads as a safety net while testing nothing -- mutation confirmed
-  // it survives every mutation. The strictly-smaller check that DOES bite
-  // lives in `worthShrinking` and `worthReencoding`, which run first.
+  // `encodedBytes > 0` is NOT redundant, and leaving it out was a real hole:
+  // `worthReencoding` and `worthShrinking` both refuse a non-positive result
+  // outright, and the rescue bypassed them -- so a zero-byte encode read as
+  // "landed under budget" and would have replaced a real image with an empty
+  // file that every size check then called compliant. An encoder returning an
+  // empty buffer is a bug, which is exactly why it must not be rewarded.
+  //
+  // No `encodedBytes < originalBytes` term, and no `maxBytes > 0` or
+  // `originalBytes > 0`: each is implied by the clauses kept here (encoded <=
+  // max < original, and both positive once encoded is), and a clause that
+  // cannot change an answer reads as a safety net while testing nothing --
+  // mutation confirmed the first of them survives every mutation. The
+  // strictly-smaller check that DOES bite lives in the two helpers above.
   return (
     Number.isFinite(maxBytes) &&
     Number.isFinite(originalBytes) &&
     Number.isFinite(encodedBytes) &&
+    encodedBytes > 0 &&
     originalBytes > maxBytes &&
     encodedBytes <= maxBytes
   );
@@ -2602,6 +2611,11 @@ function selfTest() {
     keepReencoded(485_115, 399_788, undefined, true),
     false,
   );
+  // The rescue must not undercut the invariant both helpers enforce: an
+  // encoder that returns nothing has failed, and "0 bytes is under budget" is
+  // the one reading that would replace a real image with an empty file.
+  eq('a zero-byte rescue is refused', keepReencoded(500_000, 0, BUDGET, true), false);
+  eq('a negative-byte rescue is refused', keepReencoded(500_000, -5, BUDGET, true), false);
 
   // A collision must not end in shipping the oversized original.
   eq(

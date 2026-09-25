@@ -551,6 +551,73 @@ that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times cor
 across a 30-day outage, with 0 addressees). Post the note on #719 _and_ follow #1269 for the
 delivery channel rather than inventing one here.
 
+**Before filing a sweep as a normal terminal state, check that the actor you are waiting on still
+exists (#1339).** A complete PR set means no landing work is available — and it reads exactly the
+same whether the Conductor is healthy with nothing to promote or has not run in five days. On
+2026-09-14 it stopped mid-run and **~39 consecutive worker runs** each computed "0 worker-actionable
+PRs" correctly, in increasing detail, and filed it as routine; the open pile grew 4 → 13 with all 17
+monitoring workflows green. The sentence _"the only remaining action is promotion, which is the
+Conductor's"_ is true on a healthy day and true during an outage, and the cohort's state cannot tell
+them apart. **A terminal state reached 39 times in a row is not a terminal state, it is an outage.**
+
+So when the sweep terminates with 0 actionable PRs, spend one read on the supervisor before
+concluding anything:
+
+- **`747. Repo - Conductor Liveness`** measures this every two hours and keeps a rolling issue open
+  while it holds. An open 747 issue, or a `conductor-silence` signal past its 6h warn threshold,
+  means the run's one contribution is to escalate the **supervisor's** absence — not to re-verify an
+  unchanged cohort for the tenth time.
+- Reading it by hand is one call, and #719 is the same source 747 uses. **Match the separator
+  loosely** — #719 has changed heartbeat format twice (bold `**Conductor run 174 — START**` since
+  run 167, `## Run 166 — END` before that, bare `RUN 86 START` before ~87), so pin the run number
+  and the phase word and let anything sit between them:
+
+  ```bash
+  gh api --paginate 'repos/FreeForCharity/FFC-Cloudflare-Automation/issues/719/comments?per_page=100' \
+    --jq '.[] | "\(.created_at) \(.body[0:60])"' \
+    | grep -iE 'run [0-9]+[^A-Za-z0-9]*(START|END)([^A-Za-z0-9]|$)' | tail -3
+  ```
+
+  A newest entry older than a few hours is the finding. Note this needs `--paginate` and a
+  **streaming** `--jq`, for the two reasons in the rate-budget section above — and `per_page=100`,
+  because `--paginate` does not raise the page size on its own. The default is **30**, and #719
+  carries 871+ comments, so omitting it spends ~30 requests where 9 do the same work. That is a
+  self-inflicted cost in the one section of this file that is about the shared rate budget.
+
+  **Over-match on purpose here — on the SEPARATOR, not on the phase.** The two failure directions
+  are not symmetric: a loose pattern shows you a worker comment that mentions a run, which you
+  discard by reading it, while a tight one prints nothing and reads as _"no heartbeat found"_ —
+  indistinguishable from the outage you are checking for. This line shipped tight and wrong:
+  `run [0-9]+ .?(START|END)` allows exactly one character between the number and the phase, so
+  against the four formats above it matched **1 of 4** — only the pre-87 bare form — and missed both
+  spellings the log actually uses. Measured, not argued (Copilot caught it on #1341).
+
+  That licence stops at the phase word, and the trailing `([^A-Za-z0-9]|$)` is what stops it.
+  Without it `(START|END)` also matches `STARTED` and `ENDED`, and **that** over-match is not the
+  harmless kind: it does not show you something you discard by reading, it shows you something that
+  reads exactly like a heartbeat. Worse, it disagrees with the monitor — `CONDUCTOR_RE` carries
+  `(?![A-Za-z0-9])` and rejects both — so the hand check would report a heartbeat 747 does not
+  count, and an operator would dismiss a true alert as a false alarm. Measured on the four inputs:
+
+  | line                            | this grep | `CONDUCTOR_RE` |
+  | ------------------------------- | --------- | -------------- |
+  | `**Conductor run 174 — START**` | match     | match          |
+  | `run 174 END`                   | match     | match          |
+  | `run 174 STARTED`               | **no**    | no             |
+  | `run 174 ENDED`                 | **no**    | no             |
+
+  Before the boundary was added the first column read `match` on all four. A diagnostic that is
+  looser than the thing it diagnoses is worse than one that is merely loose.
+
+  That makes three instances of one mistake in a single PR: the shipped `CONDUCTOR_RE` stopped at
+  run 166 for the same reason, and the safety-table row broke on a related formatting assumption.
+  **When you write a pattern against a log you do not control, enumerate its real formats from the
+  log itself and test against all of them** — every one of these was written from the formats the
+  author happened to have seen.
+
+Nothing in this repository can restart the Conductor — it runs on an operator workstation reachable
+only by @clarkemoyer — so the deliverable is the escalation, not a fix.
+
 Two mechanics for whoever does have promotion authority, both already paid for:
 
 - **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with

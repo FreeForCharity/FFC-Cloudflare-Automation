@@ -1,0 +1,338 @@
+name: '747. Repo - Conductor Liveness [GH]'
+run-name: 'Conductor liveness (supervisor heartbeat)'
+
+# Two-hourly OUTCOME check on whether the Conductor — the locally-run routine
+# that is the only actor with promotion and merge authority — is still working.
+#
+# Why (#1339): the Conductor posted its run 174 END to the Conductor Log (#719)
+# at 2026-09-14T10:20Z and then went quiet for about five days. Nothing
+# noticed. This repo has 17 monitoring workflows (730-746) and every one of them
+# watches something that happens INSIDE GitHub Actions — waiting runs (734),
+# scheduled-workflow failures (740), board drift (745), feed freshness (744) —
+# so a routine whose only GitHub footprint is a comment on an issue is invisible
+# to the entire fleet by construction. All 17 were green while 0 agentic-os PRs
+# merged, the open pile grew from 4 to 13, and about 39 consecutive cloud-worker
+# runs each correctly computed "0 worker-actionable PRs" and filed it as a
+# normal terminal state. A terminal state reached 39 times in a row is not a
+# terminal state, it is an outage.
+#
+# 744's header already makes this argument one level down: #921 watches whether
+# 502 succeeds, not whether its PR merged; #908 watches PRs hanging behind main,
+# not the publisher never opening one. Same shape, one level up. This workflow
+# asserts the outcome instead — are the Conductor's comments still arriving, and
+# is work still landing.
+#
+# Four signals, each reported BY NAME with its measured value and never averaged
+# into a single verdict:
+#
+#   conductor-silence  age of the newest `Run N — START / END` comment on #719
+#   merge-silence      age of the newest merged agentic-os PR (independent)
+#   open-pr-cap        open agentic-os PR count vs the worker cap of 3, CONTEXT
+#   pr-growth          monotonic growth in that count across consecutive runs
+#
+# open-pr-cap is deliberately never a finding on its own. The pile stood at 4 —
+# above the cap — throughout the healthy window before the outage, so a
+# level-triggered rule reports every ordinary day and teaches its reader to
+# ignore it. Sustained growth is the shape a stalled supervisor makes, and
+# pr-growth is what reports it.
+#
+# An unreadable log, an empty comment page, a pattern that no longer matches the
+# log's format (ledger L215), or a timestamp that is absent, empty, non-ISO or in
+# the future is a FINDING, never "alive". "Could not check" and "checked, fine"
+# are different answers and collapsing them is the exact fail-open this workflow
+# exists to close (ledger L02).
+#
+# Credentials: NONE beyond the ambient GITHUB_TOKEN. The log is a public issue in
+# this repository and so are the PRs. Using a Key Vault PAT here would be
+# circular in 744's sense, carried up a level: a liveness check must not depend
+# on a credential whose death it might need to report, and it must not sit behind
+# an environment gate that only the absent supervisor can approve. No Key Vault
+# access, no environment, no approval gate.
+#
+# Classification + report logic lives in scripts/conductor-liveness-lib.js
+# (unit-tested under tests/workflow-logic/).
+
+on:
+  schedule:
+    # Every two hours at :19. The observed healthy Conductor cadence is ~3h and
+    # the alert threshold is 12h, so two-hourly polling reports a real stall
+    # within about an hour of it crossing that line rather than a day later.
+    # Minute :19 is used by no other hub workflow (the collision guard in the
+    # test module).
+    - cron: '19 */2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A cancelled half-check leaves signals unread while the run still reads as
+  # handled — the #834 self-cancelling-cron shape.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for the classification library)
+        uses: actions/checkout@v7.0.1
+
+      - name: Measure liveness + upsert/close rolling issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const lib = require('./scripts/conductor-liveness-lib.js');
+
+            const { owner, repo } = context.repo;
+
+            // --- 1. The Conductor Log's comments. Paginated: the endpoint
+            // returns at most 100 per page OLDEST-FIRST, so an unpaginated read
+            // of a 450+-comment issue yields the earliest comments and would
+            // report a years-old timestamp as the newest one.
+            let comments = [];
+            let commentsError = null;
+            try {
+              comments = await github.paginate(github.rest.issues.listComments, {
+                owner: lib.LOG_OWNER,
+                repo: lib.LOG_REPO,
+                issue_number: lib.LOG_ISSUE,
+                per_page: 100,
+              });
+            } catch (e) {
+              commentsError = String(e.message || e).slice(0, 200);
+            }
+
+            // --- 2. Merged + open agentic-os PRs. Both come from the LABELLED
+            // issues listing, which returns pull requests too (same object in
+            // the REST model) and carries `pull_request.merged_at` — one cheap
+            // labelled query per state instead of walking every PR in the repo.
+            //
+            // Both halves of that were questioned in review and both are
+            // MEASURED against the live API (2026-09-19), because the obvious
+            // "fix" is wrong in a way that fails silently:
+            //
+            //   * the issues endpoint's `pull_request` stub really does carry
+            //     `merged_at`. Its keys are exactly
+            //     [diff_url, html_url, merged_at, patch_url, url], and the six
+            //     merged agentic-os PRs on the first page all returned real
+            //     timestamps (#1340 2026-09-19T16:48:51Z, #1337 16:12:46Z, …).
+            //     It is `null` for a closed-unmerged PR, which is precisely what
+            //     the truthy filter below is for.
+            //   * `pulls.list` does NOT support `labels=` and does not say so.
+            //     Measured: `pulls?state=closed&labels=agentic-os` and
+            //     `…&labels=this-label-does-not-exist-xyz` both return the SAME
+            //     five PRs, while the issues endpoint returns 5 and 0 for the
+            //     same pair. So switching to `pulls.list` would either silently
+            //     drop the label filter — scoring any merged PR as an
+            //     agentic-os merge — or force a walk of every closed PR in the
+            //     repo to filter client-side.
+            //
+            // Keep the issues endpoint. If this ever does need to change, note
+            // that the failure mode here is loud by design, not silent: an
+            // extraction that stopped working yields an empty `mergedPRs`, which
+            // the library classifies UNKNOWN — a standing finding — rather than
+            // a reassuring "recently merged".
+            let mergedPRs = [];
+            let mergedError = null;
+            try {
+              // Newest-updated first, paging forward only until a merged PR is
+              // found. This looks for a MAXIMUM (`merged_at`), not for an
+              // absence, so the FIRST page carrying any merged PR is enough —
+              // but one page is not, and the earlier revision of this comment
+              // argued that it was.
+              //
+              // The closed agentic-os set is already 113 items and grows, so the
+              // newest merged PR is not guaranteed a slot on page 1: a closed
+              // item is re-sorted to the top by any comment or label change, not
+              // only by a merge. Exhaust 100 such items and the newest merge
+              // falls to page 2, `mergedPRs` comes back empty, and merge-silence
+              // reports UNKNOWN while merges are in fact happening.
+              //
+              // That failure is fail-closed (a finding, never a reassuring
+              // "recently merged"), so it is noise rather than blindness — but a
+              // monitor that cries wolf gets ignored, which is the same argument
+              // this workflow already makes for keeping `open-pr-cap` off the
+              // findings list.
+              //
+              // Stopping at the first page that carries ANY merge is NOT
+              // enough, and an earlier revision of this loop did exactly that.
+              // The listing is ordered by `updated_at`, not by `merged_at`: an
+              // old merge that someone commented on yesterday sorts above a
+              // merge from this morning that nobody has touched since. Break on
+              // "found one" and `merge-silence` measures from the older merge
+              // and can WARN or ALERT while a newer merge exists — the same
+              // false-alarm noise this loop was widened to remove.
+              //
+              // The sound bound uses the one relation that always holds:
+              // `merged_at <= updated_at`, because merging bumps `updated_at`
+              // (measured on #1340 — merged 16:48:51, updated 16:48:52). So
+              // once THIS page's OLDEST `updated_at` is at or below the newest
+              // `merged_at` seen, every item on every later page has an older
+              // `updated_at` still, and therefore cannot carry a newer merge.
+              //
+              // Cost is unchanged in the common case: the newest merge is
+              // normally near the top of page 1 while page 1's 100th item is
+              // weeks older, so the bound is satisfied immediately and this is
+              // one request. It pages on only when recent churn on closed items
+              // outruns the merge cadence — which is precisely the case that
+              // used to return the wrong answer.
+              const MAX_MERGE_PAGES = 5;
+              let newestMergeT = -Infinity;
+              for (let page = 1; page <= MAX_MERGE_PAGES; page++) {
+                const closed = await github.rest.issues.listForRepo({
+                  owner,
+                  repo,
+                  state: 'closed',
+                  labels: 'agentic-os',
+                  sort: 'updated',
+                  direction: 'desc',
+                  per_page: 100,
+                  page,
+                });
+                if (!closed.data.length) break;
+                for (const i of closed.data) {
+                  if (i && i.pull_request && i.pull_request.merged_at) {
+                    mergedPRs.push({ number: i.number, merged_at: i.pull_request.merged_at });
+                    const t = Date.parse(i.pull_request.merged_at);
+                    if (Number.isFinite(t) && t > newestMergeT) newestMergeT = t;
+                  }
+                }
+                // The listing is exhausted — there is no later page to check.
+                if (closed.data.length < 100) break;
+                const oldest = closed.data[closed.data.length - 1];
+                const oldestUpdatedT = Date.parse((oldest && oldest.updated_at) || '');
+                // An unparseable boundary proves nothing, so it does NOT stop
+                // the walk; the page cap is what bounds it then.
+                if (
+                  mergedPRs.length > 0 &&
+                  Number.isFinite(oldestUpdatedT) &&
+                  oldestUpdatedT <= newestMergeT
+                ) {
+                  break;
+                }
+              }
+            } catch (e) {
+              mergedError = String(e.message || e).slice(0, 200);
+            }
+
+            // The open count IS an absence-shaped claim ("this many and no
+            // more"), so it is fully paginated.
+            let openPRs = null;
+            let openError = null;
+            let openList = [];
+            try {
+              const open = await github.paginate(github.rest.issues.listForRepo, {
+                owner,
+                repo,
+                state: 'open',
+                labels: 'agentic-os',
+                per_page: 100,
+              });
+              openList = open.filter((i) => i && i.pull_request);
+              openPRs = openList.length;
+            } catch (e) {
+              openError = String(e.message || e).slice(0, 200);
+            }
+
+            // --- 3. The prior rolling issue supplies the history that pr-growth
+            // reads. Fetched BEFORE analyze() so the trend is computed against
+            // it, and reused below for the upsert.
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            // Skips pull requests, which this listing also returns — see the
+            // library. Never hand-roll the marker match here: the close path
+            // below can close whatever this selects.
+            const existing = lib.findRollingIssue(openIssues);
+
+            const nowIso = new Date().toISOString();
+            const analysis = lib.analyze({
+              comments,
+              commentsError,
+              mergedPRs,
+              mergedError,
+              openPRs,
+              openError,
+              priorBody: existing ? existing.body : null,
+              now: nowIso,
+            });
+            core.notice(lib.summary(analysis));
+
+            const body = lib.renderBody(analysis, nowIso);
+            fs.writeFileSync(
+              'conductor-liveness.json',
+              JSON.stringify({ ...analysis, openPRNumbers: openList.map((i) => i.number) }, null, 2),
+            );
+            await core.summary.addRaw(body.replace(lib.MARKER, '')).write();
+
+            if (!analysis.hasFinding) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  body: `✅ Recovered: the Conductor is posting again and work is landing (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                });
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: existing.number,
+                  state: 'closed',
+                  state_reason: 'completed',
+                });
+                core.notice(`Closed rolling issue #${existing.number}`);
+              } else {
+                core.notice('Conductor is live and no open rolling issue — nothing to do.');
+              }
+              return;
+            }
+
+            // Converge the labels on both paths, so a manually stripped label is
+            // restored rather than only the body being refreshed.
+            const labelColors = { bug: 'd73a4a', 'agentic-os': '5319e7' };
+            for (const name of lib.ISSUE_LABELS) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color: labelColors[name] || 'ededed',
+                });
+              } catch (e) {
+                if (e.status !== 422) throw e; // 422 = already exists
+              }
+            }
+
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: existing.number,
+                labels: lib.ISSUE_LABELS,
+              });
+              core.notice(`Updated rolling issue #${existing.number} — ${lib.summary(analysis)}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: lib.ISSUE_TITLE,
+                labels: lib.ISSUE_LABELS,
+                body,
+              });
+              core.notice(`Opened rolling issue #${created.data.number} — ${lib.summary(analysis)}`);
+            }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: conductor-liveness
+          path: conductor-liveness.json
+          retention-days: 90
+          if-no-files-found: warn

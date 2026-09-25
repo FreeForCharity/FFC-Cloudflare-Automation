@@ -655,7 +655,23 @@ export function anchorHasAccessibleName(attrs, inner) {
   }
   // An image's alt text names it; an inline SVG's <title> is caught by the text
   // fallback below, which strips tags and keeps what was inside them.
-  if (/<img\b[^>]*\salt\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*')/i.test(inner)) return true;
+  //
+  // The required non-space character is `[^"\s]` rather than `\S`, and that is
+  // the whole correctness of this line. `\S` matches the QUOTE itself, so
+  // `("[^"]*\S[^"]*")` happily spans two attributes: given
+  // `alt="" width="300"` it takes alt's opening quote, lets `\S` be alt's
+  // CLOSING quote, runs `[^"]*` through ` width=`, and closes on the quote
+  // that opens `width`. Every empty-alt image therefore read as NAMED, which
+  // silently disabled `nameAnonymousLinks` for exactly the case it exists to
+  // fix -- a link whose only content is a decorative image. Measured on the
+  // newheightseducation.org apex export: the home page shipped two such links
+  // (a Zeffy donation banner and the store banner), Lighthouse scored
+  // `link-name` at 0.96 against a 0.98 gate, and the heal had run on that very
+  // page. Excluding the delimiter from the class cannot span an attribute.
+  //
+  // Note this still skips an empty-alt image and goes on to a LATER one, so a
+  // link wrapping a decorative image AND a named image is still named.
+  if (/<img\b[^>]*\salt\s*=\s*("[^"]*[^"\s][^"]*"|'[^']*[^'\s][^']*')/i.test(inner)) return true;
   // Text content, with tags stripped and `&nbsp;` treated as the space it is.
   return (
     inner
@@ -2962,6 +2978,38 @@ function selfTest() {
   eq(
     'a link around a described image is left alone',
     nameAnonymousLinks('<a href="/x"><img alt="A cat"></a>', 'V').named,
+    0,
+  );
+
+  // Every fixture above happens to put `alt=""` LAST in the tag, and that is
+  // why the `\S` defect in `anchorHasAccessibleName` survived them all: the
+  // old pattern could only span into a FOLLOWING attribute, and there was
+  // never one to span into. WordPress emits `alt="" width="300" height="157"`,
+  // so the shipped markup hit the case no test covered. These four pin the
+  // delimiter down from both sides.
+  eq(
+    'an empty alt FOLLOWED BY another attribute does not name the link',
+    nameAnonymousLinks('<a href="/x"><img src="a.png" alt="" width="300"></a>', 'V').named,
+    1,
+  );
+  eq(
+    'a whitespace-only alt does not name the link',
+    nameAnonymousLinks('<a href="/x"><img src="a.png" alt="   " width="300"></a>', 'V').named,
+    1,
+  );
+  eq(
+    'real alt text followed by another attribute still names the link',
+    nameAnonymousLinks('<a href="/x"><img src="a.png" alt="A cat" width="300"></a>', 'V').named,
+    0,
+  );
+  // The skip-and-continue behaviour the character class must not cost us: the
+  // first image is decorative, the second names the link.
+  eq(
+    'a decorative image followed by a described one still names the link',
+    nameAnonymousLinks(
+      '<a href="/x"><img src="a.png" alt="" width="9"><img src="b.png" alt="A cat"></a>',
+      'V',
+    ).named,
     0,
   );
   // The population this widening exists for: a social icon row. The theme

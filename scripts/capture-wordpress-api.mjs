@@ -541,6 +541,88 @@ export function collectCssUrls(css) {
 }
 
 /**
+ * Split a CSS value on its TOP-LEVEL commas.
+ *
+ * A `src:` list is comma-separated, but commas also appear inside `url()` --
+ * a `data:` URI carries one before its base64 payload -- and splitting on
+ * every comma would cut one of those in half and produce two broken entries
+ * out of one working font.
+ */
+export function splitTopLevel(value) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+/**
+ * Drop `@font-face` sources the origin does not actually serve.
+ *
+ * A reference the capture could not download is left pointing at the SOURCE
+ * SITE, because there is no local file to rewrite it to. For an image that is
+ * merely a dead link; for a font it is worse, because the exported site then
+ * asks a third-party origin for it on every page and the template's CSP
+ * (`font-src 'self' data:`) refuses -- so the deployment reports a console
+ * error for a glyph that was never going to render anyway.
+ *
+ * Measured on newheightseducation.org: WP Fastest Cache had minified two
+ * `@font-face` rules whose every `src` pointed at paths an older js_composer
+ * shipped (`vc_icons_v3/vcpb-plugin-icons.*`, `fa-v4compatibility.*`). All
+ * twelve 404 at the origin, so the icons are missing on the live site too --
+ * and the export inherited four CSP violations on all 438 pages for them,
+ * which the post-deploy smoke spec "the home page loads without a failure
+ * this deployment owns" counts as this deployment's.
+ *
+ * Only a HARD 404 qualifies, decided by the caller. A transient failure must
+ * not delete a rule, because the next run would restore it and the two
+ * exports would disagree about the site.
+ *
+ * Nothing is invented: a rule keeps every source that is not known-dead, and
+ * only a rule with no live source left is removed entirely. Removing it
+ * rather than leaving it empty is what actually stops the request -- a
+ * `@font-face` whose `src` list is empty is invalid, and browsers vary in
+ * what they do with one.
+ */
+export function dropDeadFontFaces(css, isDead) {
+  let rulesRemoved = 0;
+  let sourcesRemoved = 0;
+  const out = css.replace(/@font-face\s*\{[^{}]*\}/gi, (rule) => {
+    const refs = [...rule.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)].map((m) => m[1].trim());
+    if (!refs.length || !refs.some((r) => isDead(r))) return rule;
+    if (refs.every((r) => isDead(r))) {
+      rulesRemoved += 1;
+      sourcesRemoved += refs.length;
+      return '';
+    }
+    // Some live, some dead: keep the rule and prune the dead entries.
+    return rule.replace(/(^|[;{])(\s*src\s*:)([^;}]*)/gi, (whole, lead, label, value) => {
+      const kept = splitTopLevel(value).filter((entry) => {
+        const m = /url\(\s*["']?([^"')]+)["']?\s*\)/i.exec(entry);
+        if (!m || !isDead(m[1].trim())) return true;
+        sourcesRemoved += 1;
+        return false;
+      });
+      // Every source in this declaration was dead. Drop the declaration; the
+      // rule survives because another `src:` in it still has a live source
+      // (the `every` above already ruled out the all-dead case).
+      if (!kept.length) return lead;
+      return `${lead}${label}${kept.join(',')}`;
+    });
+  });
+  return { css: out, rulesRemoved, sourcesRemoved };
+}
+
+/**
  * Absolute-ise a possibly-relative reference against the page it appeared on.
  * Returns null for anything that is not http(s) once resolved.
  */
@@ -1547,6 +1629,98 @@ export function webpName(name) {
 }
 
 /**
+ * The WebP name to use when `webpName`'s is already taken.
+ *
+ * A site that ships both `x.jpg` and a DIFFERENT `x.webp` collides the moment
+ * the oversized JPEG is re-encoded, and the old behaviour gave up and shipped
+ * the JPEG -- which `shouldReencodeImage` has already established is over
+ * budget. Giving up is therefore never neutral here: it is a choice to publish
+ * the oversized file. Measured on newheightseducation.org's apex export,
+ * `nheg-school-sale.jpg` (441,340 bytes) collided with a real
+ * `nheg-school-sale.webp` and shipped at 431 KB against a 400 KB budget.
+ *
+ * The suffix is derived from the LOCAL NAME, not the source URL, for two
+ * reasons: the local name is what actually collides, and it is already
+ * canonical (`assetLocalName` has stripped `www.` and decoded the path), so
+ * `http://` vs `https://` or a `www.` host cannot move the file between runs.
+ * Same input, same name -- so a re-run rewrites no references.
+ *
+ * `__` matches the separator `assetLocalName` already uses for a query string,
+ * and the extension stays last so static hosts keep sniffing the type.
+ */
+export function disambiguatedWebpName(name) {
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  return webpName(name).replace(/\.webp$/, `__${hash}.webp`);
+}
+
+/**
+ * The name to fall back to when another URL already holds this one.
+ *
+ * `assetLocalName` is injective on the source URL, so two different assets
+ * cannot normally want the same local name -- the one exception is the
+ * `.jpg -> .webp` rename, which invents a name the site may genuinely ship.
+ * `disambiguatedWebpName` handles that when the genuine file is downloaded
+ * FIRST. This handles the other order, where the rename has already taken
+ * `x.webp` and the real `x.webp` arrives afterwards.
+ *
+ * Deliberately a separate function from `disambiguatedWebpName` rather than a
+ * refactor of it: that one hashes the name BEFORE the rename (`x.jpg`), so a
+ * re-encode's suffix is stable against its source file, and changing what it
+ * hashes would move every already-published file it has named.
+ */
+export function disambiguatedAssetName(name) {
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  const ext = extname(name);
+  return ext ? `${name.slice(0, -ext.length)}__${hash}${ext}` : `${name}__${hash}`;
+}
+
+/**
+ * Whether to keep a re-encoded image.
+ *
+ * `worthReencoding`'s 25% floor buys one thing: it pays for the RENAME, since
+ * every reference has to be rewritten and each rewrite is a chance to strand
+ * one. That trade is right when the original is a file we could happily ship
+ * -- and wrong when it is not, because `shouldReencodeImage` only fires on an
+ * image that is ALREADY OVER BUDGET. Declining there does not "keep the
+ * original", it publishes an oversized one, and downstream that is a hard
+ * failure rather than a missed optimisation: the template's image-weight suite
+ * fails CI on any file over the budget.
+ *
+ * So an encode that lands UNDER budget is kept whatever its saving ratio.
+ * Measured on the same export: `letter-from-representative-redel.jpg` encoded
+ * 485,115 -> 399,788 bytes, a 17.6% saving that the floor rejected, shipping
+ * 474 KB against a 400 KB budget and failing the charity's CI.
+ *
+ * The comment at the call site already made exactly this argument for the
+ * same-name case; this extends it to the renamed one, where it matters more.
+ */
+export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
+  if (!renamed) return worthShrinking(originalBytes, encodedBytes);
+  if (worthReencoding(originalBytes, encodedBytes)) return true;
+  // `encodedBytes > 0` is NOT redundant, and leaving it out was a real hole:
+  // `worthReencoding` and `worthShrinking` both refuse a non-positive result
+  // outright, and the rescue bypassed them -- so a zero-byte encode read as
+  // "landed under budget" and would have replaced a real image with an empty
+  // file that every size check then called compliant. An encoder returning an
+  // empty buffer is a bug, which is exactly why it must not be rewarded.
+  //
+  // No `encodedBytes < originalBytes` term, and no `maxBytes > 0` or
+  // `originalBytes > 0`: each is implied by the clauses kept here (encoded <=
+  // max < original, and both positive once encoded is), and a clause that
+  // cannot change an answer reads as a safety net while testing nothing --
+  // mutation confirmed the first of them survives every mutation. The
+  // strictly-smaller check that DOES bite lives in the two helpers above.
+  return (
+    Number.isFinite(maxBytes) &&
+    Number.isFinite(originalBytes) &&
+    Number.isFinite(encodedBytes) &&
+    encodedBytes > 0 &&
+    originalBytes > maxBytes &&
+    encodedBytes <= maxBytes
+  );
+}
+
+/**
  * Whether this asset is a candidate for re-encoding at all.
  *
  * Size is part of the predicate, not a separate check: an image already under
@@ -2488,6 +2662,237 @@ function selfTest() {
     true,
   );
   eq('...and worthReencoding does refuse that same pair', worthReencoding(100, 96), false);
+
+  // The floor pays for a RENAME; it must not outrank the budget, because
+  // `shouldReencodeImage` only fires on a file that is already over it, so
+  // declining publishes an oversized image rather than keeping a fine one.
+  // These are the measured bytes from newheightseducation.org's apex export.
+  const BUDGET = 400 * 1024;
+  eq(
+    'a renamed encode landing UNDER budget is kept on a 17.6% saving',
+    keepReencoded(485_115, 399_788, BUDGET, true),
+    true,
+  );
+  eq(
+    '...which is exactly the pair worthReencoding refuses on its own',
+    worthReencoding(485_115, 399_788),
+    false,
+  );
+  // The override is the budget, not "any saving": a marginal win that leaves
+  // the file over budget still has to clear the 25% floor to pay for a rename.
+  eq(
+    'a renamed encode still OVER budget is refused on a 10% saving',
+    keepReencoded(900_000, 810_000, BUDGET, true),
+    false,
+  );
+  // Still over budget after the encode, so the rescue cannot apply and only
+  // the 25% floor can keep it -- 2,000,000 -> 900,000 is a 55% saving on a
+  // file that is 879 KB against a 400 KB budget. Shipping the smaller one is
+  // still the right call; it is simply not a rescue.
+  eq(
+    'a renamed encode still over budget is kept when it clears the floor',
+    keepReencoded(2_000_000, 900_000, BUDGET, true),
+    true,
+  );
+  // A larger or equal result is never kept. Both originals here are OVER
+  // budget, so these reach the rescue rather than stopping at the floor -- the
+  // under-budget rescue must not become a way to inflate a file.
+  eq('a larger renamed encode is refused', keepReencoded(500_000, 600_000, BUDGET, true), false);
+  eq('an equal renamed encode is refused', keepReencoded(500_000, 500_000, BUDGET, true), false);
+  // An image already under budget cannot reach this function through
+  // `shouldReencodeImage`; if it ever does, the rescue must not fire for it.
+  eq(
+    'an original already under budget gets no rescue, only the floor',
+    keepReencoded(300_000, 290_000, BUDGET, true),
+    false,
+  );
+  // Not renamed: the PDF-shaped test, unchanged.
+  eq('an un-renamed encode uses worthShrinking', keepReencoded(100, 96, BUDGET, false), true);
+  eq('an un-renamed LARGER encode is still refused', keepReencoded(100, 120, BUDGET, false), false);
+  eq(
+    'a missing budget falls back to the floor rather than throwing',
+    keepReencoded(485_115, 399_788, undefined, true),
+    false,
+  );
+  // The rescue must not undercut the invariant both helpers enforce: an
+  // encoder that returns nothing has failed, and "0 bytes is under budget" is
+  // the one reading that would replace a real image with an empty file.
+  eq('a zero-byte rescue is refused', keepReencoded(500_000, 0, BUDGET, true), false);
+  eq('a negative-byte rescue is refused', keepReencoded(500_000, -5, BUDGET, true), false);
+
+  // A reference the origin does not serve must not survive into the export
+  // pointing at the origin: the template's CSP refuses the fetch and the
+  // post-deploy smoke counts it as a failure this deployment owns.
+  const dead = (r) => /vc_icons_v3|fa-v4compatibility/.test(r);
+  {
+    const allDead =
+      '@font-face{font-family:vcpb-plugin-icons;' +
+      'src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(//x.org/a/vc_icons_v3/f.ttf?r) format('truetype')," +
+      "url(//x.org/a/vc_icons_v3/f.woff?r) format('woff');font-weight:400}";
+    const r = dropDeadFontFaces(`body{color:red}${allDead}p{color:blue}`, dead);
+    eq(
+      'a font-face whose every source is dead is removed entirely',
+      r.css,
+      'body{color:red}p{color:blue}',
+    );
+    eq('...and is counted as one rule', r.rulesRemoved, 1);
+    eq('...with every one of its sources', r.sourcesRemoved, 3);
+  }
+  {
+    // The FontAwesome shape: one rule, one `src:`, one dead entry beside a
+    // live one. The live source has to survive -- deleting the rule here
+    // would take a working font off the site.
+    const mixed =
+      '@font-face{font-family:"FA";src:url(../w/fa-v4compatibility.woff2) format("woff2"),' +
+      'url(../w/fa-solid-900.ttf) format("truetype");font-display:block}';
+    const r = dropDeadFontFaces(mixed, dead);
+    eq('a rule with one live source keeps it', r.css.includes('fa-solid-900.ttf'), true);
+    eq('...and loses the dead one', r.css.includes('fa-v4compatibility'), false);
+    eq('...without removing the rule', r.rulesRemoved, 0);
+    eq('...counting the source', r.sourcesRemoved, 1);
+    eq(
+      '...and stays a parseable declaration',
+      /src:url\(\.\.\/w\/fa-solid-900\.ttf\) format\("truetype"\);/.test(r.css),
+      true,
+    );
+  }
+  {
+    // The IE eot hack: a rule with TWO `src:` declarations, the first entirely
+    // dead and the second carrying a live source. The first declaration has to
+    // GO -- an `src:` with nothing after it is not valid CSS -- while the rule
+    // and its live source stay. No single-declaration fixture reaches this
+    // branch, which is why one was added: mutation found it untested.
+    const eotHack =
+      '@font-face{font-family:vcpb-plugin-icons;' +
+      'src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(//x.org/a/vc_icons_v3/f.eot?r#iefix) format('embedded-opentype')," +
+      "url(../w/live.woff) format('woff');font-weight:400}";
+    const r = dropDeadFontFaces(eotHack, dead);
+    eq('the all-dead src declaration is removed, not emptied', r.css.includes('src:;'), false);
+    eq('...and no bare src: label is left behind', /src\s*:\s*(;|\})/.test(r.css), false);
+    eq('...the live source survives', r.css.includes("url(../w/live.woff) format('woff')"), true);
+    eq('...the rule is kept', r.rulesRemoved, 0);
+    eq('...and both dead sources are counted', r.sourcesRemoved, 2);
+    eq('...leaving exactly one src declaration', (r.css.match(/src\s*:/g) || []).length, 1);
+  }
+  {
+    // Same branch, but with the dead declaration FIRST in the rule, so the
+    // separator it is preceded by is the opening brace rather than a
+    // semicolon. Returning the separator is what keeps the rule a rule --
+    // dropping it here would eat the `{`. A fixture with `font-family` first
+    // cannot show that, because eating a `;` there is harmless.
+    const braceLead =
+      '@font-face{src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(../w/live.woff) format('woff');font-family:A}";
+    const r = dropDeadFontFaces(braceLead, dead);
+    eq(
+      'the opening brace survives a dead first declaration',
+      r.css.startsWith('@font-face{'),
+      true,
+    );
+    eq('...with its closing brace', r.css.endsWith('}'), true);
+    eq('...and one brace of each', (r.css.match(/[{]/g) || []).length, 1);
+    eq('...the live source is kept', r.css.includes('url(../w/live.woff)'), true);
+    eq('...and the dead one is gone', r.css.includes('vc_icons_v3'), false);
+  }
+  eq(
+    'a font-face with no dead source is left byte-identical',
+    dropDeadFontFaces('@font-face{font-family:A;src:url(../w/live.woff2) format("woff2")}', dead)
+      .css,
+    '@font-face{font-family:A;src:url(../w/live.woff2) format("woff2")}',
+  );
+  eq(
+    'a dead url OUTSIDE a font-face is not touched -- this pass is about fonts',
+    dropDeadFontFaces('.hero{background:url(//x.org/a/vc_icons_v3/bg.png)}', dead).css,
+    '.hero{background:url(//x.org/a/vc_icons_v3/bg.png)}',
+  );
+  eq(
+    'css with no font-face at all is unchanged',
+    dropDeadFontFaces('body{color:red}', dead).css,
+    'body{color:red}',
+  );
+  // A `data:` URI carries a comma before its payload. Splitting on it would
+  // cut one working source into two broken ones.
+  eq(
+    'a data: source is one entry, not two',
+    splitTopLevel("url(data:font/woff2;base64,AAAA) format('woff2'),url(b.ttf)").length,
+    2,
+  );
+  eq('splitTopLevel leaves a comma-free value whole', splitTopLevel('url(a.ttf)').length, 1);
+  eq(
+    'a data: source beside a dead one survives intact',
+    dropDeadFontFaces(
+      '@font-face{font-family:A;src:url(//x.org/a/vc_icons_v3/f.ttf),url(data:font/woff2;base64,AA==) format("woff2")}',
+      dead,
+    ).css.includes('base64,AA=='),
+    true,
+  );
+
+  // The write-time guard's helper. Two different source URLs can only want one
+  // local name via the `.webp` rename, and whoever arrives second takes this.
+  eq(
+    'a disambiguated asset name keeps the stem and the extension',
+    /^x\/a\/photo__[0-9a-f]{8}\.webp$/.test(disambiguatedAssetName('x/a/photo.webp')),
+    true,
+  );
+  eq(
+    'it differs from the name it exists to avoid',
+    disambiguatedAssetName('x/a/photo.webp') === 'x/a/photo.webp',
+    false,
+  );
+  eq(
+    'it is deterministic',
+    disambiguatedAssetName('x/a/photo.webp'),
+    disambiguatedAssetName('x/a/photo.webp'),
+  );
+  eq(
+    'two different names get different suffixes',
+    disambiguatedAssetName('x/a/photo.webp') === disambiguatedAssetName('x/b/photo.webp'),
+    false,
+  );
+  eq(
+    'an extensionless name still gets a suffix',
+    /^x\/a\/blob__[0-9a-f]{8}$/.test(disambiguatedAssetName('x/a/blob')),
+    true,
+  );
+  // It must NOT agree with the re-encode's own disambiguator, or the two
+  // fallbacks would land on one file. They hash different inputs on purpose:
+  // the rename hashes the PRE-rename name so its suffix tracks its source.
+  eq(
+    'the rename fallback and the write-time fallback do not collide',
+    disambiguatedWebpName('x/a/photo.jpg') === disambiguatedAssetName('x/a/photo.webp'),
+    false,
+  );
+
+  // A collision must not end in shipping the oversized original.
+  eq(
+    'a disambiguated name keeps the stem, the separator and the extension',
+    /^x\/a\/flyer__[0-9a-f]{8}\.webp$/.test(disambiguatedWebpName('x/a/flyer.jpg')),
+    true,
+  );
+  eq(
+    'it differs from the plain name it exists to avoid',
+    disambiguatedWebpName('x/a/flyer.jpg') === webpName('x/a/flyer.jpg'),
+    false,
+  );
+  // Same input, same output -- otherwise a re-run rewrites every reference.
+  eq(
+    'it is deterministic across calls',
+    disambiguatedWebpName('x/a/flyer.jpg'),
+    disambiguatedWebpName('x/a/flyer.jpg'),
+  );
+  // The hash is of the LOCAL NAME, so two different sources cannot land on one
+  // file, and the same source cannot move between runs. The pair has to differ
+  // ONLY in the part `webpName` throws away -- the extension -- or the stems
+  // keep the names apart on their own and the hash is never tested. These two
+  // are exactly the collision this function exists for: both plain-name to
+  // `x/a/flyer.webp`.
+  eq(
+    'two sources that share a stem get different suffixes',
+    disambiguatedWebpName('x/a/flyer.jpg') === disambiguatedWebpName('x/a/flyer.png'),
+    false,
+  );
   eq('worthShrinking rejects a zero-byte result', worthShrinking(100, 0), false);
   eq(
     'the ladder excludes the rung measured to inflate the file',
@@ -4340,11 +4745,18 @@ async function capture() {
   let cfEmailsDecoded = 0;
   const edgeTagsRemoved = [];
   const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
+  // absUrl -> HTTP status, for the downloads that failed. Only a hard 404 lets
+  // the CSS pass delete a reference: a transient failure must leave the export
+  // alone, or two runs of the same capture disagree about what the site has.
+  const assetStatus = new Map();
+  const deadFontFaces = { rules: 0, sources: 0 };
+  let nameCollisionsAvoided = 0;
   const imageRecode = {
     recoded: 0,
     declined: 0,
     skippedNoEncoder: 0,
     collisions: [],
+    disambiguated: 0,
     stillOverBudget: 0,
     bytesBefore: 0,
     bytesAfter: 0,
@@ -4611,6 +5023,7 @@ async function capture() {
       if (assetFailures.length < LOG_CAP)
         console.error(`[asset] ${absUrl}: HTTP ${res?.status ?? 0}`);
       assetFailures.push({ url: absUrl, status: res?.status ?? 0 });
+      assetStatus.set(absUrl, res?.status ?? 0);
       return null;
     }
     let buf;
@@ -4644,24 +5057,32 @@ async function capture() {
     // markup, in srcset, in CSS — is rewritten from that return value, so a
     // renamed file cannot leave a stale reference behind.
     if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
-      const target = webpName(name);
-      // A collision would silently overwrite a real .webp the site already
-      // ships, so the original encoding is kept instead.
+      // Overwriting a real .webp the site already ships would lose a file, so
+      // a taken name is DISAMBIGUATED rather than surrendered to. Only when
+      // even the disambiguated name is taken is the original kept -- and that
+      // means the identical local name was already processed, so there is
+      // nothing new to write.
+      let target = webpName(name);
       if (usedAssetNames.has(target) && target !== name) {
-        imageRecode.collisions.push(name);
-      } else {
+        const alternative = disambiguatedWebpName(name);
+        if (usedAssetNames.has(alternative)) {
+          imageRecode.collisions.push(name);
+          target = null;
+        } else {
+          imageRecode.disambiguated += 1;
+          target = alternative;
+        }
+      }
+      if (target) {
         const encoded = await encodeWebp(buf, maxImageBytes);
-        // Which test applies depends on whether the file is being RENAMED.
-        // `worthReencoding`'s 25% floor exists to pay for a rename, and a WebP
-        // re-encoded to WebP keeps its name -- so for those the test is
-        // `worthShrinking`, exactly as it is for a downsampled PDF, which also
-        // keeps its name. Applying the floor there would discard a result that
-        // lands UNDER BUDGET for saving only 20%, and ship the oversized
-        // original instead.
+        // Which test applies depends on whether the file is being RENAMED, and
+        // `keepReencoded` holds both: `worthShrinking` for a WebP re-encoded to
+        // WebP, which keeps its name exactly as a downsampled PDF does, and
+        // `worthReencoding`'s 25% rename floor otherwise -- overridden when the
+        // result lands under budget, because the alternative is publishing an
+        // image that is over it.
         const keep = encoded
-          ? target === name
-            ? worthShrinking(buf.length, encoded.buffer.length)
-            : worthReencoding(buf.length, encoded.buffer.length)
+          ? keepReencoded(buf.length, encoded.buffer.length, maxImageBytes, target !== name)
           : false;
         if (keep) {
           imageRecode.recoded += 1;
@@ -4712,6 +5133,35 @@ async function capture() {
       }
     }
 
+    // Last line of defence before the write, and the ONLY thing standing
+    // between a `.webp` rename and the file it may be about to clobber.
+    //
+    // `disambiguatedWebpName` above only fires when the genuine `x.webp` has
+    // already been processed, because that is what puts it in this set. In the
+    // other order -- oversized `x.jpg` first, genuine `x.webp` second -- the
+    // rename sees no collision, takes `x.webp`, and the real one would then
+    // overwrite it here. The page that referenced the JPEG would silently show
+    // a DIFFERENT image, which is worse than the oversized file this pass
+    // exists to avoid, and which order the REST inventory happens to yield is
+    // not something the capture controls.
+    //
+    // Whoever arrives second yields, and yielding is safe precisely because
+    // `localizeAsset` returns the name it used: the caller rewrites every
+    // reference from that return value, so a suffixed name cannot strand one.
+    // Reported by copilot-pull-request-reviewer on #1382; the same hazard is
+    // on `main`, which takes this branch identically.
+    if (usedAssetNames.has(name)) {
+      const alternative = disambiguatedAssetName(name);
+      if (usedAssetNames.has(alternative)) {
+        // Two distinct URLs would have to hash-collide on top of colliding by
+        // name. Refusing beats overwriting a file that is already referenced.
+        console.error(`[asset] refusing to overwrite ${name}: both names taken`);
+        assetFailures.push({ url: absUrl, status: -3 });
+        return null;
+      }
+      nameCollisionsAvoided += 1;
+      name = alternative;
+    }
     usedAssetNames.add(name);
 
     if (!isContainedPath(assetsRoot, name)) {
@@ -4728,6 +5178,7 @@ async function capture() {
     if (isCss) {
       let css = buf.toString('utf8');
       const cssReps = new Map();
+      const deadCssRefs = new Set();
       for (const ref of collectCssUrls(css)) {
         const abs = normalizeSelfHost(absolutize(ref, res.url || absUrl), selfHost, domain);
         if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
@@ -4743,9 +5194,18 @@ async function capture() {
           const rel =
             fromDir === '.' ? inner : `${'../'.repeat(fromDir.split('/').length)}${inner}`;
           cssReps.set(ref, rel);
+        } else if (assetStatus.get(abs) === 404) {
+          // Nothing to rewrite it to, and the origin does not have it either.
+          deadCssRefs.add(ref);
         }
       }
       css = rewriteRefs(css, cssReps);
+      if (deadCssRefs.size) {
+        const pruned = dropDeadFontFaces(css, (ref) => deadCssRefs.has(ref));
+        css = pruned.css;
+        deadFontFaces.rules += pruned.rulesRemoved;
+        deadFontFaces.sources += pruned.sourcesRemoved;
+      }
       // The hiding rule was measured only in the inline <style> of each page,
       // but a stylesheet is the natural place for it and a single missed copy
       // blanks every page that loads that file. Applying the same transform
@@ -4949,6 +5409,23 @@ async function capture() {
         ' no encoder was available. This is NOT a judgement that they were already optimal:' +
         ' nothing tried. Install sharp before the capture step.',
     );
+  if (nameCollisionsAvoided)
+    console.error(
+      `[capture] ${nameCollisionsAvoided} asset(s) took a disambiguated name because a` +
+        ' .webp rename had already claimed the one they wanted. Without this they would' +
+        ' have overwritten it, and a page would show a different image than it captured.',
+    );
+  if (deadFontFaces.sources)
+    console.error(
+      `[capture] dropped ${deadFontFaces.sources} @font-face source(s) the origin 404s,` +
+        ` removing ${deadFontFaces.rules} rule(s) left with none. They would otherwise` +
+        " have stayed pointing at the source site, where the template's CSP refuses them.",
+    );
+  if (imageRecode.disambiguated)
+    console.error(
+      `[capture] ${imageRecode.disambiguated} image(s) were re-encoded under a disambiguated` +
+        ' .webp name because the plain one was already taken by a different file.',
+    );
   if (imageRecode.collisions.length)
     console.error(
       `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
@@ -5083,6 +5560,10 @@ async function capture() {
       skippedNoEncoder: imageRecode.skippedNoEncoder,
       stillOverBudget: imageRecode.stillOverBudget,
       collisions: imageRecode.collisions.length,
+      disambiguated: imageRecode.disambiguated,
+      nameCollisionsAvoided,
+      deadFontFaceRulesRemoved: deadFontFaces.rules,
+      deadFontFaceSourcesRemoved: deadFontFaces.sources,
       bytesBefore: imageRecode.bytesBefore,
       bytesAfter: imageRecode.bytesAfter,
     },

@@ -1547,6 +1547,68 @@ export function webpName(name) {
 }
 
 /**
+ * The WebP name to use when `webpName`'s is already taken.
+ *
+ * A site that ships both `x.jpg` and a DIFFERENT `x.webp` collides the moment
+ * the oversized JPEG is re-encoded, and the old behaviour gave up and shipped
+ * the JPEG -- which `shouldReencodeImage` has already established is over
+ * budget. Giving up is therefore never neutral here: it is a choice to publish
+ * the oversized file. Measured on newheightseducation.org's apex export,
+ * `nheg-school-sale.jpg` (441,340 bytes) collided with a real
+ * `nheg-school-sale.webp` and shipped at 431 KB against a 400 KB budget.
+ *
+ * The suffix is derived from the LOCAL NAME, not the source URL, for two
+ * reasons: the local name is what actually collides, and it is already
+ * canonical (`assetLocalName` has stripped `www.` and decoded the path), so
+ * `http://` vs `https://` or a `www.` host cannot move the file between runs.
+ * Same input, same name -- so a re-run rewrites no references.
+ *
+ * `__` matches the separator `assetLocalName` already uses for a query string,
+ * and the extension stays last so static hosts keep sniffing the type.
+ */
+export function disambiguatedWebpName(name) {
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  return webpName(name).replace(/\.webp$/, `__${hash}.webp`);
+}
+
+/**
+ * Whether to keep a re-encoded image.
+ *
+ * `worthReencoding`'s 25% floor buys one thing: it pays for the RENAME, since
+ * every reference has to be rewritten and each rewrite is a chance to strand
+ * one. That trade is right when the original is a file we could happily ship
+ * -- and wrong when it is not, because `shouldReencodeImage` only fires on an
+ * image that is ALREADY OVER BUDGET. Declining there does not "keep the
+ * original", it publishes an oversized one, and downstream that is a hard
+ * failure rather than a missed optimisation: the template's image-weight suite
+ * fails CI on any file over the budget.
+ *
+ * So an encode that lands UNDER budget is kept whatever its saving ratio.
+ * Measured on the same export: `letter-from-representative-redel.jpg` encoded
+ * 485,115 -> 399,788 bytes, a 17.6% saving that the floor rejected, shipping
+ * 474 KB against a 400 KB budget and failing the charity's CI.
+ *
+ * The comment at the call site already made exactly this argument for the
+ * same-name case; this extends it to the renamed one, where it matters more.
+ */
+export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
+  if (!renamed) return worthShrinking(originalBytes, encodedBytes);
+  if (worthReencoding(originalBytes, encodedBytes)) return true;
+  // No `encodedBytes < originalBytes` term: the two conditions below already
+  // imply it (encoded <= max < original), and a clause that cannot change an
+  // answer reads as a safety net while testing nothing -- mutation confirmed
+  // it survives every mutation. The strictly-smaller check that DOES bite
+  // lives in `worthShrinking` and `worthReencoding`, which run first.
+  return (
+    Number.isFinite(maxBytes) &&
+    Number.isFinite(originalBytes) &&
+    Number.isFinite(encodedBytes) &&
+    originalBytes > maxBytes &&
+    encodedBytes <= maxBytes
+  );
+}
+
+/**
  * Whether this asset is a candidate for re-encoding at all.
  *
  * Size is part of the predicate, not a separate check: an image already under
@@ -2488,6 +2550,87 @@ function selfTest() {
     true,
   );
   eq('...and worthReencoding does refuse that same pair', worthReencoding(100, 96), false);
+
+  // The floor pays for a RENAME; it must not outrank the budget, because
+  // `shouldReencodeImage` only fires on a file that is already over it, so
+  // declining publishes an oversized image rather than keeping a fine one.
+  // These are the measured bytes from newheightseducation.org's apex export.
+  const BUDGET = 400 * 1024;
+  eq(
+    'a renamed encode landing UNDER budget is kept on a 17.6% saving',
+    keepReencoded(485_115, 399_788, BUDGET, true),
+    true,
+  );
+  eq(
+    '...which is exactly the pair worthReencoding refuses on its own',
+    worthReencoding(485_115, 399_788),
+    false,
+  );
+  // The override is the budget, not "any saving": a marginal win that leaves
+  // the file over budget still has to clear the 25% floor to pay for a rename.
+  eq(
+    'a renamed encode still OVER budget is refused on a 10% saving',
+    keepReencoded(900_000, 810_000, BUDGET, true),
+    false,
+  );
+  // Still over budget after the encode, so the rescue cannot apply and only
+  // the 25% floor can keep it -- 2,000,000 -> 900,000 is a 55% saving on a
+  // file that is 879 KB against a 400 KB budget. Shipping the smaller one is
+  // still the right call; it is simply not a rescue.
+  eq(
+    'a renamed encode still over budget is kept when it clears the floor',
+    keepReencoded(2_000_000, 900_000, BUDGET, true),
+    true,
+  );
+  // A larger or equal result is never kept. Both originals here are OVER
+  // budget, so these reach the rescue rather than stopping at the floor -- the
+  // under-budget rescue must not become a way to inflate a file.
+  eq('a larger renamed encode is refused', keepReencoded(500_000, 600_000, BUDGET, true), false);
+  eq('an equal renamed encode is refused', keepReencoded(500_000, 500_000, BUDGET, true), false);
+  // An image already under budget cannot reach this function through
+  // `shouldReencodeImage`; if it ever does, the rescue must not fire for it.
+  eq(
+    'an original already under budget gets no rescue, only the floor',
+    keepReencoded(300_000, 290_000, BUDGET, true),
+    false,
+  );
+  // Not renamed: the PDF-shaped test, unchanged.
+  eq('an un-renamed encode uses worthShrinking', keepReencoded(100, 96, BUDGET, false), true);
+  eq('an un-renamed LARGER encode is still refused', keepReencoded(100, 120, BUDGET, false), false);
+  eq(
+    'a missing budget falls back to the floor rather than throwing',
+    keepReencoded(485_115, 399_788, undefined, true),
+    false,
+  );
+
+  // A collision must not end in shipping the oversized original.
+  eq(
+    'a disambiguated name keeps the stem, the separator and the extension',
+    /^x\/a\/flyer__[0-9a-f]{8}\.webp$/.test(disambiguatedWebpName('x/a/flyer.jpg')),
+    true,
+  );
+  eq(
+    'it differs from the plain name it exists to avoid',
+    disambiguatedWebpName('x/a/flyer.jpg') === webpName('x/a/flyer.jpg'),
+    false,
+  );
+  // Same input, same output -- otherwise a re-run rewrites every reference.
+  eq(
+    'it is deterministic across calls',
+    disambiguatedWebpName('x/a/flyer.jpg'),
+    disambiguatedWebpName('x/a/flyer.jpg'),
+  );
+  // The hash is of the LOCAL NAME, so two different sources cannot land on one
+  // file, and the same source cannot move between runs. The pair has to differ
+  // ONLY in the part `webpName` throws away -- the extension -- or the stems
+  // keep the names apart on their own and the hash is never tested. These two
+  // are exactly the collision this function exists for: both plain-name to
+  // `x/a/flyer.webp`.
+  eq(
+    'two sources that share a stem get different suffixes',
+    disambiguatedWebpName('x/a/flyer.jpg') === disambiguatedWebpName('x/a/flyer.png'),
+    false,
+  );
   eq('worthShrinking rejects a zero-byte result', worthShrinking(100, 0), false);
   eq(
     'the ladder excludes the rung measured to inflate the file',
@@ -4345,6 +4488,7 @@ async function capture() {
     declined: 0,
     skippedNoEncoder: 0,
     collisions: [],
+    disambiguated: 0,
     stillOverBudget: 0,
     bytesBefore: 0,
     bytesAfter: 0,
@@ -4644,24 +4788,32 @@ async function capture() {
     // markup, in srcset, in CSS — is rewritten from that return value, so a
     // renamed file cannot leave a stale reference behind.
     if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
-      const target = webpName(name);
-      // A collision would silently overwrite a real .webp the site already
-      // ships, so the original encoding is kept instead.
+      // Overwriting a real .webp the site already ships would lose a file, so
+      // a taken name is DISAMBIGUATED rather than surrendered to. Only when
+      // even the disambiguated name is taken is the original kept -- and that
+      // means the identical local name was already processed, so there is
+      // nothing new to write.
+      let target = webpName(name);
       if (usedAssetNames.has(target) && target !== name) {
-        imageRecode.collisions.push(name);
-      } else {
+        const alternative = disambiguatedWebpName(name);
+        if (usedAssetNames.has(alternative)) {
+          imageRecode.collisions.push(name);
+          target = null;
+        } else {
+          imageRecode.disambiguated += 1;
+          target = alternative;
+        }
+      }
+      if (target) {
         const encoded = await encodeWebp(buf, maxImageBytes);
-        // Which test applies depends on whether the file is being RENAMED.
-        // `worthReencoding`'s 25% floor exists to pay for a rename, and a WebP
-        // re-encoded to WebP keeps its name -- so for those the test is
-        // `worthShrinking`, exactly as it is for a downsampled PDF, which also
-        // keeps its name. Applying the floor there would discard a result that
-        // lands UNDER BUDGET for saving only 20%, and ship the oversized
-        // original instead.
+        // Which test applies depends on whether the file is being RENAMED, and
+        // `keepReencoded` holds both: `worthShrinking` for a WebP re-encoded to
+        // WebP, which keeps its name exactly as a downsampled PDF does, and
+        // `worthReencoding`'s 25% rename floor otherwise -- overridden when the
+        // result lands under budget, because the alternative is publishing an
+        // image that is over it.
         const keep = encoded
-          ? target === name
-            ? worthShrinking(buf.length, encoded.buffer.length)
-            : worthReencoding(buf.length, encoded.buffer.length)
+          ? keepReencoded(buf.length, encoded.buffer.length, maxImageBytes, target !== name)
           : false;
         if (keep) {
           imageRecode.recoded += 1;
@@ -4949,6 +5101,11 @@ async function capture() {
         ' no encoder was available. This is NOT a judgement that they were already optimal:' +
         ' nothing tried. Install sharp before the capture step.',
     );
+  if (imageRecode.disambiguated)
+    console.error(
+      `[capture] ${imageRecode.disambiguated} image(s) were re-encoded under a disambiguated` +
+        ' .webp name because the plain one was already taken by a different file.',
+    );
   if (imageRecode.collisions.length)
     console.error(
       `[capture] ${imageRecode.collisions.length} image(s) kept their original encoding because` +
@@ -5083,6 +5240,7 @@ async function capture() {
       skippedNoEncoder: imageRecode.skippedNoEncoder,
       stillOverBudget: imageRecode.stillOverBudget,
       collisions: imageRecode.collisions.length,
+      disambiguated: imageRecode.disambiguated,
       bytesBefore: imageRecode.bytesBefore,
       bytesAfter: imageRecode.bytesAfter,
     },

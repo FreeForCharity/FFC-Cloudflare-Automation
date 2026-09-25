@@ -184,6 +184,39 @@ body:
       required: true
 
   - type: input
+    id: mission
+    attributes:
+      label: Mission Statement (one sentence)
+      description: |
+        One plain sentence: who you help and how. It appears under your organization's
+        name in the footer of every page.
+      placeholder: We provide emergency shelter and meals to families experiencing homelessness.
+    validations:
+      required: true
+
+  - type: input
+    id: donation_url
+    attributes:
+      label: Donation Page URL (optional)
+      description: |
+        Where the footer's Donate link should go (must start with `https://`). Leave blank
+        and the Donate link will email your Footer Contact Email instead.
+      placeholder: https://www.zeffy.com/en-US/donation-form/your-charity
+    validations:
+      required: false
+
+  - type: input
+    id: volunteer_url
+    attributes:
+      label: Volunteer Page URL (optional)
+      description: |
+        Where the footer's Volunteer link should go (must start with `https://`). Leave
+        blank and the Volunteer link will email your Footer Contact Email instead.
+      placeholder: https://www.idealist.org/en/nonprofit/your-charity
+    validations:
+      required: false
+
+  - type: input
     id: footer_email
     attributes:
       label: Footer Contact Email

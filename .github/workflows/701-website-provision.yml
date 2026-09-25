@@ -119,6 +119,24 @@ on:
           must be https:// if provided."
         required: false
         type: string
+      mission:
+        description:
+          'One-sentence mission (optional). Shown under the charity name in the footer of every
+          page.'
+        required: false
+        type: string
+      donation_url:
+        description:
+          'Donation page URL (optional, https://). Blank = the footer Donate link emails the
+          charity.'
+        required: false
+        type: string
+      volunteer_url:
+        description:
+          'Volunteer page URL (optional, https://). Blank = the footer Volunteer link emails the
+          charity.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -130,7 +148,11 @@ permissions:
 
 env:
   WEBSITE_TARGET_ORG: FreeForCharity
-  WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC_Single_Page_Template
+  # Footer-only is the default: a policy-complete footer with the charity's
+  # mission line and Donate / Volunteer links on every page. The content job's
+  # Apply-WebsiteReactTemplate.ps1 writes the charity's details into its
+  # src/lib/site.config.ts.
+  WEBSITE_TEMPLATE_REPO: FreeForCharity/FFC-IN-Footer_Only_Template
 
 # Serialize runs: a second dispatch queues behind the first instead of racing it.
 concurrency:
@@ -162,6 +184,9 @@ jobs:
       guidestar_direct_profile_url: ${{ steps.parse.outputs.guidestar_direct_profile_url }}
       footer_social_json: ${{ steps.parse.outputs.footer_social_json }}
       leadership_json: ${{ steps.parse.outputs.leadership_json }}
+      mission: ${{ steps.parse.outputs.mission }}
+      donation_url: ${{ steps.parse.outputs.donation_url }}
+      volunteer_url: ${{ steps.parse.outputs.volunteer_url }}
       repo_name: ${{ steps.parse.outputs.repo_name }}
       repo_full: ${{ steps.parse.outputs.repo_full }}
       template_repo: ${{ steps.parse.outputs.template_repo }}
@@ -344,6 +369,9 @@ jobs:
             let guideStarDirectProfileUrl = '';
             let footerSocialLinks = [];
             let leadershipLines = [];
+            let mission = '';
+            let donationUrl = '';
+            let volunteerUrl = '';
 
             const isDisallowedValue = (value) => {
               if (value === undefined || value === null) return true;
@@ -546,6 +574,24 @@ jobs:
               core.setFailed('Missing required field: domain.');
               return;
             }
+
+            // Footer mission line + Donate / Volunteer links. All optional in
+            // every mode: a blank URL makes the footer link email the charity,
+            // and a blank mission becomes a generic sentence naming it.
+            mission = normalizeInput(
+              isManual ? manualInputs.mission : extractSection('Mission Statement (one sentence)')
+            ).replace(/\s*\r?\n\s*/g, ' ');
+            if (failIfNAProvided('Mission Statement (one sentence)', mission)) return;
+            donationUrl = validateOptionalUrl(
+              'Donation Page URL',
+              isManual ? manualInputs.donation_url : extractSection('Donation Page URL (optional)')
+            );
+            if (donationUrl === null) return;
+            volunteerUrl = validateOptionalUrl(
+              'Volunteer Page URL',
+              isManual ? manualInputs.volunteer_url : extractSection('Volunteer Page URL (optional)')
+            );
+            if (volunteerUrl === null) return;
 
             // Enforce non-placeholder values for required fields.
             // We cannot prevent users from typing `N/A` into a required field in GitHub Issue Forms,
@@ -756,7 +802,7 @@ jobs:
             const org = process.env.WEBSITE_TARGET_ORG || 'FreeForCharity';
             const repoFull = `${org}/${repoName}`;
 
-            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC_Single_Page_Template';
+            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Footer_Only_Template';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             // Maintainers to add: requester + technical POC, deduped and validated
@@ -791,6 +837,9 @@ jobs:
             core.setOutput('guidestar_direct_profile_url', guideStarDirectProfileUrl);
             core.setOutput('footer_social_json', JSON.stringify(footerSocialLinks));
             core.setOutput('leadership_json', JSON.stringify(leadershipLines));
+            core.setOutput('mission', mission);
+            core.setOutput('donation_url', donationUrl);
+            core.setOutput('volunteer_url', volunteerUrl);
             core.setOutput('repo_name', repoName);
             core.setOutput('repo_full', repoFull);
             core.setOutput('template_repo', templateRepo);
@@ -1413,6 +1462,9 @@ jobs:
           GUIDESTAR_DIRECT_PROFILE_URL: ${{ needs.resolve.outputs.guidestar_direct_profile_url }}
           FOOTER_SOCIAL_JSON: ${{ needs.resolve.outputs.footer_social_json }}
           LEADERSHIP_JSON: ${{ needs.resolve.outputs.leadership_json }}
+          MISSION: ${{ needs.resolve.outputs.mission }}
+          DONATION_URL: ${{ needs.resolve.outputs.donation_url }}
+          VOLUNTEER_URL: ${{ needs.resolve.outputs.volunteer_url }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -1438,6 +1490,9 @@ jobs:
 
           $footerSocial = [string]$env:FOOTER_SOCIAL_JSON | ConvertFrom-Json
           $leadership = [string]$env:LEADERSHIP_JSON | ConvertFrom-Json
+          $mission = [string]$env:MISSION
+          $donationUrl = [string]$env:DONATION_URL
+          $volunteerUrl = [string]$env:VOLUNTEER_URL
 
           $workDir = Join-Path $env:RUNNER_TEMP 'website-provision-repo'
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir }
@@ -1474,6 +1529,9 @@ jobs:
               guideStarProfileUrl = $guideStarProfileUrl
               guideStarDirectProfileUrl = $guideStarDirectProfileUrl
               socialLinks = @($footerSocial)
+              mission = $mission
+              donationUrl = $donationUrl
+              volunteerUrl = $volunteerUrl
             }
             leadership = @($leadership)
             generatedUtc = (Get-Date).ToUniversalTime().ToString('o')
@@ -1540,7 +1598,10 @@ jobs:
                 -GuideStarProfileUrl $guideStarProfileUrl `
                 -GuideStarDirectProfileUrl $guideStarDirectProfileUrl `
                 -FooterSocial @($footerSocial) `
-                -LeadershipLines @($leadership)
+                -LeadershipLines @($leadership) `
+                -Mission $mission `
+                -DonationUrl $donationUrl `
+                -VolunteerUrl $volunteerUrl
               $contentStatus = 'applied'
             } else {
               # 'skipped' refers to the React template patch only. ffc-content.json

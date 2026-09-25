@@ -15,12 +15,12 @@ on:
       TemplateRepo:
         description: 'Template repository to use'
         required: true
-        default: 'FreeForCharity/FFC_Single_Page_Template'
+        default: 'FreeForCharity/FFC-IN-Footer_Only_Template'
         type: choice
         options:
+          - FreeForCharity/FFC-IN-Footer_Only_Template
           - FreeForCharity/FFC_Single_Page_Template
           - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
-          - FreeForCharity/FFC-IN-Footer_Only_Template
       Visibility:
         description: 'Visibility (private repos get NO tier-team grants — Option C policy)'
         required: true

@@ -26,7 +26,7 @@ ARCHIVED_META = '{"archived": true, "visibility": "public", "pushed_at": "2026-0
 
 BASE_ENV = {
     "TARGET_ORG": "FreeForCharity",
-    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template .github",
+    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-Footer_Only_Template .github",
     "THIS_REPO": "FreeForCharity/FFC-Cloudflare-Automation",
     "IN_REASON": "test reason",
 }
@@ -77,7 +77,12 @@ def test_internal_whitespace_rejected_not_stripped():
 
 
 def test_denylist_refused_before_any_api_call():
-    for protected in ("FFC-Cloudflare-Automation", "FFC_Single_Page_Template", ".github"):
+    for protected in (
+        "FFC-Cloudflare-Automation",
+        "FFC_Single_Page_Template",
+        "FFC-IN-Footer_Only_Template",
+        ".github",
+    ):
         proc, _, gh_log = run_archive(
             {"IN_REPO": protected, "IN_DRY_RUN": "false", "IN_CONFIRM": protected}
         )

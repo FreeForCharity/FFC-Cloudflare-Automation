@@ -685,12 +685,62 @@ def test_the_real_tree_reaches_credentials():
     findings, unreadable, scanned = guard.scan_all()
     assert not unreadable and scanned > 50, (scanned, unreadable)
     sites = guard.reachability_by_site(findings)
-    assert len(sites) > 10, f"only {len(sites)} sites reach a credential — check the extractor"
-    hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
-    assert len(hidden) > 10, (
-        f"only {len(hidden)} sites reach a credential through GITHUB_ENV, which is "
-        "the path this whole resolver exists to surface"
-    )
+
+    # The floor is DERIVED from the freeze, never a literal, and it is allowed
+    # to reach ZERO.
+    #
+    # It was `> 10`, which made this module a second mutex on the #1080
+    # burn-down (#1210, one file over): every lane removes call sites, so a hard
+    # floor goes red on a CORRECT tree the moment the freeze drops past it, and
+    # becomes permanently unsatisfiable once the burn-down finishes. Lane 26 is
+    # where it happened — 9 sites, and the message said "check the extractor"
+    # about an extractor that was working perfectly.
+    #
+    # The first fix derived the floor but kept a `max(1, …)` clamp, which is the
+    # same defect deferred to the end of the burn-down: at one or two frozen
+    # workflows the clamp demands a non-empty result from a set that may
+    # legitimately have none. Copilot caught it on #1361, and the decisive
+    # evidence is that the guard's own `reachability_paragraph` already treats
+    # `sites == {}` as a normal post-burn-down state in as many words — "if it
+    # appears after a burn-down, the lanes that held credentials were fixed."
+    # A test asserting that state is impossible contradicts the code it tests.
+    #
+    # So the floor is `n // 2` with no clamp, and below 4 frozen workflows it is
+    # 0 and the count assertions DO NOT RUN. That is not a gap being tolerated:
+    # at that size a count cannot distinguish a dead extractor (0) from a
+    # correct empty answer (0), so any assertion here would be deciding by
+    # coin-flip and reporting the wrong subsystem when it lost. The
+    # discrimination that does not shrink lives in the ~30 synthetic per-shape
+    # cases above and in the two mutation controls beside them
+    # (`test_deleting_306s_export_…`, `test_deleting_101s_azure_login_…`), which
+    # build their own fixtures and are unaffected by the freeze size.
+    # An EMPTY freeze is #1080 succeeding, and must not fail this suite.
+    #
+    # This asserted `frozen_workflows > 0` for one commit, as a tripwire meant to
+    # force whoever lands the last lane to retire the case rather than leave it
+    # asserting nothing. Copilot called it on #1361 and is right: the last lane
+    # would land on a CORRECT tree and go red here, on a module its diff does
+    # not touch — the same mutex this PR exists to remove, moved one step
+    # further out. A guard's preference for being retired does not license it to
+    # fail a correct tree, and I do not get to make an exception for my own.
+    #
+    # So the note lives here instead of in an assertion: WHEN THE FREEZE REACHES
+    # ZERO, retire this case. Nothing below it will fail, because with no
+    # findings there are no sites, and `floor` is 0 — which is the honest
+    # reading, not a loophole.
+    frozen_workflows = len(guard.KNOWN_UNGUARDED)
+    floor = frozen_workflows // 2
+    if floor:
+        assert len(sites) >= floor, (
+            f"only {len(sites)} of {frozen_workflows} frozen workflows' sites "
+            f"reach a credential (floor {floor}) — check the extractor"
+        )
+        hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
+        assert len(hidden) >= floor, (
+            f"only {len(hidden)} sites reach a credential through GITHUB_ENV or "
+            f"an acquired CLI session (floor {floor}), which is the path this "
+            "whole resolver exists to surface"
+        )
 
 
 def test_the_report_neither_creates_nor_clears_a_finding():
@@ -707,15 +757,131 @@ def test_the_report_neither_creates_nor_clears_a_finding():
     assert "credential reachability (#1188)" in paragraph
 
 
+def _frozen_workflows_with_a_kv_credential() -> list[str]:
+    """Frozen workflows whose job `uses:` a local `*-from-kv` composite action.
+
+    An independent oracle for "does this freeze contain a credential to
+    report?", read from the workflow YAML rather than from the resolver, so a
+    broken resolver cannot switch the assertion off. Conservative by design:
+    only the local from-kv actions count, because those unconditionally export
+    to GITHUB_ENV. A credential reaching a step any other way leaves this
+    silent, which is the safe direction for a gate.
+    """
+    found = []
+    for name in guard.KNOWN_UNGUARDED:
+        path = REPO_ROOT / ".github" / "workflows" / name
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            # Unreadable is not "no credential": fail toward asserting, so a
+            # parse problem cannot quietly disarm the check.
+            found.append(name)
+            continue
+
+        # EVERY shape below is checked, and that is not defensive habit. This
+        # helper runs OUTSIDE any assertion, and the module runner catches
+        # `AssertionError` and nothing else — so an `AttributeError` from a
+        # `.get()` on a non-dict does not fail this case, it ABORTS the module
+        # mid-roster, and a reviewer counting FAIL lines scores the tests that
+        # never reported as passing (ledger L194). A malformed workflow must
+        # reach the same fail-toward-asserting branch as an unparseable one.
+        if not isinstance(doc, dict):
+            found.append(name)
+            continue
+        jobs = doc.get("jobs")
+        if not isinstance(jobs, dict):
+            found.append(name)
+            continue
+
+        for job in jobs.values():
+            if not isinstance(job, dict):
+                continue
+            steps = job.get("steps")
+            if not isinstance(steps, list):
+                continue
+            if any(_is_local_kv_action(step) for step in steps):
+                found.append(name)
+                break
+    return found
+
+
+def _is_local_kv_action(step: object) -> bool:
+    """Is this step a LOCAL `*-from-kv` composite action?
+
+    The `./` prefix is the whole point and was missing for one commit: a bare
+    `"-from-kv" in uses` also matches a hypothetical remote
+    `someorg/x-from-kv@v1`, whose export behaviour this repo knows nothing
+    about. That made the oracle broader than its own docstring claimed and
+    could have asserted an arrival on a correct tree — the third false-red in
+    this one gate. Raised by Copilot on #1361.
+
+    Only the local actions under `.github/actions/` are in this tree and can be
+    read; those are the ones that unconditionally export through GITHUB_ENV.
+    """
+    if not isinstance(step, dict):
+        return False
+    uses = step.get("uses")
+    if not isinstance(uses, str):
+        return False
+    return uses.startswith("./.github/actions/") and "-from-kv" in uses
+
+
 def test_the_guard_still_exits_zero_and_prints_the_frozen_counts():
     """End to end, as CI runs it."""
     proc = _run_checker()
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "workflow input interpolation OK:" in proc.stdout
     assert "credential reachability (#1188):" in proc.stdout
-    assert "GITHUB_ENV from step" in proc.stdout, (
-        "the arrival path must reach the operator, not just the library"
-    )
+
+    # The same end-state mutex as the case above, found while verifying its fix
+    # rather than reported: at an empty freeze `reachability_paragraph` takes
+    # its documented no-sites branch, which carries no arrival line, so this
+    # assertion would fail the suite on the tree where #1080 has SUCCEEDED.
+    # Pre-existing and not what the review flagged — fixed here because the
+    # comment above now claims nothing below it fails at that state, and that
+    # claim has to be true.
+    #
+    # The gate must satisfy TWO things at once, and the obvious spellings each
+    # satisfy one and break the other:
+    #
+    #   gate on the guard's own output   a DEAD extractor prints the no-sites
+    #                                    sentence at ANY freeze size, so the
+    #                                    gate swallows the failure this
+    #                                    assertion exists for. Measured: with
+    #                                    `reachability_by_site` stubbed to {}
+    #                                    at a freeze of 8, detection fell from
+    #                                    two cases to one.
+    #   gate on `KNOWN_UNGUARDED`        cannot be manufactured by breaking the
+    #                                    extractor -- but a NON-EMPTY freeze in
+    #                                    which no entry holds a credential is a
+    #                                    correct tree, and this would fail it.
+    #                                    Raised by Copilot on #1361.
+    #
+    # So gate on an oracle the extractor cannot influence that answers the
+    # question actually being asked: does this freeze CONTAIN a credential to
+    # report? Read straight from the workflow YAML -- a job that `uses:` one of
+    # the local `*-from-kv` composite actions always exports its credential
+    # through GITHUB_ENV, which is exactly the arrival this asserts on.
+    #
+    # Deliberately CONSERVATIVE, and that is what keeps it from becoming a
+    # third false-red: it looks only for the local from-kv actions, so a
+    # credential arriving some other way makes it stay quiet rather than assert
+    # something it cannot stand behind. It is not a reimplementation of the
+    # resolver -- it decides whether the assertion applies, never what the
+    # answer is.
+    #
+    # Today it answers yes for all 8 frozen workflows, which is also why
+    # Copilot's state is not reachable by BURNING DOWN: every current entry
+    # carries a from-kv action, so every subset does too. It becomes reachable
+    # when a new credential-free workflow joins the freeze, which is an
+    # ordinary event -- the freeze exists to catch new instances.
+    if _frozen_workflows_with_a_kv_credential():
+        assert "GITHUB_ENV from step" in proc.stdout, (
+            "the freeze contains a workflow whose job uses a local *-from-kv "
+            "action, so that credential's GITHUB_ENV arrival must reach the "
+            "operator and not just the library — the extractor has stopped "
+            "reporting arrivals"
+        )
 
 
 def test_the_reachability_mode_answers_for_a_burned_down_workflow():

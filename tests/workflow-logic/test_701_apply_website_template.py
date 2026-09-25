@@ -277,6 +277,27 @@ def test_team_data_uses_the_role_schema_and_keeps_other_exports():
         shutil.rmtree(td)
 
 
+def test_no_usable_leadership_fails_rather_than_keeping_ffcs_team():
+    # 701 counts raw lines, so lines that parse to no name still reach the
+    # script. Keeping the template's sample team would publish FFC's people;
+    # an empty team breaks the templates' own tests. Fail loudly instead.
+    td, repo, proc = applied({**FULL_ARGS, "LeadershipLines": ["| Treasurer", "|"]})
+    try:
+        assert proc.returncode != 0, proc.stdout
+        assert "No usable leadership lines" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_blank_ein_fails_rather_than_keeping_ffcs():
+    td, repo, proc = applied({**FULL_ARGS, "FooterEin": "  "})
+    try:
+        assert proc.returncode != 0, proc.stdout
+        assert "No EIN supplied" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+    finally:
+        shutil.rmtree(td)
+
+
 def test_security_txt_contact_follows_the_contact_email():
     td, repo, proc = applied()
     try:

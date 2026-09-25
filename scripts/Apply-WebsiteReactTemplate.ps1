@@ -658,9 +658,12 @@ function Update-SiteConfig {
         $text = Set-SiteConfigValue -Source $text -Key $pair[0] -ValueTs (ConvertTo-TsString $url) -Optional
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($Ein)) {
-        $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $Ein)
+    # The shared schema requires a non-empty EIN, so a blank cannot be written;
+    # keeping the template's would publish FFC's tax ID as the charity's.
+    if ([string]::IsNullOrWhiteSpace($Ein)) {
+        throw 'No EIN supplied; refusing to leave the template EIN on the charity site.'
     }
+    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $Ein.Trim())
 
     # An empty phone is the template's documented "no phone" state (no block).
     $telDigits = Get-TelDigits -Phone $Phone
@@ -745,9 +748,11 @@ function Update-TeamData {
         $m = Parse-LeadershipLine -Line $line
         if ($null -ne $m) { $members += $m }
     }
+    # Neither outcome of carrying on is acceptable: keeping the template's
+    # sample members publishes FFC's own people as the charity's leadership,
+    # and an empty team breaks the templates' own team tests and /#team link.
     if ($members.Count -eq 0) {
-        Write-Host 'No leadership lines provided; skipping team/leadership update.' -ForegroundColor Yellow
-        return
+        throw 'No usable leadership lines (each needs a name); refusing to leave the template team on the charity site.'
     }
 
     # Only the JSON imports and the `team` array are replaced; everything else

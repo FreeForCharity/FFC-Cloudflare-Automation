@@ -144,7 +144,7 @@ ALLOWLIST: dict[str, Exemption] = {
     ),
     "test_701_apply_website_template.py": Exemption(
         0,
-        "Genuine: all 9 cases run scripts/Apply-WebsiteReactTemplate.ps1 under "
+        "Genuine: all 11 cases run scripts/Apply-WebsiteReactTemplate.ps1 under "
         "pwsh against a fixture repo. Nothing to rescope; re-check the count if "
         "a static case is ever added.",
     ),

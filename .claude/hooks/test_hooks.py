@@ -307,6 +307,36 @@ RULES = [
          "git push --force `git remote | head -1` main", BLOCK),
         ("force-push main with an escaped pipe between arguments",
          "git push --force origin \\| main", BLOCK),
+        # `|&` is bash's "pipe stdout and stderr", and `_pipe_stages` matches it
+        # ahead of a bare `|` so the `&` is consumed with the bar rather than
+        # left to start the next stage. The file had ZERO `|&` cases before
+        # these six, which is the gap Copilot reported on #1336 -- an operator
+        # the splitter names explicitly and no case exercised.
+        #
+        # What these rows do NOT establish, measured rather than assumed: that
+        # the `"|&"` entry in that ops tuple is load-bearing for THIS rule. `|`
+        # is a PREFIX of `|&`, so an ops list of `("|",)` breaks the line at the
+        # same index and differs only by a leading `&` on the next stage --
+        # which none of rule 2's three conditions look at. A mutant dropping
+        # `"|&"` agrees with the real guard on all six verdicts below. So they
+        # pin the boundary (and would catch a rewrite that stopped splitting
+        # there, or split only on a bare `|` followed by a non-`&`), and they
+        # do not discriminate the token. Every one is `bash -n` valid.
+        ("force-push main as the first |& stage",
+         "git push --force origin main |& tee push.log", BLOCK),
+        ("force-push main as the last |& stage",
+         "echo x |& git push --force origin main", BLOCK),
+        ("push feature |& grep -f naming main",
+         "git push origin feature-x |& grep -f patterns.txt main", ALLOW),
+        ("push feature |& grep -F main",
+         "git push origin feature-x |& grep -F main", ALLOW),
+        ("push feature |& tee, nothing protected named",
+         "git push origin feature-x |& tee push.log", ALLOW),
+        # ...and a `|&` inside a substitution is no more a boundary than a bare
+        # `|` is, for the same reason: the substitution's output is one WORD of
+        # this command, so the force-push keeps all three conditions together.
+        ("force-push main with a |& inside $()",
+         "git push --force $(git remote |& head -1) main", BLOCK),
         # An ODD backtick inside a substitution used to toggle the scanner's
         # backtick flag and carry it out past the closing paren, INVERTING the
         # parity for the rest of the line. The opening backtick of the later,

@@ -142,6 +142,12 @@ ALLOWLIST: dict[str, Exemption] = {
         "static case to rescue, so the whole-module gate says exactly what is "
         "true. Re-check the count if a YAML-only case is ever added.",
     ),
+    "test_701_apply_website_template.py": Exemption(
+        0,
+        "Genuine: all 11 cases run scripts/Apply-WebsiteReactTemplate.ps1 under "
+        "pwsh against a fixture repo. Nothing to rescope; re-check the count if "
+        "a static case is ever added.",
+    ),
     "test_720_owner_parse.py": Exemption(
         0,
         "Genuine: all 3 cases run the owner-parsing body under pwsh. Nothing "

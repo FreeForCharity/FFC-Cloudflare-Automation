@@ -541,6 +541,88 @@ export function collectCssUrls(css) {
 }
 
 /**
+ * Split a CSS value on its TOP-LEVEL commas.
+ *
+ * A `src:` list is comma-separated, but commas also appear inside `url()` --
+ * a `data:` URI carries one before its base64 payload -- and splitting on
+ * every comma would cut one of those in half and produce two broken entries
+ * out of one working font.
+ */
+export function splitTopLevel(value) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+/**
+ * Drop `@font-face` sources the origin does not actually serve.
+ *
+ * A reference the capture could not download is left pointing at the SOURCE
+ * SITE, because there is no local file to rewrite it to. For an image that is
+ * merely a dead link; for a font it is worse, because the exported site then
+ * asks a third-party origin for it on every page and the template's CSP
+ * (`font-src 'self' data:`) refuses -- so the deployment reports a console
+ * error for a glyph that was never going to render anyway.
+ *
+ * Measured on newheightseducation.org: WP Fastest Cache had minified two
+ * `@font-face` rules whose every `src` pointed at paths an older js_composer
+ * shipped (`vc_icons_v3/vcpb-plugin-icons.*`, `fa-v4compatibility.*`). All
+ * twelve 404 at the origin, so the icons are missing on the live site too --
+ * and the export inherited four CSP violations on all 438 pages for them,
+ * which the post-deploy smoke spec "the home page loads without a failure
+ * this deployment owns" counts as this deployment's.
+ *
+ * Only a HARD 404 qualifies, decided by the caller. A transient failure must
+ * not delete a rule, because the next run would restore it and the two
+ * exports would disagree about the site.
+ *
+ * Nothing is invented: a rule keeps every source that is not known-dead, and
+ * only a rule with no live source left is removed entirely. Removing it
+ * rather than leaving it empty is what actually stops the request -- a
+ * `@font-face` whose `src` list is empty is invalid, and browsers vary in
+ * what they do with one.
+ */
+export function dropDeadFontFaces(css, isDead) {
+  let rulesRemoved = 0;
+  let sourcesRemoved = 0;
+  const out = css.replace(/@font-face\s*\{[^{}]*\}/gi, (rule) => {
+    const refs = [...rule.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)].map((m) => m[1].trim());
+    if (!refs.length || !refs.some((r) => isDead(r))) return rule;
+    if (refs.every((r) => isDead(r))) {
+      rulesRemoved += 1;
+      sourcesRemoved += refs.length;
+      return '';
+    }
+    // Some live, some dead: keep the rule and prune the dead entries.
+    return rule.replace(/(^|[;{])(\s*src\s*:)([^;}]*)/gi, (whole, lead, label, value) => {
+      const kept = splitTopLevel(value).filter((entry) => {
+        const m = /url\(\s*["']?([^"')]+)["']?\s*\)/i.exec(entry);
+        if (!m || !isDead(m[1].trim())) return true;
+        sourcesRemoved += 1;
+        return false;
+      });
+      // Every source in this declaration was dead. Drop the declaration; the
+      // rule survives because another `src:` in it still has a live source
+      // (the `every` above already ruled out the all-dead case).
+      if (!kept.length) return lead;
+      return `${lead}${label}${kept.join(',')}`;
+    });
+  });
+  return { css: out, rulesRemoved, sourcesRemoved };
+}
+
+/**
  * Absolute-ise a possibly-relative reference against the page it appeared on.
  * Returns null for anything that is not http(s) once resolved.
  */
@@ -2617,6 +2699,115 @@ function selfTest() {
   eq('a zero-byte rescue is refused', keepReencoded(500_000, 0, BUDGET, true), false);
   eq('a negative-byte rescue is refused', keepReencoded(500_000, -5, BUDGET, true), false);
 
+  // A reference the origin does not serve must not survive into the export
+  // pointing at the origin: the template's CSP refuses the fetch and the
+  // post-deploy smoke counts it as a failure this deployment owns.
+  const dead = (r) => /vc_icons_v3|fa-v4compatibility/.test(r);
+  {
+    const allDead =
+      '@font-face{font-family:vcpb-plugin-icons;' +
+      'src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(//x.org/a/vc_icons_v3/f.ttf?r) format('truetype')," +
+      "url(//x.org/a/vc_icons_v3/f.woff?r) format('woff');font-weight:400}";
+    const r = dropDeadFontFaces(`body{color:red}${allDead}p{color:blue}`, dead);
+    eq(
+      'a font-face whose every source is dead is removed entirely',
+      r.css,
+      'body{color:red}p{color:blue}',
+    );
+    eq('...and is counted as one rule', r.rulesRemoved, 1);
+    eq('...with every one of its sources', r.sourcesRemoved, 3);
+  }
+  {
+    // The FontAwesome shape: one rule, one `src:`, one dead entry beside a
+    // live one. The live source has to survive -- deleting the rule here
+    // would take a working font off the site.
+    const mixed =
+      '@font-face{font-family:"FA";src:url(../w/fa-v4compatibility.woff2) format("woff2"),' +
+      'url(../w/fa-solid-900.ttf) format("truetype");font-display:block}';
+    const r = dropDeadFontFaces(mixed, dead);
+    eq('a rule with one live source keeps it', r.css.includes('fa-solid-900.ttf'), true);
+    eq('...and loses the dead one', r.css.includes('fa-v4compatibility'), false);
+    eq('...without removing the rule', r.rulesRemoved, 0);
+    eq('...counting the source', r.sourcesRemoved, 1);
+    eq(
+      '...and stays a parseable declaration',
+      /src:url\(\.\.\/w\/fa-solid-900\.ttf\) format\("truetype"\);/.test(r.css),
+      true,
+    );
+  }
+  {
+    // The IE eot hack: a rule with TWO `src:` declarations, the first entirely
+    // dead and the second carrying a live source. The first declaration has to
+    // GO -- an `src:` with nothing after it is not valid CSS -- while the rule
+    // and its live source stay. No single-declaration fixture reaches this
+    // branch, which is why one was added: mutation found it untested.
+    const eotHack =
+      '@font-face{font-family:vcpb-plugin-icons;' +
+      'src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(//x.org/a/vc_icons_v3/f.eot?r#iefix) format('embedded-opentype')," +
+      "url(../w/live.woff) format('woff');font-weight:400}";
+    const r = dropDeadFontFaces(eotHack, dead);
+    eq('the all-dead src declaration is removed, not emptied', r.css.includes('src:;'), false);
+    eq('...and no bare src: label is left behind', /src\s*:\s*(;|\})/.test(r.css), false);
+    eq('...the live source survives', r.css.includes("url(../w/live.woff) format('woff')"), true);
+    eq('...the rule is kept', r.rulesRemoved, 0);
+    eq('...and both dead sources are counted', r.sourcesRemoved, 2);
+    eq('...leaving exactly one src declaration', (r.css.match(/src\s*:/g) || []).length, 1);
+  }
+  {
+    // Same branch, but with the dead declaration FIRST in the rule, so the
+    // separator it is preceded by is the opening brace rather than a
+    // semicolon. Returning the separator is what keeps the rule a rule --
+    // dropping it here would eat the `{`. A fixture with `font-family` first
+    // cannot show that, because eating a `;` there is harmless.
+    const braceLead =
+      '@font-face{src:url(//x.org/a/vc_icons_v3/f.eot?r);' +
+      "src:url(../w/live.woff) format('woff');font-family:A}";
+    const r = dropDeadFontFaces(braceLead, dead);
+    eq(
+      'the opening brace survives a dead first declaration',
+      r.css.startsWith('@font-face{'),
+      true,
+    );
+    eq('...with its closing brace', r.css.endsWith('}'), true);
+    eq('...and one brace of each', (r.css.match(/[{]/g) || []).length, 1);
+    eq('...the live source is kept', r.css.includes('url(../w/live.woff)'), true);
+    eq('...and the dead one is gone', r.css.includes('vc_icons_v3'), false);
+  }
+  eq(
+    'a font-face with no dead source is left byte-identical',
+    dropDeadFontFaces('@font-face{font-family:A;src:url(../w/live.woff2) format("woff2")}', dead)
+      .css,
+    '@font-face{font-family:A;src:url(../w/live.woff2) format("woff2")}',
+  );
+  eq(
+    'a dead url OUTSIDE a font-face is not touched -- this pass is about fonts',
+    dropDeadFontFaces('.hero{background:url(//x.org/a/vc_icons_v3/bg.png)}', dead).css,
+    '.hero{background:url(//x.org/a/vc_icons_v3/bg.png)}',
+  );
+  eq(
+    'css with no font-face at all is unchanged',
+    dropDeadFontFaces('body{color:red}', dead).css,
+    'body{color:red}',
+  );
+  // A `data:` URI carries a comma before its payload. Splitting on it would
+  // cut one working source into two broken ones.
+  eq(
+    'a data: source is one entry, not two',
+    splitTopLevel("url(data:font/woff2;base64,AAAA) format('woff2'),url(b.ttf)").length,
+    2,
+  );
+  eq('splitTopLevel leaves a comma-free value whole', splitTopLevel('url(a.ttf)').length, 1);
+  eq(
+    'a data: source beside a dead one survives intact',
+    dropDeadFontFaces(
+      '@font-face{font-family:A;src:url(//x.org/a/vc_icons_v3/f.ttf),url(data:font/woff2;base64,AA==) format("woff2")}',
+      dead,
+    ).css.includes('base64,AA=='),
+    true,
+  );
+
   // A collision must not end in shipping the oversized original.
   eq(
     'a disambiguated name keeps the stem, the separator and the extension',
@@ -4497,6 +4688,11 @@ async function capture() {
   let cfEmailsDecoded = 0;
   const edgeTagsRemoved = [];
   const usedAssetNames = new Set(); // guards the .png -> .webp rename against collisions
+  // absUrl -> HTTP status, for the downloads that failed. Only a hard 404 lets
+  // the CSS pass delete a reference: a transient failure must leave the export
+  // alone, or two runs of the same capture disagree about what the site has.
+  const assetStatus = new Map();
+  const deadFontFaces = { rules: 0, sources: 0 };
   const imageRecode = {
     recoded: 0,
     declined: 0,
@@ -4769,6 +4965,7 @@ async function capture() {
       if (assetFailures.length < LOG_CAP)
         console.error(`[asset] ${absUrl}: HTTP ${res?.status ?? 0}`);
       assetFailures.push({ url: absUrl, status: res?.status ?? 0 });
+      assetStatus.set(absUrl, res?.status ?? 0);
       return null;
     }
     let buf;
@@ -4894,6 +5091,7 @@ async function capture() {
     if (isCss) {
       let css = buf.toString('utf8');
       const cssReps = new Map();
+      const deadCssRefs = new Set();
       for (const ref of collectCssUrls(css)) {
         const abs = normalizeSelfHost(absolutize(ref, res.url || absUrl), selfHost, domain);
         if (!abs || !shouldLocalize(abs, domain, ignoreHosts)) continue;
@@ -4909,9 +5107,18 @@ async function capture() {
           const rel =
             fromDir === '.' ? inner : `${'../'.repeat(fromDir.split('/').length)}${inner}`;
           cssReps.set(ref, rel);
+        } else if (assetStatus.get(abs) === 404) {
+          // Nothing to rewrite it to, and the origin does not have it either.
+          deadCssRefs.add(ref);
         }
       }
       css = rewriteRefs(css, cssReps);
+      if (deadCssRefs.size) {
+        const pruned = dropDeadFontFaces(css, (ref) => deadCssRefs.has(ref));
+        css = pruned.css;
+        deadFontFaces.rules += pruned.rulesRemoved;
+        deadFontFaces.sources += pruned.sourcesRemoved;
+      }
       // The hiding rule was measured only in the inline <style> of each page,
       // but a stylesheet is the natural place for it and a single missed copy
       // blanks every page that loads that file. Applying the same transform
@@ -5115,6 +5322,12 @@ async function capture() {
         ' no encoder was available. This is NOT a judgement that they were already optimal:' +
         ' nothing tried. Install sharp before the capture step.',
     );
+  if (deadFontFaces.sources)
+    console.error(
+      `[capture] dropped ${deadFontFaces.sources} @font-face source(s) the origin 404s,` +
+        ` removing ${deadFontFaces.rules} rule(s) left with none. They would otherwise` +
+        " have stayed pointing at the source site, where the template's CSP refuses them.",
+    );
   if (imageRecode.disambiguated)
     console.error(
       `[capture] ${imageRecode.disambiguated} image(s) were re-encoded under a disambiguated` +
@@ -5255,6 +5468,8 @@ async function capture() {
       stillOverBudget: imageRecode.stillOverBudget,
       collisions: imageRecode.collisions.length,
       disambiguated: imageRecode.disambiguated,
+      deadFontFaceRulesRemoved: deadFontFaces.rules,
+      deadFontFaceSourcesRemoved: deadFontFaces.sources,
       bytesBefore: imageRecode.bytesBefore,
       bytesAfter: imageRecode.bytesAfter,
     },

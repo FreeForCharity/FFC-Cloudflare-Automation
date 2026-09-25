@@ -243,8 +243,293 @@ RULES = [
     Rule("force-push-protected", 'Force-push to a protected branch', BLOCK_TIER, [
         ("force-push main", "git push --force origin main", BLOCK),
         ("force-with-lease main", "git push --force-with-lease origin main", BLOCK),
+        ("force-push -f main", "git push -f origin main", BLOCK),
+        ("force-with-lease master", "git push --force-with-lease origin master", BLOCK),
+        ("commit then force-push main via &&", "git commit -m x && git push -f origin main", BLOCK),
+        # git's option parser bundles short options, so these force-push too.
+        # Measured: `-fq`/`-qf` reach the remote lookup, `-qZ` is rejected as an
+        # unknown switch -- the cluster really is being split. Copilot on #1310.
+        ("force-push main via bundled -fq", "git push -fq origin main", BLOCK),
+        ("force-push main via bundled -qf", "git push -qf origin main", BLOCK),
+        # Heredoc bodies are analysed, not skipped: `bash <<EOF` really does run
+        # what is inside one, so this must stay the direction the rule fails in.
+        ("force-push main inside a heredoc body",
+         "bash <<'EOF'\ngit push --force origin main\nEOF", BLOCK),
         ("normal push feature", "git push -u origin claude/ai-agent-hooks-security-bchbh8", ALLOW),
         ("force-push feature/main allowed", "git push --force origin feature/main", ALLOW),
+        # force-push-protected decides per SEGMENT (#1309). Judging the whole
+        # command made "a push appears somewhere" AND "a force flag appears
+        # somewhere" AND "the word main appears somewhere" a violation, which
+        # blocked Conductor run 168 three times on an ordinary feature-branch
+        # push. Cases A and B are verbatim from the issue; neither can rewrite
+        # a protected branch. Note `-F` is not a git-push flag at all -- it is
+        # `git commit -F`, `gh api -F` and `grep -F`, which is why the short
+        # flag is now matched case-sensitively.
+        ("commit -F file then push feature",
+         "git commit -q -F msg.txt; git push -q origin feature-x", ALLOW),
+        # Widening the short flag to a bundled cluster must not undo that: the
+        # `f` inside the cluster is lowercase-only, so `-qF` stays clear.
+        ("commit -qF file naming main then push feature",
+         "git commit -qF main-notes.txt; git push -q origin feature-x", ALLOW),
+        ("heredoc commit message naming main then push feature",
+         "git commit -q -F - <<'EOF'\nfix: only for CI runs on main\nEOF\n"
+         "git push -q origin feature-x", ALLOW),
+        ("push feature then gh api -f body naming main",
+         "git push -q origin feature-x; "
+         "gh api repos/o/r/pulls/1/comments -f body='... main ...'", ALLOW),
+        ("push feature then echo main via &&", "git push origin feature-x && echo main", ALLOW),
+        # A later pipeline stage supplies flags and words the push never saw.
+        # `_echo_segments` keeps a pipeline whole (rule 3 needs that), so rule 2
+        # splits on `|` itself. The lowercase row is Copilot's on #1310 -- the
+        # uppercase one is cleared by the case-sensitive flag match as well.
+        ("push feature piped through grep -F main",
+         "git push origin feature-x | grep -F main", ALLOW),
+        ("push feature piped through grep -f naming main",
+         "git push origin feature-x | grep -f patterns.txt main", ALLOW),
+        # Splitting on `|` must not open a bypass: a real force-push carries
+        # its verb, flag and refspec in its own stage, wherever it sits.
+        ("force-push main as the last pipeline stage",
+         "echo x | git push --force origin main", BLOCK),
+        ("force-push main as the first pipeline stage",
+         "git push --force origin main | tee push.log", BLOCK),
+        # ...but only where the `|` is really a stage boundary. A `|` inside a
+        # command substitution belongs to a DIFFERENT command whose output is
+        # one word of this one, so splitting there cut a single force-push in
+        # two -- verb and flag in one computed stage, refspec in the next --
+        # and all four of these were ALLOWED at 46adfe3 while `main` blocked
+        # every one. A permissive miss, so they are the rows that matter.
+        # Copilot on #1310.
+        ("force-push main with a pipe inside $()",
+         "git push --force $(git remote | head -1) main", BLOCK),
+        ("force-push main with a pipe inside $() in the refspec",
+         "git push --force origin $(cat b.txt | tr -d '\\n'):main", BLOCK),
+        ("force-push main with a pipe inside backticks",
+         "git push --force `git remote | head -1` main", BLOCK),
+        ("force-push main with an escaped pipe between arguments",
+         "git push --force origin \\| main", BLOCK),
+        # `|&` is bash's "pipe stdout and stderr", and `_pipe_stages` matches it
+        # ahead of a bare `|` so the `&` is consumed with the bar rather than
+        # left to start the next stage. The file had ZERO `|&` cases before
+        # these six, which is the gap Copilot reported on #1336 -- an operator
+        # the splitter names explicitly and no case exercised.
+        #
+        # What these rows do NOT establish, measured rather than assumed: that
+        # the `"|&"` entry in that ops tuple is load-bearing for THIS rule. `|`
+        # is a PREFIX of `|&`, so an ops list of `("|",)` breaks the line at the
+        # same index and differs only by a leading `&` on the next stage --
+        # which none of rule 2's three conditions look at. A mutant dropping
+        # `"|&"` agrees with the real guard on all six verdicts below. So they
+        # pin the boundary (and would catch a rewrite that stopped splitting
+        # there, or split only on a bare `|` followed by a non-`&`), and they
+        # do not discriminate the token. Every one is `bash -n` valid.
+        ("force-push main as the first |& stage",
+         "git push --force origin main |& tee push.log", BLOCK),
+        ("force-push main as the last |& stage",
+         "echo x |& git push --force origin main", BLOCK),
+        ("push feature |& grep -f naming main",
+         "git push origin feature-x |& grep -f patterns.txt main", ALLOW),
+        ("push feature |& grep -F main",
+         "git push origin feature-x |& grep -F main", ALLOW),
+        ("push feature |& tee, nothing protected named",
+         "git push origin feature-x |& tee push.log", ALLOW),
+        # ...and a `|&` inside a substitution is no more a boundary than a bare
+        # `|` is, for the same reason: the substitution's output is one WORD of
+        # this command, so the force-push keeps all three conditions together.
+        ("force-push main with a |& inside $()",
+         "git push --force $(git remote |& head -1) main", BLOCK),
+        # An ODD backtick inside a substitution used to toggle the scanner's
+        # backtick flag and carry it out past the closing paren, INVERTING the
+        # parity for the rest of the line. The opening backtick of the later,
+        # genuine span then read as a close, so its `|` and `&&` were scanned
+        # as top level and tore a real force-push into two stages. 21 of these
+        # were ALLOWED before the `not closers` guard.
+        #
+        # These three vectors are deliberately **bash-invalid** -- `bash -n`
+        # rejects the unbalanced backtick with `unexpected EOF while looking
+        # for matching ``'` -- so they pin the PARSER, not a reachable bypass.
+        # A sweep of 132 bash-valid vectors of this shape found 0 the old code
+        # allowed, because bash makes unquoted backticks pair. Kept anyway: a
+        # guard must fail closed on malformed input too, and these are the only
+        # rows that exercise the inversion at all. Do not read the 21 as a
+        # severity figure -- the first version of this comment invited exactly
+        # that, and Copilot caught it on #1336.
+        ("force-push main after an odd backtick leaked out of $()",
+         "echo $(echo ` ) ; git push --force `git remote | head -1` main", BLOCK),
+        ("force-push main after an odd backtick, && in the later span",
+         "echo $(echo ` ) ; git push -f `cd /repo && git remote` main", BLOCK),
+        ("force-push main after an odd backtick, ; in the later span",
+         "echo $(echo ` ) ; git -C /repo push --force `cd /repo; git remote` main",
+         BLOCK),
+        # ...and the ALLOW half, which is what stops the lazy fix of never
+        # toggling the flag at all. A TOP-LEVEL backtick span is still a real
+        # span, so an operator inside one is still not a boundary, and a
+        # feature push followed by an unrelated command naming `main` must
+        # stay allowed either side of it.
+        ("push feature, then && a command naming main, after a closed $()",
+         "echo $(echo hi) ; git push origin feature-x && grep -f patterns.txt main",
+         ALLOW),
+        ("push feature through a top-level backtick span containing a pipe",
+         "git push origin `git branch --show-current | tr -d x`", ALLOW),
+        ("push feature after a substitution holding an EVEN backtick pair",
+         "echo $(echo `date`) ; git push origin feature-x | grep -f patterns.txt main",
+         ALLOW),
+        # A bare `(` inside a PARAMETER expansion is literal text -- `${x:-foo(}`
+        # is valid bash and its paren need not balance. Tracking it as a nested
+        # span made the `}` that really ends the expansion pair with the `(`,
+        # so `closers` never emptied and every later operator on the line went
+        # invisible. That is #1309's false positive returning by another door,
+        # so these are the rows that matter. Copilot on #1336.
+        ("push feature, then && a command naming main, after ${} with a bare (",
+         "echo ${x:-foo(} ; git push origin feature-x && grep -f patterns.txt main",
+         ALLOW),
+        ("push feature piped to grep naming main, after ${} with a bare {",
+         "echo ${x:-foo{} ; git push origin feature-x | grep -f patterns.txt main",
+         ALLOW),
+        # ...and the BLOCK half, which stops the lazy fix of never tracking
+        # bare grouping at all. Inside a COMMAND substitution `( )` really is
+        # syntactic, so `$( (a) && b )` must not close its span early and the
+        # force-push it wraps must still be caught.
+        ("force-push main after a ${} carrying a bare (",
+         "echo ${x:-foo(} ; git push --force origin main", BLOCK),
+        ("force-push main with a grouped subshell inside $()",
+         "git push --force $( (echo origin) && cat r.txt ) main", BLOCK),
+        # A `)` inside BACKTICKS inside `$(...)`. bash accepts this unquoted
+        # (checked with `bash -n`) and `_strip_quoted` leaves the paren intact,
+        # so the scanner really does see it. While backticks inside a
+        # substitution went untracked, that `)` matched the outer `$(`'s closer
+        # and emptied the stack early. It produced no bypass -- the next
+        # backtick turned suppression back on -- but it did block the benign
+        # pipeline below. Both polarities pinned so neither the premature close
+        # nor the fix for it can regress unseen. Copilot on #1336.
+        ("push feature, ) inside backticks inside $(), then pipe to grep main",
+         "git push origin $(echo `printf a)b`) | grep -f p.txt main", ALLOW),
+        ("push feature, ) inside backticks and an operator inside $()",
+         "git push origin $(echo `printf a)b` && true) feature-x", ALLOW),
+        ("force-push main, ) inside backticks and an operator inside $()",
+         "git push --force origin $(echo `printf a)b` && true) main", BLOCK),
+        ("force-push main, ) inside backticks supplying the remote",
+         "git push --force $(echo `printf a)b` ; true) main", BLOCK),
+        # Same defect one level UP, in `_split_on_logical`, which tears the
+        # statement into segments before `_pipe_stages` ever runs. An `&&` or
+        # `||` inside a substitution is not a segment boundary either, and all
+        # six of these were ALLOWED at 533b1ea -- with `_pipe_stages` already
+        # fixed -- while `main` blocked every one. Permissive, so they matter.
+        ("force-push main with && inside $()",
+         "git push --force $(cd /repo && git remote) main", BLOCK),
+        ("force-push main with && inside $() guarding a test",
+         "git push --force $(test -d .git && echo origin) main", BLOCK),
+        ("force-push main with && inside backticks",
+         "git push --force `cd /repo && git remote` main", BLOCK),
+        ("force-push main with && and a nested pipeline inside $()",
+         "git push --force $(cd /repo && (echo origin | cat)) main", BLOCK),
+        ("force-push main with || inside $()",
+         "git push --force $(cd /repo || echo origin) main", BLOCK),
+        ("force-push main with && inside $() in the refspec",
+         "git push --force origin $(cd /repo && cat b.txt):main", BLOCK),
+        # Same defect one level up AGAIN, in `_split_statements` -- the
+        # outermost of the three splitters, which runs before the other two.
+        # A `;` inside a substitution is not a statement boundary, and all
+        # three of these were ALLOWED at f28b310, with `_pipe_stages` AND
+        # `_split_on_logical` both already fixed, while `main` blocked every
+        # one. Permissive, so they are the rows that matter.
+        ("force-push main with ; inside $()",
+         "git push --force $(cd /repo; git remote) main", BLOCK),
+        ("force-push main with ; inside backticks",
+         "git push --force `cd /repo; git remote` main", BLOCK),
+        ("force-push main with ; inside $() in the refspec",
+         "git push --force origin $(cd /repo; cat b.txt):main", BLOCK),
+        # The ALLOW half for `;`, which stops the lazy fix of simply not
+        # splitting on it. A TOP-LEVEL `;` is still a real statement boundary,
+        # so a feature push followed by an unrelated command naming `main`
+        # must stay allowed.
+        ("push feature, then ; a command naming main",
+         "git push origin feature-x; grep -f patterns.txt main", ALLOW),
+        ("push feature through a substitution containing ;",
+         "git push origin $(cd /repo; git branch --show-current)", ALLOW),
+        # ...and the ALLOW half, which is what stops the lazy fix of simply not
+        # splitting on `&&`. A TOP-LEVEL `&&` is still a real boundary, so a
+        # feature-branch push followed by an unrelated command naming `main`
+        # must stay allowed -- that is #1309, the false positive this whole
+        # stack exists to remove.
+        ("push feature, then && a command naming main",
+         "git push origin feature-x && grep -f patterns.txt main", ALLOW),
+        ("push feature through a substitution containing &&",
+         "git push origin $(cd /repo && git branch --show-current)", ALLOW),
+        # The opposite error -- a substitution that swallows the rest of the
+        # line -- would re-break the false positive the stage split exists for.
+        # `$(a) | b` must still split; only an UNCLOSED span may run on.
+        ("push feature through a substitution, then grep -f naming main",
+         "git push origin $(git branch --show-current) | grep -f patterns.txt main", ALLOW),
+        ("push feature after a substitution containing its own pipeline",
+         "echo $( (git log --oneline) | head -1 ) | git push -q origin feature-x", ALLOW),
+        # git's GLOBAL options may precede the subcommand, so the verb is not
+        # always the word after `git` (#1311). Each of these is a working
+        # force-push spelling that the old `\bgit\s+push\b` never saw -- the
+        # `-c` form especially, which is what tooling and CI snippets emit.
+        ("force-push main via git -c", "git -c protocol.version=2 push --force origin main", BLOCK),
+        ("force-push main via git --no-pager", "git --no-pager push --force origin main", BLOCK),
+        ("force-push main via git -C", "git -C /repo push --force origin main", BLOCK),
+        ("force-push master via git -c and -C",
+         "git -c core.pager=cat -C /repo push -f origin master", BLOCK),
+        # `-c`/`-C` are not the only options taking a SEPARATE value word, and
+        # the long ones were missed on the first pass (Conductor run 170 on
+        # #1312). Each verified against git 2.43.0 as a running command, with
+        # a `--bogus-opt x` control exiting 129.
+        ("force-push main via git --work-tree",
+         "git --work-tree /repo push -f origin main", BLOCK),
+        ("force-push main via git --namespace",
+         "git --namespace x push --force origin main", BLOCK),
+        # `--config-env` takes `section.key=ENVVAR`, and BOTH halves have to be
+        # real: this row read `a=B` until Copilot caught it on #1336. Measured,
+        # the two failure causes are separable and only one is about the key --
+        # `a=B` reports the missing env var `B` first, a VALID key with a
+        # missing var (`core.pager=PAGER_ENV`) fails identically, and exporting
+        # `B` does not help, while `a=HOME` still gives
+        # `error: key does not contain a section: a`. So the key is the real
+        # defect. `a.b=HOME` is the spelling `guard_bash.py` documents as
+        # measured-working, and it is what this row uses now.
+        ("force-push main via git --config-env",
+         "git --config-env a.b=HOME push --force origin main", BLOCK),
+        # `--git-dir <path>` was already blocked, but only by accident: the
+        # path ends `.git push`, and `\bgit\s+push\b` matched INSIDE it. Pin
+        # it now that the rule itself covers the form, so a future narrowing
+        # cannot be hidden by that coincidence.
+        ("force-push main via git --git-dir with a separate arg",
+         "git --git-dir /repo/.git push --force origin main", BLOCK),
+        # `\bgit\s` wants whitespace right after `git`; the Conductor runs on
+        # Windows, where `git.exe push` is an ordinary spelling.
+        ("force-push main via git.exe", "git.exe push --force origin main", BLOCK),
+        # ...and the long options must not arm the rule either. The second is
+        # run 170's row: `log` is not option-shaped, so it ends the scan and
+        # the `push` after `--grep` is never read as the verb.
+        ("normal push feature via git --work-tree",
+         "git --work-tree /repo push --force origin feature-x", ALLOW),
+        ("git log --grep push naming main", "git log --grep push main", ALLOW),
+        # ...and the widening must not arm the rule off a word that is not the
+        # verb. The first is the ordinary reason to write `git -c` at all; the
+        # second is `-c`'s ARGUMENT beginning with `push`, which an earlier
+        # draft read as the subcommand by backtracking; the third proves a
+        # quoted `push` still cannot supply it.
+        #
+        # The key must be `section.key=value`. This row read `-c a=b` until
+        # Copilot caught it on #1336: `git -c a=b status` exits 128 with
+        # `error: key does not contain a section: a`, so the row was asserting
+        # that the guard leaves alone a command git itself refuses -- which says
+        # nothing about REAL `git -c` usage, the whole point of the case. Note
+        # `git -c a=b --version` exits 0, because `--version` answers before
+        # config is parsed; check such a key with a subcommand that reads it.
+        ("normal push feature via git -c",
+         "git -c core.pager=cat push --force origin feature-x", ALLOW),
+        ("git -c push.default then an unrelated main and force",
+         "git -c push.default=simple config --list && echo main --force", ALLOW),
+        ("commit message naming push, force and main",
+         'git commit --amend -m "ready to push --force origin main"', ALLOW),
+        # Keeps the case-sensitive short flag pinned now that pipe splitting
+        # clears the `grep -F` row on its own: prose inside a heredoc body is
+        # analysed (bodies are deliberately not skipped), and this line holds
+        # all three halves in ONE stage. Only `-F != -f` clears it.
+        ("heredoc prose naming git push -F and main",
+         "gh pr create -F - <<'EOF'\nwe force-push with git push -F only on main\nEOF", ALLOW),
     ]),
 
     Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [

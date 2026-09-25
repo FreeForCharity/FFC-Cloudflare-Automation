@@ -1609,12 +1609,46 @@ def test_a_re_encode_that_keeps_its_name_is_not_held_to_the_rename_threshold():
     its name, so that floor buys nothing there and costs something real: it
     discards a result that lands UNDER BUDGET for saving only 20%, and ships
     the oversized original instead. Same reasoning `worthShrinking` already
-    carries for a downsampled PDF, which also keeps its name."""
+    carries for a downsampled PDF, which also keeps its name.
+
+    This used to read the call site and assert the three names appeared in it
+    literally. That pinned a SPELLING, not the property: the decision has since
+    moved into `keepReencoded`, and the text check went red on a refactor that
+    preserved the rule exactly and extended it. Asserting the wiring plus the
+    library's own self-test covers the same property and more -- including the
+    budget override the text form could not express at all.
+    """
     src = (REPO_ROOT / "scripts" / "capture-wordpress-api.mjs").read_text(encoding="utf-8")
     keep = src.split("const keep = encoded", 1)[1].split("if (keep) {", 1)[0]
-    assert "target === name" in keep, keep
-    assert "worthShrinking(buf.length, encoded.buffer.length)" in keep, keep
-    assert "worthReencoding(buf.length, encoded.buffer.length)" in keep, keep
+    # The renamed/not-renamed distinction still has to REACH the decision.
+    assert "keepReencoded(" in keep, keep
+    assert "target !== name" in keep, keep
+    assert "maxImageBytes" in keep, keep
+
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "capture-wordpress-api.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        # Keeps its name -> worthShrinking, no rename floor. The original rule.
+        "an un-renamed encode uses worthShrinking",
+        "an un-renamed LARGER encode is still refused",
+        # Renamed -> the floor applies, EXCEPT where the result lands under
+        # budget, because the alternative is publishing an oversized image.
+        "a renamed encode landing UNDER budget is kept on a 17.6% saving",
+        "...which is exactly the pair worthReencoding refuses on its own",
+        "a renamed encode still OVER budget is refused on a 10% saving",
+        "a renamed encode still over budget is kept when it clears the floor",
+        "an original already under budget gets no rescue, only the floor",
+        # The rescue must not undercut the non-positive refusal.
+        "a zero-byte rescue is refused",
+    ):
+        assert f"ok   {name}" in out, f"missing self-test: {name}\n{out[-2000:]}"
 
 
 def test_a_slash_escaped_quote_in_a_title_is_not_published_as_a_backslash():

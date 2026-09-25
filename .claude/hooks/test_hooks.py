@@ -465,6 +465,56 @@ RULES = [
         # A slash inside a flag VALUE is data, not the endpoint -- must not fire.
         ("gh api field value with slash allowed",
          "gh api repos/o/r/issues -f body=/tmp/note.md", ALLOW),
+        # A redirect TARGET is a shell path, not the endpoint -- must not fire.
+        # Conductor run 161 was blocked three times on exactly this shape.
+        ("gh api redirect to absolute path allowed",
+         "gh api repos/o/r/contents/x > /c/tmp/z.yaml", ALLOW),
+        ("gh api stderr redirect to absolute path allowed",
+         "gh api repos/o/r/pulls 2> /tmp/err.txt", ALLOW),
+        ("gh api stdin from absolute path allowed",
+         "gh api graphql --input < /c/tmp/q.json", ALLOW),
+        # ...but a leading-slash endpoint BEFORE the redirect still blocks.
+        ("gh api leading slash then redirect",
+         "gh api /markdown > /tmp/out.html", BLOCK),
+        # A stop character INSIDE QUOTES is jq/header data, not a shell operator.
+        # A quote-blind span ends on it and never reaches the endpoint that
+        # follows, so these are the bypasses the `<>` stop would otherwise open.
+        # Measured on the quote-blind span: the first three were all ALLOWED.
+        ("gh api jq gt then leading slash endpoint",
+         "gh api --jq '.a > 1' /markdown", BLOCK),
+        ("gh api jq lt then leading slash endpoint",
+         "gh api --jq '.a < 1' /markdown", BLOCK),
+        # `|` has been a stop character since rule 8 was written, so this one
+        # is an OLDER bypass than the `<>` pair -- allowed before either change.
+        ("gh api jq pipe then leading slash endpoint",
+         "gh api --jq '.workflow_runs[] | select(.id > 5)' /repos/o/r/actions/runs", BLOCK),
+        # Pins behaviour that was already correct: a quoted span with no stop
+        # character in it never truncated the match.
+        ("gh api quoted header then leading slash endpoint",
+         "gh api -H 'Accept: application/vnd.github+json' /markdown", BLOCK),
+        # ...and quoting a stop character must not start blocking a correct
+        # call. This is the case that catches the obvious wrong fix.
+        ("gh api jq comparison without endpoint allowed",
+         "gh api repos/o/r/issues --jq '.[] | select(.number > 5)'", ALLOW),
+        # An ESCAPED quote is a literal character, not the start of a quoted
+        # span. An escape-blind stripper reads it as an unterminated quote and
+        # blanks the rest of the command -- endpoint included -- so the call
+        # sails through with nothing left to object to. Found in review of
+        # #1313 (Conductor run 171); these three block on `main` and regressed
+        # when the span first became quote-aware.
+        ("gh api escaped single quote then endpoint",
+         "gh api -f body=it\\'s /markdown", BLOCK),
+        ("gh api escaped double quote then endpoint",
+         'gh api -f body=a\\"b /markdown', BLOCK),
+        # The realistic one: `\"` inside a double-quoted span does not close it.
+        ("gh api escaped double quote inside double quotes then endpoint",
+         'gh api -f body="a\\" > x" /markdown', BLOCK),
+        # Controls for the opposite error -- an over-eager stripper. Neither of
+        # these involves an escape, and both were already correct.
+        ("gh api double-quoted jq then leading slash endpoint",
+         'gh api --jq ".a > 1" /markdown', BLOCK),
+        ("gh api apostrophe inside double quotes then endpoint",
+         "gh api -f body=\"it's\" /markdown", BLOCK),
     ]),
 
     Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [
@@ -908,6 +958,109 @@ def test_rule_polarity():
     record("every rule has both a firing and a quiet case", not problems, "\n".join(problems))
 
 
+def test_strip_quoted_matches_a_bash_accurate_scanner():
+    """`_strip_quoted`'s escape rule is broader than bash's -- pin that it costs
+    nothing, rather than asserting it in a docstring.
+
+    Inside double quotes bash escapes only `\\`, `"`, `$`, backtick and newline
+    and PRESERVES the backslash before anything else (measured: `"a\\zb"` prints
+    `a\\zb` in bash and dash). The scanner treats every `\\x` there as an escape,
+    which is simpler and, for the one question its callers ask -- where the
+    operators and the endpoint are -- indistinguishable, because inside a
+    double-quoted span every character is blanked anyway and the only character
+    whose escaping could move the span's END is `"`, which bash escapes too.
+
+    That argument is exactly the kind that stops being true after a refactor,
+    so it is a test: compare against a bash-accurate reference over every
+    string the shell metacharacters can form. Copilot raised the docstring as
+    misleading on #1313 and was right about bash; this is what makes the reply
+    checkable by the next reader instead of quotable.
+    """
+    import importlib.util
+    import itertools
+    import re
+
+    spec = importlib.util.spec_from_file_location("_gb_for_test", GUARD_BASH)
+    gb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gb)
+
+    bs, dq, sq = chr(92), '"', "'"
+    dq_escapable = {bs, dq, "$", "`", chr(10)}
+
+    def bash_accurate(text):
+        out, quote, i, n = list(text), None, 0, len(text)
+        while i < n:
+            ch = text[i]
+            if quote == sq:
+                if ch == sq:
+                    quote = None
+                else:
+                    out[i] = " "
+            elif ch == bs and i + 1 < n and (quote is None or text[i + 1] in dq_escapable):
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            elif quote == dq:
+                if ch == quote:
+                    quote = None
+                else:
+                    out[i] = " "
+            elif ch in sq + dq:
+                quote = ch
+                out[i] = " "
+            i += 1
+        return "".join(out)
+
+    # Every character that can reach `_strip_quoted` and change where a span
+    # ends or where an operator is found: the quotes and the escape, the five
+    # shell operators rule 8 stops at (`|`, `;`, `&`, `<`, `>`), `$` and the
+    # backtick (substitution), `/` (the leading slash rule 8 is ABOUT), and one
+    # ordinary letter to stand for inert text. `/` and `<` were missing here
+    # while the docstring claimed them (#1313 review), which is the drift the
+    # count check below now makes impossible.
+    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", "/", "<", ">"]
+    max_length = 5
+
+    # The docstring states this measurement as a number, and a number in prose
+    # drifts from the test that is supposed to back it -- which is exactly what
+    # happened: it claimed 177,155 strings over 11 characters to length 5 while
+    # this test enumerated 11,110 over 10 characters to length 4, so the
+    # "measured exhaustively" sentence was backed by 6% of the corpus it named.
+    # Deriving the claim from the corpus means neither side can move alone.
+    corpus_size = sum(len(alphabet) ** n for n in range(1, max_length + 1))
+    claimed = re.search(r"to\s+length\s+(\d+)\s*--\s*([\d,]+)\s+strings",
+                        gb._strip_quoted.__doc__ or "", re.S)
+    record("the docstring's corpus claim matches the corpus this test walks",
+           bool(claimed)
+           and int(claimed.group(1)) == max_length
+           and int(claimed.group(2).replace(",", "")) == corpus_size,
+           f"docstring says {claimed.groups() if claimed else None}, "
+           f"test walks length {max_length} / {corpus_size:,} strings")
+
+    diffs = []
+    walked = 0
+    for length in range(1, max_length + 1):
+        for combo in itertools.product(alphabet, repeat=length):
+            s = "".join(combo)
+            walked += 1
+            if gb._strip_quoted(s) != bash_accurate(s):
+                diffs.append(s)
+                if len(diffs) >= 5:
+                    break
+        if diffs:
+            break
+    record("_strip_quoted's broader escape rule never changes what it blanks",
+           not diffs,
+           "\n".join(f"{s!r}: scanner={gb._strip_quoted(s)!r} "
+                     f"bash-accurate={bash_accurate(s)!r}" for s in diffs))
+    # A corpus that silently shrinks is the failure this test had; assert the
+    # walk actually completed rather than inferring it from the absence of
+    # diffs, which an empty corpus also produces.
+    record("the equivalence walk covered the whole corpus",
+           bool(diffs) or walked == corpus_size,
+           f"walked {walked:,} of {corpus_size:,} strings")
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -1048,6 +1201,7 @@ def main():
 
     print("guard_bash meta-tests (over the rule registry):")
     test_rule_polarity()
+    test_strip_quoted_matches_a_bash_accurate_scanner()
     test_rule_attribution()
     test_refusal_site_coverage()
 

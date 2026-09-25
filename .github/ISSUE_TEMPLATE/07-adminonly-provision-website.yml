@@ -35,7 +35,7 @@ body:
         - ❌ `[WEBSITE REQUEST] www.freeforcharity.org`
 
         **What this does**
-        - Creates `FFC-EX-<domain>` from `FreeForCharity/FFC_Single_Page_Template`.
+        - Creates `FFC-EX-<domain>` from `FreeForCharity/FFC-IN-Footer_Only_Template`.
         - Enables GitHub Pages and (if the zone is controlled in FFC Cloudflare) sets the
           Pages custom domain to the apex.
         - Enforces standard apex + `www` GitHub Pages DNS in Cloudflare.

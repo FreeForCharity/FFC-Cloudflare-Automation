@@ -173,6 +173,59 @@ def test_ac1_the_query_filters_on_merged_at_rather_than_on_closed():
     assert "load-bearing" in section
 
 
+def test_ac1_the_query_windows_on_update_time_rather_than_creation_time():
+    """The window must be the newest 20 by *update*, not by creation.
+
+    `sort` defaults to `created`, so the default window is the newest 20 PRs by
+    creation -- and the stalled PRs are by definition the oldest-created ones, so
+    the moment one merges it is exactly the merge that window drops. Measured on
+    this repo when the finding landed: the newest 20 closed-by-creation reached
+    back only to 2026-09-22 while #1341 was created 09-19.
+    """
+    section = _section()
+    assert "sort=updated" in section, (
+        "the documented query uses the default `created` sort, so its window is the "
+        "newest PRs by creation rather than the newest merges"
+    )
+
+
+def test_ac1_the_query_pins_the_sort_direction():
+    """`sort=updated` WITHOUT `direction=desc` is strictly worse than no sort.
+
+    `direction` defaults to `desc` only while `sort` is `created` or absent; once
+    a `sort` is named it defaults to `asc`. Measured: `state=closed&sort=updated`
+    with no direction returns PRs #1, #3 and #5, merged in November 2025 -- zero
+    recent merges off a ten-month-old page, i.e. the absent-human reading. So the
+    two parameters are a pair, and a half-applied fix is a regression.
+    """
+    section = _section()
+    assert "direction=desc" in section, (
+        "the documented query names a `sort` without pinning `direction`, which "
+        "defaults to `asc` and returns the OLDEST page"
+    )
+    # The trap must be written down, not just avoided: the next editor adding a
+    # sort elsewhere needs to know why the direction is there.
+    flat = _section_flat().lower()
+    assert "defaults to `asc`" in flat, (
+        "the section does not record that naming a sort flips the direction default "
+        "to asc -- the reason `direction=desc` is not optional"
+    )
+
+
+def test_ac1_the_mcp_spelling_carries_the_same_two_parameters():
+    """The worker's client has the identical `asc` default, measured through it.
+
+    A `gh` example that is correct beside an MCP spelling that is not would send
+    the one agent that hits this state every run down the broken path.
+    """
+    flat = _section_flat()
+    assert "`direction: desc`" in flat, (
+        "the MCP spelling omits `direction: desc`, so the sandboxed worker -- the "
+        "only regular reader of this section -- gets the ascending page"
+    )
+    assert "`sort: updated`" in flat, "the MCP spelling omits `sort: updated`"
+
+
 def test_ac1_is_executable_by_the_agent_class_that_reads_it():
     """The sandboxed worker has no `gh` CLI (#1360), so a `gh`-only instruction
     is unrunnable by the one reader that hits this state every run."""

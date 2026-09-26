@@ -550,15 +550,39 @@ different escalations:
 One call decides it:
 
 ```bash
-gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/pulls?state=closed&per_page=20' \
+gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/pulls?state=closed&sort=updated&direction=desc&per_page=20' \
   --jq '.[] | select(.merged_at) | "\(.merged_at) #\(.number) \(.title)"'
 ```
 
-`select(.merged_at)` is load-bearing, not tidiness: `state=closed` returns closed-**unmerged** PRs
-too, and counting one of those as a merge turns starvation back into absence — the wrong answer in
-the reassuring direction. **The sandboxed worker has no `gh` CLI at all** (#1360), so from there
-read the same fact through `mcp__github__list_pull_requests` with `state: closed`, `sort: updated`
-and the `merged_at` field. The discriminator is the field, not the client.
+Three parameters are each load-bearing, and dropping any one of them fails **toward the absent-human
+reading** — the wrong answer, in the reassuring direction. All three were measured, two of them
+after this section shipped without them:
+
+- **`select(.merged_at)`**, because `state=closed` returns closed-**unmerged** PRs too, and counting
+  one of those as a merge turns starvation back into absence.
+- **`sort=updated`**, because the default is `created` — and the window is then the newest 20 PRs
+  _by creation_, which is not the newest 20 merges. **This repo is a live instance, not a
+  hypothetical:** the newest 20 closed-by-creation reach back only to 2026-09-22, while #1341 was
+  created 09-19. The stalled PRs are by definition the **oldest-created** ones, so the moment one of
+  them merges it is exactly the merge a `created`-sorted window drops. The discriminator would go
+  blind to the event it exists to detect.
+- **`direction=desc`**, and this one is a trap rather than a refinement. `direction` defaults to
+  `desc` only while `sort` is `created` or absent; **once you name a `sort` it defaults to `asc`.**
+  Measured: `state=closed&sort=updated` with no direction returns PRs **#1, #3 and #5, merged in
+  November 2025**. So adding `sort=updated` _alone_ is strictly worse than changing nothing — it
+  reports zero recent merges off a ten-month-old page. The two parameters are a pair; never add the
+  first without the second.
+
+**The sandboxed worker has no `gh` CLI at all** (#1360), so from there read the same fact through
+`mcp__github__list_pull_requests` with `state: closed`, `sort: updated`, **`direction: desc`** and
+the `merged_at` field — the `asc` default applies identically there, and it was measured through
+that client. The discriminator is the field, not the client.
+
+One residual imprecision, stated rather than left to be rediscovered: `updated_at` is not
+`merged_at`, so an old PR commented on today outranks an untouched newer merge. It is a sound
+**bound** rather than an ordering — `merged_at <= updated_at` always — so one page suffices unless
+the page's oldest `updated_at` is still above the newest `merged_at` seen, in which case page
+forward. #1341's `79e230e` paid for that reasoning in code; this is the hand-run form of it.
 
 Measured instance — the run that filed #1388 and the run that fixed it: `main` had advanced **ten**
 times on 2026-09-24/25 (#1370 #1371 #1373 #1374 #1376 #1378 #1379 #1382 #1383 #1384), **zero** of

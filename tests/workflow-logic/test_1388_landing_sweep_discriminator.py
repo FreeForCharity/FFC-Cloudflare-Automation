@@ -62,6 +62,27 @@ def _agents_text() -> str:
     return AGENTS.read_text(encoding="utf-8")
 
 
+def _section_flat() -> str:
+    """The section with every run of whitespace collapsed to one space.
+
+    Two properties, both learned from the mutation pass on this very module:
+
+    * **It survives a prettier reflow.** The assertions below match whole
+      requirement clauses rather than bare phrases, and prettier wraps
+      `AGENTS.md` at 100 columns, so a literal that reads as one sentence in the
+      source is split across lines in the file. Matching against the flattened
+      view is what lets a test assert the sentence instead of a fragment.
+    * **It is what makes those long literals affordable.** Three mutations
+      originally SURVIVED this module because each assertion was a short phrase
+      (`"identical"`, `"consecutive runs"`, `"end state"`) that a *different,
+      unrelated sentence in the same section* already satisfied -- `"identical"`
+      by the word "identically" two paragraphs up, for instance. Slicing to the
+      section was necessary and not sufficient: within one section a phrase can
+      still be answered by the wrong sentence.
+    """
+    return re.sub(r"\s+", " ", _section())
+
+
 def _section() -> str:
     """Return the landing-sweep section, or fail naming the missing boundary.
 
@@ -170,7 +191,10 @@ def test_ac1_is_executable_by_the_agent_class_that_reads_it():
 def test_ac2_escalation_strength_is_tied_to_persistence():
     section = _section()
     lowered = section.lower()
-    assert "consecutive runs" in lowered, (
+    # The REQUIREMENT, not the phrase. `"consecutive runs"` alone is satisfied by
+    # the worked example's "fifteen consecutive runs filed a two-week stall" two
+    # paragraphs down -- that mutation survived until this assertion was tightened.
+    assert "how many consecutive runs" in _section_flat().lower(), (
         "the section does not require the consecutive-run count, so a two-week stall "
         "reads like one that started this morning"
     )
@@ -188,15 +212,17 @@ def test_ac2_records_that_the_cap_can_only_rise():
 
 
 def test_ac3_forbids_a_note_identical_to_the_last_one():
-    section = _section()
-    lowered = section.lower()
-    assert "identical" in lowered, (
+    # `"identical"` alone survived a mutation that deleted the prohibition
+    # outright: the word is already present up in the AC1 paragraph, as
+    # "renders two different situations identically". Assert the prohibition.
+    flat = _section_flat().lower()
+    assert "never post a note byte-identical to the previous one" in flat, (
         "the section does not forbid re-posting the same note, which is what let "
         "fifteen of them pass unread"
     )
     # The prohibition is only actionable if the section names figures that change
     # even when the verdict does not.
-    assert "merge-activity reading" in lowered
+    assert "merge-activity reading" in flat
 
 
 # --------------------------------------------------------------------------
@@ -263,8 +289,13 @@ def test_ac5_requires_the_resolution_end_state_not_just_the_conflict():
     """'These two conflict' is not actionable. The red lands on a resolution that
     applies cleanly and still fails CI."""
     section = _section()
-    lowered = section.lower()
-    assert "end state" in lowered, "the section does not require the resolution's end state"
+    # `"end state"` alone survived a mutation that deleted the requirement: the
+    # worked example's "The correct end state is the same whichever merges second"
+    # satisfied it. Assert the instruction, not the noun phrase.
+    assert "for each coupling give the end state" in _section_flat().lower(), (
+        "the section does not REQUIRE the resolution's end state per coupling -- "
+        "'these two conflict' is not actionable"
+    )
     assert "reserved-ids" in section, "the known both-directions case is not named"
     assert "#1278" in section, "the concurrent-ledger-id issue is not cited"
 

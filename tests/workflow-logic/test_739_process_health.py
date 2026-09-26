@@ -1318,11 +1318,14 @@ def test_a_quoted_bold_header_cannot_fake_a_heartbeat():
     """The 739-specific narrowing, and the reason this pattern is NOT a copy of
     747's.
 
-    `conductor-liveness-lib.js`'s CONDUCTOR_RE admits `>` in its prefix class on
-    purpose — it scans for liveness only and can afford to be generous. This
+    #1341's `CONDUCTOR_RE` admits `>` in its prefix class on purpose — it scans
+    for liveness only and can afford to be generous. (That module arrives as
+    `scripts/conductor-liveness-lib.js` when #1341 lands and is not in this tree
+    yet, so the claim is checkable on the PR rather than in the checkout.) This
     module pairs START with END, so a blockquoted END can retire a live alarm as
     well as fake a heartbeat, and the widening must not have picked `>` up along
-    with the formats.
+    with the formats — which is why this assertion is not inherited from 747 and
+    cannot be dropped once the two modules sit side by side.
     """
     quoted = _comment("2026-09-14T10:20:04Z", f"> {LIVE_174_END}\n\nquoting the Conductor.")
     sil = _sil([quoted], now=AFTER_174)

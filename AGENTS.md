@@ -624,9 +624,13 @@ have exhausted the points budget for hours.
     would write the heading-only pattern again, which is what `739`'s
     `scripts/process-health-metrics-lib.js` had — so it reported "has not run since run 163" (#1343)
     while `747` and #1339 both read run **174**, the era ceiling rather than the Conductor's last
-    breath (#1353). The current enumeration lives in **one** place, and it is code rather than
-    prose: `CONDUCTOR_RE` in `scripts/conductor-liveness-lib.js`. Read it instead of retyping a
-    format from a doc, this one included.
+    breath (#1353). Read the enumeration out of **code** rather than retyping it from a doc, this
+    one included — `RUN_HEADER` in `scripts/process-health-metrics-lib.js` is the copy that is in
+    the tree today. A second copy, `CONDUCTOR_RE`, arrives as `scripts/conductor-liveness-lib.js`
+    when [#1341](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/1341) lands; the
+    two diverge **on purpose** (747 admits a blockquote prefix and scans the whole body, 739 refuses
+    both because it also pairs START with END), so read whichever module you are editing and expect
+    them to differ. The table below is a reading aid, not the source.
 
     | era      | spelling                          |
     | -------- | --------------------------------- |

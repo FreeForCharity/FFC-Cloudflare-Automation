@@ -44,9 +44,11 @@ const SILENT_THRESHOLD_HOURS = 48;
 // header cannot forge a START or — worse — clear a real one with a forged END.
 //
 // #719 has carried THREE spellings, and this pattern read only the middle one
-// until #1353. The format archaeology is #1341's, in
-// `scripts/conductor-liveness-lib.js`; this enumeration reuses it rather than
-// re-deriving it:
+// until #1353. The format archaeology is #1341's — its `CONDUCTOR_RE`, which
+// arrives as `scripts/conductor-liveness-lib.js` when
+// https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/1341 lands and
+// is NOT in this tree yet, so read it there rather than here. This enumeration
+// reuses it rather than re-deriving it:
 //
 //   run 167+   `**Conductor run 174 — END** (2026-09-14 10:04–10:20Z)`   bold
 //   ~87–166    `## Run 166 — END`                                        heading
@@ -59,8 +61,9 @@ const SILENT_THRESHOLD_HOURS = 48;
 // how #1343 came to report `run 163` while #1339 and #1341 both read run 174:
 // the ceiling was the pattern's, not the Conductor's. Ledger L215.
 //
-// Three deliberate differences from `conductor-liveness-lib.js`'s CONDUCTOR_RE,
-// all in the strict direction, because this module's forgery surface is wider:
+// Three deliberate differences from #1341's `CONDUCTOR_RE` (see above — that file
+// is not in this tree yet), all in the strict direction, because this module's
+// forgery surface is wider:
 //
 //  1. **No `>` in the prefix class.** #719 is written to by cloud workers and
 //     bots that quote the Conductor constantly, and a blockquoted `END` here

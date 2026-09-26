@@ -108,10 +108,12 @@ jobs:
           set -euo pipefail
           echo "Applying $CHARITY to $TEMPLATE"
           python3 tests/workflow-logic/apply_sample_charity.py --charity "$CHARITY" --repo site
-          echo "## $CHARITY on $TEMPLATE" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          git -C site status --short >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## $CHARITY on $TEMPLATE"
+            echo '```'
+            git -C site status --short
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # The checks each template's own CI runs (ci.yml + drift-check.yml). Every
       # step runs even after an earlier one fails, so one run reports them all.

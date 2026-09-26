@@ -197,7 +197,73 @@ def test_footer_link_must_be_https():
             {"inputs": {"domain": "example.org", "volunteer_url": "http://example.org/help"}},
         )
     )
-    assert r["failed"] and "Volunteer Page URL must start with https://" in r["failed"], r
+    assert r["failed"] and "Volunteer Page URL must be an https:// URL" in r["failed"], r
+
+
+def test_a_bare_or_spaced_url_is_rejected_where_the_requester_sees_why():
+    # The content script only accepts ^https://\S+$; anything else would be
+    # silently dropped there, so the parse must refuse it here.
+    for bad in ("https://", "https://ok.org/donate page"):
+        r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "donation_url": bad}}))
+        assert r["failed"] and "Donation Page URL" in r["failed"], (bad, r)
+
+
+def test_either_template_can_be_requested_by_dispatch():
+    for repo in (
+        "FreeForCharity/FFC-IN-Footer_Only_Template",
+        "FreeForCharity/FFC-IN-FFC_Single_Page_Template",
+    ):
+        for event, payload in (
+            ("workflow_dispatch", {"inputs": {"domain": "example.org", "template_repo": repo}}),
+            ("repository_dispatch", {"client_payload": {"domain": "example.org", "template_repo": repo}}),
+        ):
+            r = run_parse(ctx(event, payload))
+            assert r["failed"] is None, (event, r)
+            assert r["outputs"]["template_repo"] == repo, (event, r)
+
+
+def test_an_unlisted_template_repo_is_refused():
+    # client_payload is not constrained by the dispatch choice list, and the
+    # value reaches `gh repo create --template`.
+    payload = {"client_payload": {"domain": "example.org", "template_repo": "SomeoneElse/evil-template"}}
+    r = run_parse(ctx("repository_dispatch", payload))
+    assert r["failed"] and "Unknown template_repo" in r["failed"], r
+    assert "template_repo" not in r["outputs"], r
+
+
+def test_the_contact_email_must_be_one_plain_address():
+    for good in ("info@example.org", "o'brien+give@example.org"):
+        r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_email": good}}))
+        assert r["failed"] is None, (good, r)
+    for bad in ("a@example.org,b@example.com", "a b@example.org", "a@example.org?cc=b@x.org", "a@x"):
+        r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_email": bad}}))
+        assert r["failed"] and "not a single plain email address" in r["failed"], (bad, r)
+
+
+def test_an_issue_form_address_uses_real_newlines():
+    body = "\n\n".join(
+        [
+            "### Website Domain (no http://)\n\nexample.org",
+            "### Footer Mailing Address Line 1\n\n12 Main St",
+            "### Footer Mailing City\n\nSpringfield",
+            "### Footer Mailing State/Province\n\nIL",
+            "### Footer Mailing Postal Code\n\n62701",
+        ]
+    )
+    payload = {
+        "action": "assigned",
+        "issue": {
+            "number": 8,
+            "title": "[WEBSITE REQUEST] example.org",
+            "body": body,
+            "labels": [{"name": "website-request"}, {"name": "admin-provision"}],
+            "user": {"login": "reporter"},
+        },
+    }
+    r = run_parse(ctx("issues", payload))
+    assert r["failed"] is None, r
+    address = json.loads(r["outputs"]["footer_address_json"])
+    assert address == "12 Main St\nSpringfield, IL, 62701\nUnited States", repr(address)
 
 
 def test_footer_fields_from_repository_dispatch_payload():
@@ -264,6 +330,18 @@ def test_footer_field_labels_match_the_issue_template():
 def test_default_template_is_footer_only():
     r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org"}}))
     assert r["outputs"]["template_repo"] == "FreeForCharity/FFC-IN-Footer_Only_Template", r
+
+
+def test_a_recognized_501c3_must_give_candid_links_and_a_pending_one_need_not():
+    # The form's values contain "501(c)(3)" in BOTH options, so the check is
+    # anchored; before, it matched neither and never required the links.
+    recognized = {"domain": "example.org", "irs_status": "501(c)(3) (approved)"}
+    r = run_parse(ctx("workflow_dispatch", {"inputs": recognized}))
+    assert r["failed"] and "Candid / GuideStar Profile URL is required" in r["failed"], r
+
+    pending = {"domain": "example.org", "irs_status": "Not yet / pending (pre-501(c)(3))"}
+    r = run_parse(ctx("workflow_dispatch", {"inputs": pending}))
+    assert r["failed"] is None, r
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

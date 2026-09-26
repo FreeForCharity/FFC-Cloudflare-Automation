@@ -400,8 +400,11 @@ If the marker is already present, the workflow skips provisioning.
 For simplicity, this workflow currently hardcodes:
 
 - Target org: `FreeForCharity`
-- Template repo: `FreeForCharity/FFC-IN-Footer_Only_Template` (footer with mission line + Donate /
-  Volunteer links; the content job writes the charity's details into its `src/lib/site.config.ts`)
+- Template repo: `FreeForCharity/FFC-IN-Footer_Only_Template` by default (footer with mission line +
+  Donate / Volunteer links); a dispatch can pass `template_repo:
+  FreeForCharity/FFC-IN-FFC_Single_Page_Template` instead. Either way the content job writes the
+  charity's details into the template's `src/lib/site.config.ts`. Tested per template by **747**
+  (see `docs/testing-provisioning-with-sample-charities.md`).
 
 ## Deprecated workflows (backups only)
 
@@ -643,6 +646,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 744 | Repo - Public Feed Freshness [GH] | `744-repo-public-feed-freshness.yml` | schedule, workflow_dispatch | Reads | — |
 | 745 | Repo - Agentic OS Board Audit [GH] | `745-agentic-os-board-audit.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
 | 746 | Repo - Bulk Enable GitHub Pages [Repo] | `746-bulk-enable-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
+| 747 | Repo - Template Provisioning Matrix [Repo] | `747-template-provisioning-matrix.yml` | pull_request, schedule, workflow_dispatch | Reads | — |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

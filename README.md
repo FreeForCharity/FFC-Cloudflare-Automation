@@ -161,8 +161,11 @@ globally):
 This workflow currently hardcodes:
 
 - Target org: `FreeForCharity`
-- Template repo: `FreeForCharity/FFC-IN-Footer_Only_Template` (footer with mission line + Donate /
-  Volunteer links; the content job writes the charity's details into its `src/lib/site.config.ts`)
+- Template repo: `FreeForCharity/FFC-IN-Footer_Only_Template` by default (footer with mission line +
+  Donate / Volunteer links); a dispatch can pass
+  `template_repo: FreeForCharity/FFC-IN-FFC_Single_Page_Template` instead. Either way the content
+  job writes the charity's details into the template's `src/lib/site.config.ts`. Tested per template
+  by **747** (see `docs/testing-provisioning-with-sample-charities.md`).
 
 ## Quick Start
 

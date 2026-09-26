@@ -617,6 +617,27 @@ have exhausted the points budget for hours.
     returned. Applies to any extractor over an append-only log — #719, a changelog, a CI history.
     Ledger **L215**.
 
+    **And this bullet's own example went stale in exactly the way it warns about — #719 has carried
+    THREE formats, not two.** "Every run since ~87 writes `## Run N — START`" was true when it was
+    written and stopped being true at **run 167**, where the log switched to a **bold** form:
+    `**Conductor run 174 — END** (2026-09-14 10:04–10:20Z)`. An agent following the sentence above
+    would write the heading-only pattern again, which is what `739`'s
+    `scripts/process-health-metrics-lib.js` had — so it reported "has not run since run 163" (#1343)
+    while `747` and #1339 both read run **174**, the era ceiling rather than the Conductor's last
+    breath (#1353). Read the enumeration out of **code** rather than retyping it from a doc, this
+    one included — `RUN_HEADER` in `scripts/process-health-metrics-lib.js` is the copy that is in
+    the tree today. A second copy, `CONDUCTOR_RE`, arrives as `scripts/conductor-liveness-lib.js`
+    when [#1341](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/1341) lands; the
+    two diverge **on purpose** (747 admits a blockquote prefix and scans the whole body, 739 refuses
+    both because it also pairs START with END), so read whichever module you are editing and expect
+    them to differ. The table below is a reading aid, not the source.
+
+    | era      | spelling                          |
+    | -------- | --------------------------------- |
+    | run 167+ | `**Conductor run 174 — END** (…)` |
+    | ~87–166  | `## Run 166 — END`                |
+    | ≤86      | `RUN 86 START`                    |
+
 - **An unpaginated list read cannot support an ABSENCE claim.** `per_page=100` is the maximum, not a
   guarantee, and the **default is 30**. A truncated list is indistinguishable from a complete one,
   so "X is missing" / "nothing is pending" / "zero failures" drawn from one may simply be false —

@@ -38,12 +38,70 @@ const DEAD_RUN_THRESHOLD_HOURS = 2;
 // still narrow enough to catch a stop within the same week it happens.
 const SILENT_THRESHOLD_HOURS = 48;
 
-// The Conductor's own run headers on #719, e.g. `## Run 63 — START (…)`.
-// Matched against the FIRST line of a comment only (see findDeadConductorRuns):
-// the header is the first line by construction, and anchoring there means prose
-// in a later comment that quotes a header cannot forge a START or — worse —
-// clear a real one with a forged END.
-const RUN_HEADER = /^##[ \t]+Run[ \t]+(\d+)[ \t]+[—–-][ \t]+(START|END)\b/;
+// The Conductor's own run headers on #719. Matched against the FIRST line of a
+// comment only (see findDeadConductorRuns): the header is the first line by
+// construction, and anchoring there means prose in a later comment that quotes a
+// header cannot forge a START or — worse — clear a real one with a forged END.
+//
+// #719 has carried THREE spellings, and this pattern read only the middle one
+// until #1353. The format archaeology is #1341's — its `CONDUCTOR_RE`, which
+// arrives as `scripts/conductor-liveness-lib.js` when
+// https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/1341 lands and
+// is NOT in this tree yet, so read it there rather than here. This enumeration
+// reuses it rather than re-deriving it:
+//
+//   run 167+   `**Conductor run 174 — END** (2026-09-14 10:04–10:20Z)`   bold
+//   ~87–166    `## Run 166 — END`                                        heading
+//   ≤86        `RUN 86 START`                                            bare
+//
+// The old pattern (`/^##[ \t]+Run[ \t]+(\d+)[ \t]+[—–-][ \t]+(START|END)\b/`)
+// matched the heading form ONLY, so from run 167 it stopped seeing heartbeats
+// altogether — and because the 28-day lookback still reached runs ≤166, it kept
+// returning a confident figure rather than the no-header warning below. That is
+// how #1343 came to report `run 163` while #1339 and #1341 both read run 174:
+// the ceiling was the pattern's, not the Conductor's. Ledger L215.
+//
+// Three deliberate differences from #1341's `CONDUCTOR_RE` (see above — that file
+// is not in this tree yet), all in the strict direction, because this module's
+// forgery surface is wider:
+//
+//  1. **No `>` in the prefix class.** #719 is written to by cloud workers and
+//     bots that quote the Conductor constantly, and a blockquoted `END` here
+//     would retire a live dead-run alarm as well as fake a heartbeat. 747 scans
+//     for liveness only and can afford to be generous; this one pairs
+//     START with END, so it cannot. Pinned by
+//     `test_a_quoted_header_cannot_retire_a_dead_run` and
+//     `test_a_quoted_header_cannot_fake_a_heartbeat`.
+//  2. **No `m` flag.** The caller passes a single trimmed first line, so `m`
+//     would be inert here — and adding it would silently turn this into a
+//     whole-body scan if the caller ever stopped slicing.
+//  3. A fenced header needs no rule: the first line of such a comment is the
+//     fence, which matches nothing.
+//
+// Shared with 747, and each for a measured reason:
+//  - `\*(?!\s)` admits `*` as an emphasis marker and never as a list bullet, so
+//    `* run 174 START` — an ordinary Markdown bullet any worker might write —
+//    is not a heartbeat. The newest match supplies the heartbeat timestamp, so
+//    one such line would report the Conductor alive while it is down.
+//  - the phase ends on `(?![A-Za-z0-9])` rather than `\b`, because `_` is a word
+//    character: `\b` rejects `_Conductor run 200 - END_` while accepting
+//    `**…END**`, which is an asymmetry inside the fix for a too-narrow pattern.
+//    The lookahead still refuses `STARTING` and `ENDED`.
+//  - the separator class holds LITERAL em dash, en dash and ASCII hyphen, and is
+//    optional for the pre-87 bare form. Those two non-ASCII bytes are the
+//    fragile thing here — a cp1252 round-trip that mangles them makes the class
+//    match nothing, which is the same silent L215 failure this widening fixes.
+//    `test_the_pattern_matches_every_separator_the_log_has_carried` is what
+//    defends them; a comment cannot.
+//
+// The `i` flag is load-bearing for EVERY form, not just the pre-87 `RUN 86 START`
+// that motivated it: the pattern spells the keyword lowercase, so dropping the
+// flag stops matching `## Run N — …` too. Measured — that one mutation reddens 23
+// tests across both 739 modules, where every other mutation here reddens 1 to 5.
+// Its consequence is that `m[2]` may arrive in any case, and callers MUST fold it
+// before comparing to 'END'.
+const RUN_HEADER =
+  /^(?:[#_ \t]|\*(?!\s))*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/i;
 
 const DAY_MS = 24 * 3600 * 1000;
 const HOUR_MS = 3600 * 1000;
@@ -373,6 +431,12 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours, opts) {
     const m = RUN_HEADER.exec(firstLine);
     if (!m) continue;
     const run = Number(m[1]);
+    // RUN_HEADER is case-insensitive (the pre-87 form is `RUN 86 START`), so the
+    // phase must be folded before it is compared. Reading `m[2]` raw would send
+    // a lowercase `end` down the START branch — recording an open run that had
+    // already closed, and reporting it dead once the threshold passed. Pinned by
+    // `test_a_lowercase_end_closes_the_run_rather_than_opening_one`.
+    const phase = m[2].toUpperCase();
     const stamp = c.created_at;
     const stampOk = stamp && !Number.isNaN(new Date(stamp).getTime());
     // Liveness is recorded BEFORE the END branch returns, and counts START and
@@ -384,7 +448,7 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours, opts) {
       lastHeaderIso = stamp;
       lastHeaderRun = run;
     }
-    if (m[2] === 'END') {
+    if (phase === 'END') {
       ended.add(run);
       continue;
     }
@@ -664,8 +728,10 @@ function renderReport(metrics, prev, opts) {
     if (sil.lastRunIso === null) {
       lines.push(
         `> Two things produce this reading: the Conductor stopped, **or** its run-header format ` +
-          `changed and no longer matches \`## Run N — START/END\`. Check #${LOG_ISSUE} before ` +
-          'concluding which — if headers are being posted, the scan needs fixing, not the routine.',
+          `changed and no longer matches any spelling this scan knows — ` +
+          `\`**Conductor run N — START/END**\`, \`## Run N — START/END\`, \`RUN N START\`. ` +
+          `Check #${LOG_ISSUE} before concluding which — if headers are being posted, the scan ` +
+          'needs fixing, not the routine.',
       );
       lines.push('>');
     }
@@ -951,7 +1017,8 @@ function renderSilenceIssueBody(silence, o) {
     lines.push('');
     lines.push(
       `Either the Conductor stopped, **or** its run-header format changed and no longer matches ` +
-        '`## Run N — START/END`. Check #' +
+        'any spelling this scan knows — `**Conductor run N — START/END**`, ' +
+        '`## Run N — START/END`, `RUN N START`. Check #' +
         LOG_ISSUE +
         ' before concluding which: if headers are being posted, the scan needs fixing and the ' +
         'routine does not.',
@@ -963,7 +1030,13 @@ function renderSilenceIssueBody(silence, o) {
   lines.push('');
   lines.push(
     '1. Restart the Conductor routine on its host.',
-    `2. Its first run posts a \`## Run N — START\` header on #${LOG_ISSUE}.`,
+    // Names the form the log ACTUALLY carries. This step said `## Run N — START`
+    // until #1353, which is the era #719 retired at run 167 — so the recovery
+    // runbook for this outage told its reader to watch for a header the Conductor
+    // does not write. Pinned by
+    // `test_the_recovery_step_names_the_header_the_conductor_actually_posts`.
+    `2. Its first run posts a \`**Conductor run N — START**\` header on #${LOG_ISSUE} ` +
+      '(the scan also accepts the older `## Run N — START/END` and `RUN N START` forms).',
     '3. The next 739 run sees that header, comments here naming the run that broke the silence, ' +
       'and closes this issue. **Do not close it by hand while the Conductor is still down** — ' +
       'the next run would simply reopen the alarm as a new issue, and the history would read as ' +

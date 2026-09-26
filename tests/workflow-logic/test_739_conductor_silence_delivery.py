@@ -498,6 +498,59 @@ def _delivery_step() -> dict:
     raise AssertionError("no silence-delivery step in 739")
 
 
+def test_the_zero_header_body_names_the_format_the_log_actually_uses():
+    """#1353. The hedge above is only checkable if it names a format the reader
+    can look for.
+
+    It named `## Run N — START/END` alone, which #719 retired at run 167 — so a
+    reader sent to compare would find the live bold headers, fail to match them
+    against the one format offered, and conclude the alarm was right. The alert
+    that exists to make a false positive detectable was pointing at the wrong
+    thing.
+
+    Asserted against the CALLOUT SECTION, not against the whole body, and that
+    is load-bearing rather than tidy. `What to do` step 2 also names all three
+    spellings, so a whole-body `in b` check passes while the hedge itself has
+    lost an era — measured: dropping the heading form from the hedge leaves every
+    whole-body assertion green, because step 2 supplies the same substring. A
+    verdict-only assertion is free to be right by accident, and slicing the
+    section is what makes this one read the text it is about.
+    """
+    b = body(NO_HEADER)
+    assert "## Two things produce this particular reading" in b, (
+        f"precondition: the hedge section must exist in a zero-header body: {b[:600]}"
+    )
+    hedge = b.split("## Two things produce this particular reading", 1)[1].split("## What to do", 1)[0]
+    assert "## What to do" in b, "precondition: the section must be bounded by the next heading"
+    for label, spelling in (
+        ("bold, #719's form since run 167", "**Conductor run N — START/END**"),
+        ("heading, ~87–166 and still inside the lookback", "## Run N — START/END"),
+        ("pre-87 bare", "RUN N START"),
+    ):
+        assert spelling in hedge, (
+            f"the hedge must name the {label} spelling, or a reader sent to #719 "
+            f"cannot check the cause it offers them: {hedge!r}"
+        )
+
+
+def test_the_recovery_step_names_the_header_the_conductor_actually_posts():
+    """#1353. The `What to do` step 2 is the one line in this issue a human acts on.
+
+    It said "Its first run posts a `## Run N — START` header" — the era #719
+    retired at run 167 — so the recovery runbook for this very outage pointed its
+    reader at a header the Conductor does not write. Worse than the hedge above
+    being stale: the hedge is a caveat, this is the instruction, and a reader who
+    follows it and sees no `## Run` concludes the Conductor is still down.
+    """
+    b = body(OUTAGE)
+    assert "**Conductor run N — START**" in b, (
+        f"step 2 must name the live bold form: {b[:900]}"
+    )
+    assert "`## Run N — START` header" not in b, (
+        "and must no longer name the retired heading form as the thing to expect"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -1193,6 +1193,202 @@ def test_the_workflow_discards_a_capped_read_rather_than_computing_from_it():
         "the discard must be inside the truncation branch"
     )
 
+# ---------------------------------------------------------------------------
+# RUN_HEADER covers every spelling #719 has carried (#1353).
+#
+# Until #1353 the pattern was `/^##[ \t]+Run[ \t]+(\d+)[ \t]+[—–-][ \t]+(START|END)\b/`
+# — the `## Run N — …` heading form and nothing else. #719 switched to a BOLD
+# form at run 167, so from that point 739 could not see a heartbeat at all; the
+# 28-day lookback still reached runs ≤166, so instead of the no-header warning it
+# returned a confident wrong figure. #1343's headline (`has not run since run
+# 163`, `Silent for: 197.4h`) is that artifact, and it disagreed with #1339 and
+# #1341, which both read run 174. The tell was two monitors disagreeing about one
+# fact — ledger L215.
+#
+# Every fixture below in the bold form is copied VERBATIM from #719, not retyped
+# from the issue that reported this: comment 5662468196, `created_at`
+# 2026-09-14T10:20:04Z. The fixtures that existed before #1353 were all written
+# in the retired heading form, which is why the suite was green on a pattern that
+# had stopped matching the log — the same shape as a fixture that tests something
+# easier than its name.
+#
+# Which of these discriminate: every test in this section fails on the pre-#1353
+# lib EXCEPT `test_a_bullet_mentioning_a_run_is_not_a_heartbeat`,
+# `test_prose_mentioning_a_run_number_is_not_a_heartbeat` and
+# `test_a_worker_comment_first_line_is_not_a_conductor_heartbeat`, which are
+# REGRESSION PINS on the widening — the old pattern rejected all three by being
+# too narrow to match anything, and they exist so the new one does not buy its
+# coverage by becoming loose.
+# ---------------------------------------------------------------------------
+
+# The live bytes. `—` is an em dash and `–` inside the parenthetical is an en
+# dash; both are load-bearing, and an encoding round-trip that mangles them must
+# fail this test rather than quietly stop matching the log (L215).
+LIVE_174_END = "**Conductor run 174 — END** (2026-09-14 10:04–10:20Z)"
+LIVE_174_AT = "2026-09-14T10:20:04Z"
+# 2026-09-15T00:00:00Z: ~13.7h after the live END, so it is INSIDE the 48h
+# silence threshold. A `now` past the threshold would make the liveness
+# assertions pass on a lib that never matched the header at all, since
+# `silent: True` is also what a zero-header read produces.
+AFTER_174 = "2026-09-15T00:00:00Z"
+
+
+def test_the_bold_form_the_log_uses_today_is_a_heartbeat():
+    """AC5's cross-check, pinned as a test rather than left in a PR body.
+
+    Replayed over the real comment, the fixed lib must agree with #1339 and
+    #1341 (run 174, 2026-09-14T10:20:04Z) rather than with #1343 (run 163).
+    """
+    sil = _sil([_comment(LIVE_174_AT, LIVE_174_END)], now=AFTER_174)
+    assert sil["lastRun"] == 174, (
+        f"the newest header on #719 is run 174, not 163 — #1343's figure is the "
+        f"pattern's ceiling, not the Conductor's: {sil}"
+    )
+    assert sil["lastRunIso"] == LIVE_174_AT, sil
+    assert sil["silent"] is False, (
+        f"13.7h is inside the 48h threshold, so this reads alive: {sil}"
+    )
+
+
+def test_the_pattern_matches_every_format_the_log_has_carried():
+    """Bold (run 167+), heading (~87–166), bare (≤86), and both emphasis markers.
+
+    Asserted one spelling at a time so a failure names the format that broke
+    rather than reporting that "the pattern" is wrong.
+    """
+    formats = {
+        "bold, live bytes": LIVE_174_END,
+        "bold START": "**Conductor run 174 — START** (2026-09-14 10:20Z)",
+        "heading form": "## Run 174 — END (2026-09-14 10:2xZ)",
+        "pre-87 bare form": "RUN 174 END",
+        "underscore emphasis": "_Conductor run 174 - END_",
+        "single-asterisk emphasis": "*Conductor run 174 — END*",
+    }
+    for label, first_line in formats.items():
+        sil = _sil([_comment(LIVE_174_AT, first_line)], now=AFTER_174)
+        assert sil["lastRun"] == 174, f"{label} is a heartbeat and was not read: {sil}"
+        assert sil["silent"] is False, f"{label}: {sil}"
+
+
+def test_the_pattern_matches_every_separator_the_log_has_carried():
+    """The em dash and en dash are the only non-ASCII bytes in the pattern.
+
+    A cp1252 round-trip that mangles them makes the separator class match
+    nothing, which is the same silent failure the widening exists to fix — and a
+    comment cannot defend against it. The absent separator is the pre-87 form.
+    """
+    for label, sep in (("em dash", " — "), ("en dash", " – "), ("hyphen", " - "), ("absent", " ")):
+        sil = _sil([_comment(LIVE_174_AT, f"**Conductor run 174{sep}END**")], now=AFTER_174)
+        assert sil["lastRun"] == 174, f"{label} separator: {sil}"
+
+
+def test_a_lowercase_end_closes_the_run_rather_than_opening_one():
+    """The `i` flag's own hazard, and it fails in the alarming direction.
+
+    The pre-87 form is `RUN 86 START`, so RUN_HEADER must be case-insensitive —
+    which means the phase capture may arrive in any case. Comparing it raw to
+    `'END'` sends a lowercase `end` down the START branch: the run is recorded as
+    open, never retired, and reported DEAD once the threshold passes. So the
+    widening that fixes a missed heartbeat would have manufactured a dead run.
+    """
+    ended = _comment("2026-08-01T01:05:45Z", "**Conductor run 63 — end** (2026-08-01T01:0xZ)")
+    cr = _dead([_start(63, "2026-08-01T01:00:00Z"), ended])
+    assert cr["count"] == 0, (
+        f"a lowercase END retires run 63; folding the capture is what does that: {cr}"
+    )
+    # `observed` is `started.size` — distinct runs that STARTed, not headers seen
+    # (lib:490). One run here either way, which is why `count` is the discriminator.
+    assert cr["observed"] == 1, f"run 63 is the only run in this fixture: {cr}"
+
+
+def test_the_bold_form_pairs_a_start_with_an_end():
+    """Liveness is not the only consumer: the dead-run scan reads the same
+    pattern, so a format it cannot match also breaks pairing — a bold START
+    would stay open forever and be reported dead while its bold END sat two
+    comments below it."""
+    cr = _dead([
+        _comment("2026-08-01T01:00:00Z", "**Conductor run 63 — START** (2026-08-01T01:0xZ)"),
+        _comment("2026-08-01T01:20:00Z", "**Conductor run 63 — END** (2026-08-01T01:2xZ)"),
+    ])
+    assert cr["count"] == 0, f"the pair must close: {cr}"
+    assert cr["observed"] == 1, f"one run, seen: a zero here would mean the START missed: {cr}"
+
+
+def test_a_quoted_bold_header_cannot_fake_a_heartbeat():
+    """The 739-specific narrowing, and the reason this pattern is NOT a copy of
+    747's.
+
+    `conductor-liveness-lib.js`'s CONDUCTOR_RE admits `>` in its prefix class on
+    purpose — it scans for liveness only and can afford to be generous. This
+    module pairs START with END, so a blockquoted END can retire a live alarm as
+    well as fake a heartbeat, and the widening must not have picked `>` up along
+    with the formats.
+    """
+    quoted = _comment("2026-09-14T10:20:04Z", f"> {LIVE_174_END}\n\nquoting the Conductor.")
+    sil = _sil([quoted], now=AFTER_174)
+    assert sil["lastRunIso"] is None, f"a blockquoted header is not a heartbeat: {sil}"
+    assert sil["silent"] is True, sil
+
+
+def test_a_bullet_mentioning_a_run_is_not_a_heartbeat():
+    """REGRESSION PIN on the widening, in its worst direction.
+
+    `*` had to enter the prefix class for the bold form, and `[>#*_ \\t]*` would
+    have taken an ordinary Markdown bullet with it. The scan takes the NEWEST
+    match, so one `* run 174 START` in a worker's list supplies that comment's
+    `created_at` as the heartbeat — reporting the Conductor ALIVE while it is
+    down, which is the one direction every other guard here exists to prevent.
+    `\\*(?!\\s)` is the whole discriminator: emphasis binds to the text, a bullet
+    is followed by whitespace.
+    """
+    for bullet in ("* run 174 START", "- Run 174 — START", "  * Conductor run 174 — END"):
+        sil = _sil([_comment(LIVE_174_AT, f"{bullet}\n\na list, not a header.")], now=AFTER_174)
+        assert sil["lastRunIso"] is None, f"`{bullet}` is a list item, not a heartbeat: {sil}"
+
+
+def test_prose_mentioning_a_run_number_is_not_a_heartbeat():
+    """REGRESSION PIN. The separator became optional for the pre-87 bare form,
+    which is what makes prose reachable at all — `Run 174 was …` gets as far as
+    the phase and is refused there, and `STARTING`/`ENDED` are refused by the
+    `(?![A-Za-z0-9])` lookahead rather than by `\\b`."""
+    for line in (
+        "Run 174 was the last one before the outage",
+        "## Run 174 — STARTING now",
+        "### Run 63 started and died",
+        "## Runbook 174 — START",
+    ):
+        sil = _sil([_comment(LIVE_174_AT, f"{line}\n\nnarrative.")], now=AFTER_174)
+        assert sil["lastRunIso"] is None, f"`{line}` is prose, not a header: {sil}"
+
+
+def test_a_worker_comment_first_line_is_not_a_conductor_heartbeat():
+    """REGRESSION PIN, on live bytes. Both first lines are real #719 cloud-worker
+    comments (5663881555 and 5661963275) from the middle of the current outage,
+    so they are exactly the traffic that must not read as the supervisor."""
+    for line in (
+        "## Cloud worker — landing sweep (rule 1), 2026-09-14",
+        "## Cloud worker run — landing run (5 open `agentic-os` PRs ≥ 3, so no new work started)",
+    ):
+        sil = _sil([_comment(LIVE_174_AT, f"{line}\n\nRule 1 applied.")], now=AFTER_174)
+        assert sil["silent"] is True, f"a worker comment is not a heartbeat: {line} -> {sil}"
+        assert sil["lastRunIso"] is None, sil
+
+
+def test_the_silence_callout_names_the_format_the_log_actually_uses():
+    """The alert's false-alarm text named only the retired heading form, so a
+    reader sent to check #719 would compare the live bold headers against a
+    format nobody writes and conclude the scan was right. Naming all three is
+    what makes the second cause checkable."""
+    m = compute({"nowIso": CR_NOW, "logComments": [
+        _comment("2026-08-01T03:00:00Z", "## Cloud worker — landing run"),
+    ]})
+    body = render(m, None)
+    assert "**Conductor run N — START/END**" in body, (
+        f"the bold form is what #719 has carried since run 167: {body[:800]}"
+    )
+    assert "RUN N START" in body, "and the pre-87 bare form is still inside the lookback"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -498,6 +498,23 @@ def _delivery_step() -> dict:
     raise AssertionError("no silence-delivery step in 739")
 
 
+def test_the_zero_header_body_names_the_format_the_log_actually_uses():
+    """#1353. The hedge above is only checkable if it names a format the reader
+    can look for.
+
+    It named `## Run N — START/END` alone, which #719 retired at run 167 — so a
+    reader sent to compare would find the live bold headers, fail to match them
+    against the one format offered, and conclude the alarm was right. The alert
+    that exists to make a false positive detectable was pointing at the wrong
+    thing.
+    """
+    b = body(NO_HEADER)
+    assert "**Conductor run N — START/END**" in b, (
+        f"the bold form is what #719 has carried since run 167: {b[:800]}"
+    )
+    assert "RUN N START" in b, "and the pre-87 bare form is still inside the 28-day lookback"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

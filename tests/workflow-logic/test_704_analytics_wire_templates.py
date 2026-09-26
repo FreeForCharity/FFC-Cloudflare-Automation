@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -86,6 +87,15 @@ def summary(proc: subprocess.CompletedProcess) -> dict:
     return json.loads(proc.stdout[start:])
 
 
+def error_text(proc: subprocess.CompletedProcess) -> str:
+    """pwsh's error view as plain text. On a CI runner it colours the record and
+    wraps the message to the console width behind a `     | ` gutter, so a phrase
+    that spans a wrap is not a substring of the raw output."""
+    raw = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", proc.stdout + proc.stderr)
+    lines = [re.sub(r"^\s*\|\s?", "", line) for line in raw.splitlines()]
+    return " ".join(" ".join(lines).split())
+
+
 def test_footer_only_constant_is_rewired_and_reported_as_a_change():
     td = pathlib.Path(tempfile.mkdtemp())
     try:
@@ -127,7 +137,7 @@ def test_an_unrecognized_config_shape_fails_loudly_instead_of_reporting_wired():
         repo = make_repo(td, "export const somethingElse = 'GTM-TQ5H8HPR'\n")
         proc = wire(repo)
         assert proc.returncode != 0, proc.stdout
-        assert "neither a gtmId: key nor an exported GTM_ID constant" in proc.stdout + proc.stderr, (
+        assert "neither a gtmId: key nor an exported GTM_ID constant" in error_text(proc), (
             proc.stdout + proc.stderr
         )
     finally:

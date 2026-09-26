@@ -1389,6 +1389,11 @@ def test_the_silence_callout_names_the_format_the_log_actually_uses():
     assert "**Conductor run N — START/END**" in body, (
         f"the bold form is what #719 has carried since run 167: {body[:800]}"
     )
+    assert "## Run N — START/END" in body, (
+        "and the heading form, which is still inside the 28-day lookback — the first "
+        "revision of this test asserted 2 of the 3 spellings its own name claims, "
+        "which is the name-vs-content defect this PR's own review section is about"
+    )
     assert "RUN N START" in body, "and the pre-87 bare form is still inside the lookback"
 
 

@@ -1030,7 +1030,13 @@ function renderSilenceIssueBody(silence, o) {
   lines.push('');
   lines.push(
     '1. Restart the Conductor routine on its host.',
-    `2. Its first run posts a \`## Run N — START\` header on #${LOG_ISSUE}.`,
+    // Names the form the log ACTUALLY carries. This step said `## Run N — START`
+    // until #1353, which is the era #719 retired at run 167 — so the recovery
+    // runbook for this outage told its reader to watch for a header the Conductor
+    // does not write. Pinned by
+    // `test_the_recovery_step_names_the_header_the_conductor_actually_posts`.
+    `2. Its first run posts a \`**Conductor run N — START**\` header on #${LOG_ISSUE} ` +
+      '(the scan also accepts the older `## Run N — START/END` and `RUN N START` forms).',
     '3. The next 739 run sees that header, comments here naming the run that broke the silence, ' +
       'and closes this issue. **Do not close it by hand while the Conductor is still down** — ' +
       'the next run would simply reopen the alarm as a new issue, and the history would read as ' +

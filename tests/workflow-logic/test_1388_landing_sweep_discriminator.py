@@ -41,6 +41,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
@@ -173,6 +174,28 @@ def test_ac1_the_query_filters_on_merged_at_rather_than_on_closed():
     assert "load-bearing" in section
 
 
+def _documented_query_params() -> dict:
+    """Parse the `gh api` endpoint's query string out of the section.
+
+    Asked of the **URL**, not of the section, and that distinction is the whole
+    reason this helper exists. Asserting `"sort=updated" in section` passes while
+    the query itself has reverted, because the section also *explains* the
+    parameter two paragraphs down -- measured: mutations M13 and M14 both survived
+    that spelling. A section that documents a flag will always contain the flag's
+    name; only the query can say whether the flag is in the query.
+    """
+    section = _section()
+    m = re.search(r"gh api '([^']+)'", section)
+    assert m, "no single-quoted `gh api <endpoint>` found in the section"
+    endpoint = m.group(1)
+    assert "?" in endpoint, f"the documented endpoint carries no query string: {endpoint!r}"
+    query = endpoint.split("?", 1)[1]
+    # `parse_qs` drops a valueless key, which would silently excuse `&sort` with
+    # no value; keep_blank_values=True makes that a visible empty string instead.
+    parsed = urllib.parse.parse_qs(query, keep_blank_values=True)
+    return {k: v[-1] for k, v in parsed.items()}
+
+
 def test_ac1_the_query_windows_on_update_time_rather_than_creation_time():
     """The window must be the newest 20 by *update*, not by creation.
 
@@ -182,10 +205,14 @@ def test_ac1_the_query_windows_on_update_time_rather_than_creation_time():
     this repo when the finding landed: the newest 20 closed-by-creation reached
     back only to 2026-09-22 while #1341 was created 09-19.
     """
-    section = _section()
-    assert "sort=updated" in section, (
-        "the documented query uses the default `created` sort, so its window is the "
-        "newest PRs by creation rather than the newest merges"
+    params = _documented_query_params()
+    assert params.get("sort") == "updated", (
+        "the documented QUERY does not sort by `updated` (got "
+        f"{params.get('sort')!r}), so its window is the newest PRs by creation "
+        "rather than the newest merges"
+    )
+    assert params.get("state") == "closed", (
+        f"the documented query no longer restricts to closed PRs: {params!r}"
     )
 
 
@@ -198,10 +225,11 @@ def test_ac1_the_query_pins_the_sort_direction():
     recent merges off a ten-month-old page, i.e. the absent-human reading. So the
     two parameters are a pair, and a half-applied fix is a regression.
     """
-    section = _section()
-    assert "direction=desc" in section, (
-        "the documented query names a `sort` without pinning `direction`, which "
-        "defaults to `asc` and returns the OLDEST page"
+    params = _documented_query_params()
+    assert params.get("direction") == "desc", (
+        "the documented QUERY names a `sort` without pinning `direction=desc` (got "
+        f"{params.get('direction')!r}), which defaults to `asc` and returns the "
+        "OLDEST page -- strictly worse than not sorting at all"
     )
     # The trap must be written down, not just avoided: the next editor adding a
     # sort elsewhere needs to know why the direction is there.

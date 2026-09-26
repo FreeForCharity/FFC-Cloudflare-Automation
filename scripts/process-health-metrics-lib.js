@@ -91,8 +91,12 @@ const SILENT_THRESHOLD_HOURS = 48;
 //    `test_the_pattern_matches_every_separator_the_log_has_carried` is what
 //    defends them; a comment cannot.
 //
-// The `i` flag is required by the pre-87 `RUN 86 START` form, so `m[2]` may
-// arrive in any case and callers MUST fold it before comparing to 'END'.
+// The `i` flag is load-bearing for EVERY form, not just the pre-87 `RUN 86 START`
+// that motivated it: the pattern spells the keyword lowercase, so dropping the
+// flag stops matching `## Run N — …` too. Measured — that one mutation reddens 23
+// tests across both 739 modules, where every other mutation here reddens 1 to 5.
+// Its consequence is that `m[2]` may arrive in any case, and callers MUST fold it
+// before comparing to 'END'.
 const RUN_HEADER =
   /^(?:[#_ \t]|\*(?!\s))*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/i;
 

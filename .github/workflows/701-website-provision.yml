@@ -831,7 +831,7 @@ jobs:
             // Either template can be requested by dispatch (workflow_dispatch input or
             // the ffcadmin client_payload); issue-triggered runs use the default. The
             // allowlist is what makes a client_payload value safe to pass to
-            // `gh repo create --template`: anything else fails the run.
+            // `gh repo create --template`: anything else fails the run, whatever its source.
             const TEMPLATE_REPOS = [
               'FreeForCharity/FFC-IN-Footer_Only_Template',
               'FreeForCharity/FFC-IN-FFC_Single_Page_Template',
@@ -841,7 +841,13 @@ jobs:
               core.setFailed(`Unknown template_repo "${requestedTemplate}". Use one of: ${TEMPLATE_REPOS.join(', ')}.`);
               return;
             }
+            // Validate the RESOLVED value too, so an edited WEBSITE_TEMPLATE_REPO default
+            // cannot bypass the allowlist either.
             const templateRepo = requestedTemplate || process.env.WEBSITE_TEMPLATE_REPO || TEMPLATE_REPOS[0];
+            if (!TEMPLATE_REPOS.includes(templateRepo)) {
+              core.setFailed(`Template repo "${templateRepo}" is not an allowed template. Use one of: ${TEMPLATE_REPOS.join(', ')}.`);
+              return;
+            }
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             // Maintainers to add: requester + technical POC, deduped and validated

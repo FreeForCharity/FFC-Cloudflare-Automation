@@ -19,7 +19,7 @@ from wf_extract import child_env, step_github_script
 HARNESS = pathlib.Path(__file__).resolve().parent / "harness" / "github_script_shim.mjs"
 
 
-def run_parse(context: dict) -> dict:
+def run_parse(context: dict, **extra_env: str) -> dict:
     script = step_github_script("701-website-provision.yml", "resolve", "Parse Website Request")
     with tempfile.TemporaryDirectory() as td:
         script_file = pathlib.Path(td) / "script.js"
@@ -29,7 +29,7 @@ def run_parse(context: dict) -> dict:
         proc = subprocess.run(
             ["node", str(HARNESS)],
             env=child_env(
-                TEST_SCRIPT_FILE=str(script_file), TEST_CONTEXT_FILE=str(context_file)
+                TEST_SCRIPT_FILE=str(script_file), TEST_CONTEXT_FILE=str(context_file), **extra_env
             ),
             capture_output=True,
             text=True, encoding="utf-8",
@@ -229,6 +229,24 @@ def test_an_unlisted_template_repo_is_refused():
     r = run_parse(ctx("repository_dispatch", payload))
     assert r["failed"] and "Unknown template_repo" in r["failed"], r
     assert "template_repo" not in r["outputs"], r
+
+
+def test_the_resolved_template_is_allowlisted_whatever_its_source():
+    # The job-level WEBSITE_TEMPLATE_REPO default must not bypass the allowlist
+    # that guards `gh repo create --template` (issue-triggered runs use it).
+    for event, payload in (
+        ("workflow_dispatch", {"inputs": {"domain": "example.org"}}),
+        ("repository_dispatch", {"client_payload": {"domain": "example.org"}}),
+    ):
+        r = run_parse(ctx(event, payload), WEBSITE_TEMPLATE_REPO="SomeoneElse/evil-template")
+        assert r["failed"] and "is not an allowed template" in r["failed"], (event, r)
+        assert "template_repo" not in r["outputs"], (event, r)
+    r = run_parse(
+        ctx("workflow_dispatch", {"inputs": {"domain": "example.org"}}),
+        WEBSITE_TEMPLATE_REPO="FreeForCharity/FFC-IN-FFC_Single_Page_Template",
+    )
+    assert r["failed"] is None, r
+    assert r["outputs"]["template_repo"] == "FreeForCharity/FFC-IN-FFC_Single_Page_Template", r
 
 
 def test_the_contact_email_must_be_one_plain_address():

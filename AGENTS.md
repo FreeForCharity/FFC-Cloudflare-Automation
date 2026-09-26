@@ -526,13 +526,62 @@ natural terminal state, and that is what this section supplies.
 
 **A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
 review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
-PR against that test **before** starting a sweep.
+PR against that test **before** starting a sweep. Every clause is measured **per PR against
+`main`**, which is what the test is for and also its limit — read "the cohort is not the sum of its
+PRs" below before publishing any punch list built from it.
 
-**If _every_ open PR is complete, do not re-verify.** Post a one-paragraph "still blocked, nothing
-changed" note on #719, escalate the stall to a human, and spend the run on the backlog instead. The
-load-bearing clause is the last one: a fully-complete PR set means **no landing work is available**,
-not _work to redo_. Re-measuring an unchanged tree produces a verification matrix that reads like
-progress and moves nothing.
+**A fully-complete PR set is a reportable failure of the system, not a clean result.** It means no
+_worker_ action is available; it does not mean nothing is wrong. Five complete PRs aged 3–7 days is
+the pipeline not running. The framing this section used to carry — "no landing work is available,
+not _work to redo_" — is correct about the worker's next action and reads benign, and that is how
+fifteen consecutive runs filed a two-week stall as a routine no-op (#1388). Report it as a stall
+with a number attached, never as a state.
+
+**Do not re-verify an unchanged tree**: re-measuring produces a verification matrix that reads like
+progress and moves nothing. **But do measure the one thing the PRs cannot tell you — whether `main`
+is moving.** "Every PR is complete" renders two different situations identically, and they need
+different escalations:
+
+| reading                                      | cause                                                           | what the note must say                        |
+| -------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------- |
+| no merges at all in the recent window        | **nobody with promotion rights is present**                     | escalate the absence                          |
+| merges landing, none from the stalled cohort | **queue starvation** — a human is present, working another lane | escalate _that_, by name, with the punch list |
+
+One call decides it:
+
+```bash
+gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/pulls?state=closed&per_page=20' \
+  --jq '.[] | select(.merged_at) | "\(.merged_at) #\(.number) \(.title)"'
+```
+
+`select(.merged_at)` is load-bearing, not tidiness: `state=closed` returns closed-**unmerged** PRs
+too, and counting one of those as a merge turns starvation back into absence — the wrong answer in
+the reassuring direction. **The sandboxed worker has no `gh` CLI at all** (#1360), so from there
+read the same fact through `mcp__github__list_pull_requests` with `state: closed`, `sort: updated`
+and the `merged_at` field. The discriminator is the field, not the client.
+
+Measured instance — the run that filed #1388 and the run that fixed it: `main` had advanced **ten**
+times on 2026-09-24/25 (#1370 #1371 #1373 #1374 #1376 #1378 #1379 #1382 #1383 #1384), **zero** of
+them `agentic-os`, while #1341 #1346 #1347 #1361 #1386 sat `clean` and 0 behind. The Conductor
+really was down and promotion really was blocked _by the Conductor_ — so every fact quoted in
+support of the absent-human reading stayed true while the **inference** from it expired. L215's
+shape one level up: the premise went stale, not the evidence.
+
+**Escalate on persistence, not only on state.** Prescribing the same note however long the state has
+held is what made it unreadable. Carry these, and let them grow:
+
+- **how many consecutive runs** the cap has been held by complete PRs (fifteen, by #1388's count,
+  before anything said so);
+- **the age of the oldest complete PR**, in days — not "a while";
+- **whether that count rose since the last run.** The cap is **monotonic by construction**: each run
+  in the terminal state spends itself on the backlog, which opens one more PR, which becomes
+  complete, which raises the cap. No worker run can lower it. A stall two weeks old must not read
+  like one that started this morning.
+
+**Never post a note byte-identical to the previous one.** It is indistinguishable from the last
+fifteen, which is exactly why they went unread. At minimum it must carry the oldest-complete-PR age
+and the merge-activity reading above: both change even when the verdict does not, so a reader sees
+movement or its absence without diffing prose.
 
 **Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
 only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
@@ -550,6 +599,46 @@ PRs, which is a cap held entirely by work no worker could ever move.
 that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times correctly into #719
 across a 30-day outage, with 0 addressees). Post the note on #719 _and_ follow #1269 for the
 delivery channel rather than inventing one here.
+
+**The cohort is not the sum of its PRs — test it pairwise before publishing a punch list.**
+`mergeable_state: clean` and `behind=0` are each evaluated **against `main`**, independently per PR,
+so a set can be uniformly complete and still contain a pair whose **second** enqueue fails. Nothing
+in the four-part test asks whether the complete PRs are mergeable **with each other**, and a punch
+list that says "five enqueues, nothing else" inherits that gap: every clause true per PR, the batch
+conclusion false. One loop, seconds, no network:
+
+```bash
+git merge-tree --write-tree origin/<branch-a> origin/<branch-b>   # rc 0 = clean, rc 1 = conflict
+```
+
+⚠️ **Read the output, not only the exit code — and do not redirect it away.** `rc 1` is also what a
+**mistyped or unfetched ref** returns (`merge-tree: <ref> - not something we can merge`), measured
+identical to a real conflict. So the first draft of this bullet, which ended `>/dev/null`, made the
+two indistinguishable — and this failure points the expensive way: a phantom conflict invents a
+coupling that is not there, and the enqueuer then serializes the cohort or hand-resolves a file
+nothing is wrong with. A genuine conflict **names the path** with stage numbers:
+
+```
+100644 de98044…  1	docs/lessons-ledger.md
+100644 83b8316…  2	docs/lessons-ledger.md
+```
+
+That is CLAUDE.md's non-zero-exit rule applied to a doc rather than a test: a check asserting a
+failure code must also assert something about the output, or it cannot tell the system under test
+from its own harness. Caught by the test module for this section, on the command this section ships.
+
+Then publish an **order**, name the coupled pairs, and for each coupling give the end state the
+second merge must reach — not merely "these two conflict". **A conflict whose resolution has a
+correctness condition beyond applying cleanly is where the red actually lands**, because that
+resolution passes review by eye and fails CI. `docs/lessons-ledger.md`'s `reserved-ids` block is the
+known case (#1278): `test_lessons_ledger.py` fails in **both** directions — an undeclared gap is an
+error, and so is a reservation for an id that has since become a row.
+
+Measured on the #1388 cohort: nine of the ten pairs among #1341/#1346/#1347/#1361/#1386 compose
+cleanly. #1346 (which appends row `L302`) and #1347 (which appends `L303` **and** declares `L302` in
+`reserved-ids`) conflict in **either** order, and the natural resolution — markers removed, both
+rows kept, block untouched — then fails that module. The correct end state is the same whichever
+merges second: **both rows present in id order, and the `reserved-ids` block empty.**
 
 Two mechanics for whoever does have promotion authority, both already paid for:
 

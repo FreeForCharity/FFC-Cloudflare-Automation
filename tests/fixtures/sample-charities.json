@@ -1,0 +1,89 @@
+{
+  "$comment": "Fictional charities for reusable end-to-end testing of website provisioning (701) against either template. Every value is fake: domains carry an ffc-test- prefix, emails use the reserved .example TLD (RFC 2606), phones use the 555-01xx range reserved for fiction, EINs are 00-/99- placeholders, and social/LinkedIn URLs point at 'ffc-test' handles. Each charity's `inputs` object uses 701's workflow_dispatch input names verbatim, so it can be passed straight to `gh workflow run 701-website-provision.yml` or the MCP run_workflow tool (every value is a string). `expect` records what the content step must produce for it. tests/workflow-logic/test_sample_charities.py validates this file; workflow 747 applies every charity to both templates and runs each template's own checks.",
+  "charities": [
+    {
+      "id": "riverbend-pantry",
+      "covers": "The complete happy path: a recognized 501(c)(3) with Candid profile URLs, a donation page, a volunteer page, all four required social links, and five leaders (two rows of team cards).",
+      "inputs": {
+        "domain": "ffc-test-riverbend-pantry.org",
+        "charity_name": "Riverbend Community Pantry",
+        "mission": "We stock free groceries and hot meals for every family in the Riverbend valley who needs them.",
+        "footer_email": "hello@riverbend-pantry.example",
+        "footer_phone": "(555) 010-0101",
+        "footer_address": "400 Mill Street\nRiverbend, OR 97000",
+        "footer_ein": "99-0000101",
+        "irs_status": "501(c)(3) (approved)",
+        "guidestar_profile_url": "https://www.guidestar.org/profile/99-0000101",
+        "guidestar_direct_profile_url": "https://www.guidestar.org/profile/shared/ffc-test-riverbend",
+        "donation_url": "https://www.zeffy.com/en-US/donation-form/ffc-test-riverbend-pantry",
+        "volunteer_url": "https://www.idealist.org/en/nonprofit/ffc-test-riverbend-pantry",
+        "social_links": "facebook: https://www.facebook.com/ffc-test-riverbend\nx: https://x.com/ffctestriverbnd\nlinkedin: https://www.linkedin.com/company/ffc-test-riverbend\ngithub: https://github.com/ffc-test-riverbend",
+        "leadership_lines": "Avery Stone | President | https://www.linkedin.com/in/ffc-test-avery\nJordan Lee | Vice President\nSam Rivera | Treasurer\nCasey Morgan | Secretary\nRiley Chen | Board Member at Large"
+      },
+      "expect": {
+        "donate": "url",
+        "volunteer": "url",
+        "twitter_handle": "@ffctestriverbnd",
+        "team_size": 5,
+        "candid": "given",
+        "tax_status_label": "a US 501c3 Non Profit"
+      }
+    },
+    {
+      "id": "st-marys-shelter",
+      "covers": "A pre-501(c)(3) charity with no Candid URLs (derived from the EIN), no donation or volunteer page (both links fall back to emailing the charity), and punctuation that must survive TypeScript string escaping: an apostrophe and an ampersand in the name.",
+      "inputs": {
+        "domain": "ffc-test-st-marys-shelter.org",
+        "charity_name": "St. Mary's Shelter & Kitchen",
+        "mission": "We offer a warm bed, a hot meal and a friendly face to anyone sleeping rough in our town.",
+        "footer_email": "office@st-marys-shelter.example",
+        "footer_phone": "555-010-0202",
+        "footer_address": "18 Chapel Lane\nSpringfield, IL 62701",
+        "footer_ein": "99-0000202",
+        "irs_status": "Not yet / pending (pre-501(c)(3))",
+        "guidestar_profile_url": "",
+        "guidestar_direct_profile_url": "",
+        "donation_url": "",
+        "volunteer_url": "",
+        "social_links": "facebook: https://www.facebook.com/ffc-test-stmarys\nx: https://x.com/ffcteststmarys\nlinkedin: https://www.linkedin.com/company/ffc-test-stmarys\ngithub: https://github.com/ffc-test-stmarys",
+        "leadership_lines": "President - Maria O'Brien\nTreasurer - Tom Nguyen\nSecretary - Priya Shah"
+      },
+      "expect": {
+        "donate": "mailto",
+        "volunteer": "mailto",
+        "twitter_handle": "@ffcteststmarys",
+        "team_size": 3,
+        "candid": "derived-from-ein",
+        "tax_status_label": ""
+      }
+    },
+    {
+      "id": "cafe-eclair-arts",
+      "covers": "Adversarial text: accented and non-Latin characters, a multi-line mission that must collapse to one sentence, a double quote, a backslash, a dollar sign and a backtick (PowerShell and JS string-expansion hazards), a twitter.com (not x.com) social URL, and a single leader.",
+      "inputs": {
+        "domain": "ffc-test-cafe-eclair-arts.org",
+        "charity_name": "Café Éclair \"Arts\" Collective",
+        "mission": "We run free art classes for kids — paint, clay and $0 fees.\nEvery `Saturday`, rain or shine; 子ども welcome \\ all ages.",
+        "footer_email": "info@cafe-eclair.example",
+        "footer_phone": "+1 555 010 0303",
+        "footer_address": "7 Rue des Artistes, Suite 2\nPortland, ME 04101",
+        "footer_ein": "99-0000303",
+        "irs_status": "501(c)(3) (approved)",
+        "guidestar_profile_url": "https://www.guidestar.org/profile/99-0000303",
+        "guidestar_direct_profile_url": "https://www.guidestar.org/profile/shared/ffc-test-cafe-eclair",
+        "donation_url": "https://www.paypal.com/donate/?hosted_button_id=FFCTEST0303",
+        "volunteer_url": "",
+        "social_links": "facebook: https://www.facebook.com/ffc-test-cafe-eclair\nx: https://twitter.com/ffctestcafe\nlinkedin: https://www.linkedin.com/company/ffc-test-cafe-eclair\ngithub: https://github.com/ffc-test-cafe-eclair",
+        "leadership_lines": "Zoë Dubois | Founder & Director"
+      },
+      "expect": {
+        "donate": "url",
+        "volunteer": "mailto",
+        "twitter_handle": "@ffctestcafe",
+        "team_size": 1,
+        "candid": "given",
+        "tax_status_label": "a US 501c3 Non Profit"
+      }
+    }
+  ]
+}

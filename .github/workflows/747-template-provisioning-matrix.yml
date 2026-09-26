@@ -1,0 +1,143 @@
+name: '747. Repo - Template Provisioning Matrix [Repo]'
+run-name: 'Template provisioning matrix (${{ github.event_name }})'
+
+# Proves that website provisioning (701) produces a site that passes its OWN CI
+# on either template. For every template x sample charity pair it clones the
+# template's default branch, applies the charity from
+# tests/fixtures/sample-charities.json exactly as 701's content job does (701's
+# real parse script, then scripts/Apply-WebsiteReactTemplate.ps1), and runs the
+# checks that template's own CI runs.
+#
+# A red cell means a charity provisioned onto that template would ship a site
+# whose CI fails (and so never deploys), or would ship Free For Charity's
+# identity under the charity's name (the templates' drift checks catch that).
+#
+# Read-only: public template clones and a local build, no credentials, no
+# environment gate, no writes anywhere. It runs on PRs that change the
+# provisioning path, weekly (the templates change independently of this repo),
+# and on demand. The fast offline half of the same test runs on every PR as
+# tests/workflow-logic/test_sample_charities.py.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/Apply-WebsiteReactTemplate.ps1'
+      - 'tests/fixtures/sample-charities.json'
+      - 'tests/workflow-logic/apply_sample_charity.py'
+      - 'tests/workflow-logic/test_sample_charities.py'
+      - 'tests/workflow-logic/test_701_apply_website_template.py'
+      - 'tests/workflow-logic/test_701_parse.py'
+      - '.github/workflows/701-website-provision.yml'
+      - '.github/workflows/747-template-provisioning-matrix.yml'
+  schedule:
+    # Weekly, Tuesday 08:17 UTC
+    - cron: '17 8 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      charities: ${{ steps.ids.outputs.charities }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: List the sample charities
+        id: ids
+        shell: bash
+        run: |
+          set -euo pipefail
+          ids=$(python3 -c 'import json; print(json.dumps([c["id"] for c in json.load(open("tests/fixtures/sample-charities.json", encoding="utf-8"))["charities"]]))')
+          echo "Sample charities: $ids"
+          echo "charities=$ids" >> "$GITHUB_OUTPUT"
+
+  provision:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        template:
+          - FreeForCharity/FFC-IN-Footer_Only_Template
+          - FreeForCharity/FFC-IN-FFC_Single_Page_Template
+        charity: ${{ fromJSON(needs.plan.outputs.charities) }}
+    name: ${{ matrix.charity }} on ${{ matrix.template }}
+    env:
+      TEMPLATE: ${{ matrix.template }}
+      CHARITY: ${{ matrix.charity }}
+    steps:
+      - name: Checkout the automation repo (script, dataset, 701 parse)
+        uses: actions/checkout@v7.0.1
+
+      - name: Checkout the template
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ matrix.template }}
+          path: site
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install the template's dependencies
+        working-directory: site
+        shell: bash
+        run: |
+          set -euo pipefail
+          # corepack reads the exact pnpm version from the template's packageManager.
+          corepack enable
+          COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack pnpm install --frozen-lockfile
+
+      - name: Install PyYAML for the 701 parse harness
+        shell: bash
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+
+      - name: Provision the sample charity onto the template
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Applying $CHARITY to $TEMPLATE"
+          python3 tests/workflow-logic/apply_sample_charity.py --charity "$CHARITY" --repo site
+          {
+            echo "## $CHARITY on $TEMPLATE"
+            echo '```'
+            git -C site status --short
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The checks each template's own CI runs (ci.yml + drift-check.yml). Every
+      # step runs even after an earlier one fails, so one run reports them all.
+      - name: format:check
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm run format:check
+      - name: lint
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm run lint
+      - name: unit tests
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm test
+      - name: check:site-config
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm run check:site-config
+      - name: check:drift (no FFC identity left under the charity's name)
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm run check:drift
+      - name: build (static export)
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: corepack pnpm run build

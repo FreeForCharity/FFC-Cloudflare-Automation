@@ -59,6 +59,9 @@ export const siteConfig: SiteConfig = {
       mapUrl: 'https://www.google.com/maps/search/?api=1&query=4030+Wake+Forrest',
     },
   ],
+  foundingDate: '2014',
+  nonprofitStatus: 'https://schema.org/Nonprofit501c3',
+  taxStatusLabel: 'a US 501c3 Non Profit',
   guidestar: {
     profileUrl: 'https://www.guidestar.org/profile/46-2471893',
     directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',
@@ -123,6 +126,7 @@ FULL_ARGS = {
     "Mission": "We shelter families.\nEvery night.",
     "DonationUrl": "https://www.zeffy.com/donate/helping-hands",
     "VolunteerUrl": "http://not-https.example.org",
+    "IrsStatus": "501(c)(3) (approved)",
 }
 
 
@@ -152,20 +156,25 @@ def run_apply(repo: pathlib.Path, args: dict) -> subprocess.CompletedProcess:
     # Called the way 701 calls it: in-process, with real string arrays. `pwsh
     # -File` would flatten an array argument into one string.
     params = " ".join(f"-{k} {ps_literal(v)}" for k, v in args.items())
-    wrapper = repo.parent / "invoke.ps1"
-    wrapper.write_text(
-        f"& {ps_literal(str(SCRIPT))} -RepoPath {ps_literal(str(repo))} {params}\n"
-        "exit $LASTEXITCODE\n",
-        encoding="utf-8",
-    )
-    return subprocess.run(
-        ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(wrapper)],
-        env=child_env(),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=120,
-    )
+    # The wrapper lives in its own temp dir, never beside the repo: workflow 747
+    # applies to a checkout inside the Actions workspace.
+    with tempfile.TemporaryDirectory() as wd:
+        wrapper = pathlib.Path(wd) / "invoke.ps1"
+        wrapper.write_text(
+            f"& {ps_literal(str(SCRIPT))} -RepoPath {ps_literal(str(repo))} {params}\n"
+            "exit $LASTEXITCODE\n",
+            encoding="utf-8",
+        )
+        # Generous: against a real template the script runs the repo's pinned
+        # prettier through npx, which may download it first.
+        return subprocess.run(
+            ["pwsh", "-NoProfile", "-NonInteractive", "-File", str(wrapper)],
+            env=child_env(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=900,
+        )
 
 
 def applied(args: dict = FULL_ARGS, site_config: str = SITE_CONFIG):
@@ -188,7 +197,10 @@ def test_writes_the_charity_identity_into_site_config():
         assert "name: 'St. Mary\\'s Shelter'," in cfg, cfg
         # Multi-line input collapses to the single footer sentence, and the
         # template's FFC description is replaced by it too.
-        assert cfg.count("'We shelter families. Every night.'") == 3, cfg
+        # mission and shortDescription carry it verbatim; description extends
+        # it, because the templates require a description over 50 characters.
+        assert cfg.count("'We shelter families. Every night.'") == 2, cfg
+        assert "description: 'We shelter families. Every night. Learn about" in cfg, cfg
         assert "contactEmail: 'info@helpinghands.org'," in cfg, cfg
         assert "ein: '12-3456789'," in cfg, cfg
         assert "phone: { display: '(555) 123-4567', tel: '15551234567' }," in cfg, cfg
@@ -245,7 +257,7 @@ def test_keeps_ffc_attribution_and_drops_the_parent_org():
         assert "supportedBy: {\n    name: 'Free For Charity'," in cfg, cfg
         assert "parentOrg:" not in cfg.split("export const siteConfig")[1], cfg
         # Untouched keys, comments and code after the literal survive.
-        assert "keywords: ['nonprofit', 'charity']," in cfg, cfg
+        assert "keywords: ['nonprofit', 'charity', 'donate', 'volunteer'," in cfg, cfg
         assert "// Empty = the footer's Donate" in cfg, cfg
         assert "export function sitePath(path = '/'): string {" in cfg, cfg
     finally:
@@ -328,6 +340,109 @@ def test_a_template_shape_change_fails_loudly():
     try:
         assert proc.returncode != 0, proc.stdout
         assert "siteConfig has no 'ein' key" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+    finally:
+        shutil.rmtree(td)
+
+
+def test_an_issue_form_address_with_a_literal_backslash_n_is_split():
+    # 701's issue-form path used to emit "line1\\nline2" (a backslash and an n).
+    td, repo, proc = applied({**FULL_ARGS, "FooterAddress": "12 Main St\\nSpringfield, IL 62701"})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "lines: ['12 Main St', 'Springfield, IL 62701']," in cfg, cfg
+        assert "%5Cn" not in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_dollar_sign_in_the_email_is_written_literally_to_security_txt():
+    td, repo, proc = applied({**FULL_ARGS, "FooterEmail": "don$&ate@helpinghands.org"})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        body = read(repo, "public/security.txt")
+        assert body.startswith("Contact: mailto:don$&ate@helpinghands.org\n"), body
+    finally:
+        shutil.rmtree(td)
+
+
+def test_one_person_in_two_offices_gets_one_card_with_both_roles():
+    lines = ["Jane Doe | President", "Jane Doe | Secretary", "Jim Roe | Treasurer"]
+    td, repo, proc = applied({**FULL_ARGS, "LeadershipLines": lines})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        files = sorted(p.name for p in (repo / "src" / "data" / "team").glob("*.json"))
+        assert files == ["jane-doe.json", "jim-roe.json"], files
+        jane = json.loads(read(repo, "src/data/team/jane-doe.json"))
+        assert jane["role"] == "President & Secretary", jane
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_short_mission_still_yields_a_long_enough_description():
+    # The templates' own metadata test requires a description over 50 chars.
+    for mission in ("We shelter families.", ""):
+        td, repo, proc = applied({**FULL_ARGS, "Mission": mission})
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            import re
+
+            desc = re.search(r"description:\s*'((?:[^'\\]|\\.)*)'", cfg).group(1)
+            assert len(desc) > 50, (mission, desc)
+            assert "St. Mary" in desc, desc
+        finally:
+            shutil.rmtree(td)
+
+
+def test_ffc_tagline_keywords_and_founding_date_do_not_survive():
+    td, repo, proc = applied()
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "tagline: 'Nonprofit Organization'," in cfg, cfg
+        assert "keywords: ['nonprofit', 'charity', 'donate', 'volunteer', 'St. Mary\\'s Shelter']," in cfg, cfg
+        assert "foundingDate" not in cfg.split("export const siteConfig")[1], cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_tax_status_claims_follow_the_irs_status():
+    td, repo, proc = applied()
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "taxStatusLabel: 'a US 501c3 Non Profit'," in cfg, cfg
+        assert "nonprofitStatus: 'https://schema.org/Nonprofit501c3'," in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+    for pending in ("Not yet / pending (pre-501(c)(3))", ""):
+        td, repo, proc = applied({**FULL_ARGS, "IrsStatus": pending})
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            assert "taxStatusLabel: ''," in cfg, (pending, cfg)
+            assert "nonprofitStatus" not in cfg.split("export const siteConfig")[1], (pending, cfg)
+        finally:
+            shutil.rmtree(td)
+
+
+def test_a_second_run_over_the_same_repo_succeeds():
+    # After prettier a short team array sits on one line; the rewrite must
+    # still find it, or re-provisioning an existing repo throws.
+    td, repo, proc = applied()
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        team_ts = repo / "src" / "data" / "team.ts"
+        text = read(repo, "src/data/team.ts")
+        one_line = text.replace("[\n  member1,\n  member2,\n]", "[member1, member2]")
+        assert one_line != text, text
+        team_ts.write_bytes(one_line.encode("utf-8"))
+        again = run_apply(repo, FULL_ARGS)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "export const team: TeamMember[] = [\n  member1,\n  member2,\n]" in read(
+            repo, "src/data/team.ts"
+        )
     finally:
         shutil.rmtree(td)
 

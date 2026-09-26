@@ -120,6 +120,7 @@ jobs:
             743. Website - Fleet Security Header Audit
             744. Repo - Public Feed Freshness [GH]
             745. Repo - Agentic OS Board Audit [GH]
+            747. Repo - Template Provisioning Matrix [Repo]
           # Scheduled workflows in OTHER repositories, one `owner/repo :: Workflow name` per
           # line. Same byte-exact name rule as the hub list, and the same loud failure when an
           # entry resolves to nothing.

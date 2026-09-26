@@ -29,7 +29,7 @@ on:
         type: choice
         options:
           - FreeForCharity/FFC-IN-Footer_Only_Template
-          - FreeForCharity/FFC_Single_Page_Template
+          - FreeForCharity/FFC-IN-FFC_Single_Page_Template
           - FreeForCharity/FFC-IN-Single_Page_Template_Jekell
       Visibility:
         description: 'Visibility (private repos get NO tier-team grants — Option C policy)'

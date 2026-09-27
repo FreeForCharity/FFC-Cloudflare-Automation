@@ -54,11 +54,21 @@ import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * A block has to appear at least this many times to be worth a file.
+ * A block has to appear on at least this many DISTINCT PAGES to be worth a
+ * file.
  *
- * At 1 it is not shared and extracting it ADDS a request and a file for no
- * saving at all -- the inline copy becomes a .css plus a <link> that is longer
- * than nothing.
+ * Pages, not occurrences, and the distinction is the point of the pass. The
+ * saving comes from a browser fetching one file once and reusing it across
+ * the site; a block repeated twice inside a SINGLE page and found nowhere
+ * else has no such benefit, and extracting it spends a file and a request to
+ * save a few hundred bytes on one page. Counting occurrences scores that case
+ * as shared.
+ *
+ * It changes nothing on newheightseducation.org -- 55 blocks either way, and
+ * no block there appears twice on one page -- which is exactly why it has to
+ * be encoded rather than left to the corpus. A plugin that emits its <style>
+ * twice per render is ordinary WordPress, and the next charity is where this
+ * would have surfaced.
  */
 export const MIN_PAGES = 2;
 
@@ -117,19 +127,23 @@ export function mediaOf(attrString) {
 
 /** Which blocks are worth extracting, given the whole corpus. */
 export function plan(pages) {
-  const count = new Map();
+  // A Set of page indices per hash, not a counter: two copies inside one page
+  // must count once, because one page reuses one fetch either way.
+  const seenOn = new Map();
   const text = new Map();
-  for (const { html } of pages) {
+  for (const [index, { html }] of pages.entries()) {
     for (const m of html.matchAll(STYLE)) {
       const css = m[2];
       const h = hashCss(css);
-      count.set(h, (count.get(h) ?? 0) + 1);
+      if (!seenOn.has(h)) seenOn.set(h, new Set());
+      seenOn.get(h).add(index);
       text.set(h, css);
     }
   }
   const chosen = new Map();
   const refused = new Map();
-  for (const [h, n] of count) {
+  for (const [h, onPages] of seenOn) {
+    const n = onPages.size;
     const css = text.get(h);
     if (n < MIN_PAGES || css.length < MIN_BYTES) continue;
     const why = refuseReason(css);
@@ -344,6 +358,27 @@ function selfTest() {
   ];
   const { chosen, refused } = plan(pages);
   eq('a block on 2 pages is chosen', chosen.has(hashCss(shared)), true);
+  // PAGES, not occurrences. A block repeated inside ONE page and found nowhere
+  // else gains nothing from a shared file -- the browser fetches it once
+  // either way -- so extracting it spends a request and a file for nothing.
+  const dup = `.dup{color:#123456}`.padEnd(400, ' ');
+  const onePage = [{ html: `<style>${dup}</style><style id="b">${dup}</style>` }];
+  const twoPages = [...onePage, { html: `<style>${dup}</style>` }];
+  eq(
+    'a block appearing TWICE ON ONE PAGE and nowhere else is NOT chosen',
+    plan(onePage).chosen.has(hashCss(dup)),
+    false,
+  );
+  eq(
+    '...but it IS chosen once a second page carries it',
+    plan(twoPages).chosen.has(hashCss(dup)),
+    true,
+  );
+  eq(
+    '...and its reported count is PAGES (2), not occurrences (3)',
+    plan(twoPages).chosen.get(hashCss(dup)).n,
+    2,
+  );
   eq('a block on 1 page is not', chosen.has(hashCss(once)), false);
   eq('a block under MIN_BYTES is not, however often it appears', chosen.has(hashCss(tiny)), false);
   eq('nothing was refused in this corpus', refused.size, 0);

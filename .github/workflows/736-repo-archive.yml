@@ -57,7 +57,9 @@ permissions:
 env:
   TARGET_ORG: FreeForCharity
   # Repos that must never be archived by this automation, whatever is typed.
-  DENYLIST: 'FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-Footer_Only_Template .github'
+  DENYLIST:
+    'FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-FFC_Single_Page_Template
+    FFC-IN-Single_Page_Template_Jekell FFC-IN-Footer_Only_Template .github'
 
 jobs:
   # Reality check BEFORE the approval gate. Only applies to a live archive

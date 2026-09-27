@@ -38,6 +38,7 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -397,6 +398,53 @@ def _extract_documented_merge_tree_command(section: str) -> str:
     return command
 
 
+# The exact argv the documented command must parse to, placeholders included.
+# Compared for EQUALITY rather than scanned for substrings, which is what makes
+# the execution below safe: anything a doc edit appends -- a `;`, an `&&`, a
+# redirect, an extra ref -- becomes a token that is not in this list, and the
+# assertion fires before anything runs.
+EXPECTED_ARGV = [
+    "git",
+    "merge-tree",
+    "--write-tree",
+    "origin/<branch-a>",
+    "origin/<branch-b>",
+]
+
+
+def _documented_merge_tree_argv(section: str) -> list[str]:
+    """Parse the documented command to argv, and require it to be exactly ours.
+
+    This module used to run the extracted line through `bash -c`. The regex
+    anchors on `git merge-tree --write-tree` but ends in `[^\\n]*`, so a
+    documentation edit appending `; rm -rf ~` matched it, survived the
+    comment-strip, and would have been executed by the test suite in CI --
+    documentation becoming code execution, which is the class #1080 exists for.
+
+    Two independent reasons the shell had to go, beyond that:
+
+    * `shlex.split` plus an equality check is a **stronger** assertion than the
+      substring checks it replaces. `>/dev/null` was caught by name before; now
+      every unexpected token is caught by construction.
+    * CLAUDE.md documents that `bash` on the Windows Conductor host is a
+      minefield -- MSYS vs WSL resolution, drive letters eaten out of arguments,
+      and an exit 127 that `assert rc != 0` cannot distinguish from a real
+      detection. A test whose subject is an exit code should not route it
+      through a shell it does not need.
+    """
+    command = _extract_documented_merge_tree_command(section)
+    argv = shlex.split(command)
+    assert argv == EXPECTED_ARGV, (
+        "the documented command does not parse to the expected argv.\n"
+        f"  expected: {EXPECTED_ARGV}\n"
+        f"  got:      {argv}\n"
+        "Any extra token -- a shell metacharacter, a redirect, another ref -- is "
+        "refused here rather than executed. If the command legitimately changed, "
+        "update EXPECTED_ARGV deliberately."
+    )
+    return argv
+
+
 def _build_fixture_repo(root: pathlib.Path, env: dict) -> None:
     """Three branches off one base: `left` and `right` edit the same line (so
     they conflict), `other` adds an unrelated file (so it does not)."""
@@ -434,24 +482,69 @@ def _build_fixture_repo(root: pathlib.Path, env: dict) -> None:
     git("checkout", "-q", "main")
 
 
-def _run_documented_command(command: str, root: pathlib.Path, a: str, b: str, env: dict):
-    """Substitute the two branch placeholders and run the doc's own command."""
-    for placeholder in ("origin/<branch-a>", "origin/<branch-b>"):
-        assert placeholder in command, (
-            f"the documented command no longer contains {placeholder!r}; it reads "
-            f"{command!r}. Update this test's substitution deliberately rather than "
-            "loosening it -- an unsubstituted placeholder would make git resolve a "
-            "ref that does not exist and fail for the wrong reason."
-        )
-    runnable = command.replace("origin/<branch-a>", a).replace("origin/<branch-b>", b)
+def _run_documented_command(argv: list[str], root: pathlib.Path, a: str, b: str, env: dict):
+    """Substitute the two branch placeholders and run the doc's own command.
+
+    No shell: the argv came from `_documented_merge_tree_argv`, which has already
+    refused anything that is not exactly the expected token list, and it is
+    handed to `subprocess.run` as a list so nothing is re-parsed.
+    """
+    substituted = [
+        {"origin/<branch-a>": a, "origin/<branch-b>": b}.get(token, token) for token in argv
+    ]
+    # Both placeholders must actually have been replaced -- an unsubstituted one
+    # would make git resolve a ref that does not exist and fail for the wrong
+    # reason, which `assert rc != 0` cannot tell from a real conflict.
+    assert "origin/<branch-a>" not in substituted, substituted
+    assert "origin/<branch-b>" not in substituted, substituted
     return subprocess.run(
-        ["bash", "-c", runnable],
+        substituted,
         cwd=str(root),
         env=env,
         capture_output=True,
         text=True,
         encoding="utf-8",
     )
+
+
+def test_a_doc_edit_cannot_smuggle_a_command_into_this_suite():
+    """A documentation edit must not be able to execute code here.
+
+    Reachable on the revision this replaced, and measured rather than argued: the
+    extraction regex ends in `[^\\n]*`, so an appended `; touch <path>` matched it
+    and survived the comment-strip, and replaying that exact line through the old
+    `bash -c` call **created the sentinel file** -- rc=0, silently, inside the
+    test suite CI runs. Reported by Copilot on #1390.
+
+    The fix is the equality check in `_documented_merge_tree_argv`, so the
+    refusal happens while the payload is still data. This test feeds a synthetic
+    section rather than the real `AGENTS.md` -- it has to assert what the guard
+    does with a *bad* input, and the real file is a good one.
+    """
+    injected = (
+        f"{SECTION_HEADING} (synthetic)\n\n```bash\n"
+        "git merge-tree --write-tree origin/<branch-a> origin/<branch-b> ; echo pwned\n"
+        f"```\n\n{NEXT_HEADING}\n"
+    )
+    try:
+        argv = _documented_merge_tree_argv(injected)
+    except AssertionError:
+        pass  # refused while still data -- the only acceptable outcome
+    else:
+        raise AssertionError(
+            f"an injected command was ACCEPTED and would have been run: {argv}"
+        )
+
+    # And the same guard must refuse a redirect, which is how the earlier
+    # `>/dev/null` defect would reappear -- now caught by construction rather
+    # than by naming the token.
+    redirected = injected.replace("; echo pwned", ">/dev/null")
+    try:
+        _documented_merge_tree_argv(redirected)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("a redirect was accepted into the executable argv")
 
 
 def test_ac5_the_documented_command_actually_discriminates():
@@ -465,7 +558,7 @@ def test_ac5_the_documented_command_actually_discriminates():
     could not start at all (CLAUDE.md's non-zero-exit rule).
     """
     section = _section()
-    command = _extract_documented_merge_tree_command(section)
+    argv = _documented_merge_tree_argv(section)
 
     # Inherit the environment rather than building a minimal one: a scrubbed
     # `env=` is what made 26 modules abort on the Windows host (CLAUDE.md, #943).
@@ -486,8 +579,8 @@ def test_ac5_the_documented_command_actually_discriminates():
         root.mkdir()
         _build_fixture_repo(root, env)
 
-        conflicting = _run_documented_command(command, root, "left", "right", env)
-        clean = _run_documented_command(command, root, "left", "other", env)
+        conflicting = _run_documented_command(argv, root, "left", "right", env)
+        clean = _run_documented_command(argv, root, "left", "other", env)
 
     assert conflicting.returncode == 1, (
         "the documented command did not report a conflict for two branches that "

@@ -33,6 +33,16 @@ on:
         description: 'Apex domain (example: example.org). This is the only required field.'
         required: true
         type: string
+      template_repo:
+        description:
+          'Website template the new repo is generated from. Footer-Only is the default; the Single
+          Page template is the full one-page layout.'
+        required: false
+        type: choice
+        default: FreeForCharity/FFC-IN-Footer_Only_Template
+        options:
+          - FreeForCharity/FFC-IN-Footer_Only_Template
+          - FreeForCharity/FFC-IN-FFC_Single_Page_Template
       charity_name:
         description:
           'Organization display name (optional; required only to apply the React template footer).'
@@ -312,7 +322,10 @@ jobs:
               if (cityStatePostal) lines.push(cityStatePostal);
               if (country) lines.push(country);
 
-              return lines.join('\\n');
+              // A real newline. This is a YAML block, so '\\n' here reached JS as a
+              // backslash and an "n": every issue-form address rendered with a
+              // literal \n on one line once the footer showed it.
+              return lines.join('\n');
             }
 
             function buildUrlLine(key, url) {
@@ -329,8 +342,10 @@ jobs:
                 core.setFailed(`Invalid value: ${label} cannot be N/A.`);
                 return null;
               }
-              if (!/^https:\/\//i.test(u)) {
-                core.setFailed(`Invalid value: ${label} must start with https://.`);
+              // Same shape the content script accepts (^https://\S+$): a URL it would
+              // silently drop must fail here instead, where the requester sees why.
+              if (!/^https:\/\/\S+$/i.test(u)) {
+                core.setFailed(`Invalid value: ${label} must be an https:// URL with no spaces.`);
                 return null;
               }
               return u;
@@ -342,8 +357,8 @@ jobs:
                 core.setFailed(`Invalid value for required field: ${label}. Please provide a real URL (not N/A).`);
                 return null;
               }
-              if (!/^https:\/\//i.test(u)) {
-                core.setFailed(`Invalid value for required field: ${label}. URL must start with https://.`);
+              if (!/^https:\/\/\S+$/i.test(u)) {
+                core.setFailed(`Invalid value for required field: ${label}. URL must be https:// with no spaces.`);
                 return null;
               }
               return u;
@@ -625,6 +640,13 @@ jobs:
             if (failIfNAProvided('Current Website URL (if any)', currentWebsiteUrl)) return;
             if (failIfNAProvided('Organization Name (as displayed)', charityName)) return;
             if (failIfNAProvided('Footer Contact Email', footerEmail)) return;
+            // The email is written into siteConfig, security.txt and every mailto on
+            // the site. One plain address only: no spaces, list separators or URI
+            // delimiters that would add recipients or break the mailto.
+            if (footerEmail && !/^[^\s@,;?#&%<>"`]+@[^\s@,;?#&%<>"`]+\.[A-Za-z]{2,}$/.test(footerEmail)) {
+              core.setFailed(`Invalid value: Footer Contact Email "${footerEmail}" is not a single plain email address.`);
+              return;
+            }
             if (failIfNAProvided('Footer Contact Phone', footerPhone)) return;
             if (failIfNAProvided('EIN / Tax ID', footerEin)) return;
             if (failIfNAProvided('IRS 501(c)(3) Status', irsStatus)) return;
@@ -632,7 +654,11 @@ jobs:
             if (failIfNAProvided('Candid / GuideStar Direct Profile Link', guideStarDirectProfileUrl)) return;
             if (failIfNAProvided('Technical POC GitHub Username', technicalPocGitHubUsername)) return;
 
-            const is501c3 = /\b501\s*\(c\)\s*3\b/i.test(irsStatus);
+            // Anchored at the start: the form's values are "501(c)(3) (approved)" and
+            // "Not yet / pending (pre-501(c)(3))", so an unanchored match would call a
+            // pending charity recognized. The old /501\s*\(c\)\s*3/ matched neither
+            // "501(c)(3)" form, so the Candid-link requirement never applied.
+            const is501c3 = /^\s*501\s*\(c\)\s*\(?3\)?/i.test(irsStatus);
             if (!bestEffort && isDisallowedValue(irsStatus)) {
               core.setFailed('Missing required field: IRS 501(c)(3) Status.');
               return;
@@ -802,7 +828,26 @@ jobs:
             const org = process.env.WEBSITE_TARGET_ORG || 'FreeForCharity';
             const repoFull = `${org}/${repoName}`;
 
-            const templateRepo = process.env.WEBSITE_TEMPLATE_REPO || 'FreeForCharity/FFC-IN-Footer_Only_Template';
+            // Either template can be requested by dispatch (workflow_dispatch input or
+            // the ffcadmin client_payload); issue-triggered runs use the default. The
+            // allowlist is what makes a client_payload value safe to pass to
+            // `gh repo create --template`: anything else fails the run, whatever its source.
+            const TEMPLATE_REPOS = [
+              'FreeForCharity/FFC-IN-Footer_Only_Template',
+              'FreeForCharity/FFC-IN-FFC_Single_Page_Template',
+            ];
+            const requestedTemplate = isManual ? normalizeInput(manualInputs.template_repo) : '';
+            if (requestedTemplate && !TEMPLATE_REPOS.includes(requestedTemplate)) {
+              core.setFailed(`Unknown template_repo "${requestedTemplate}". Use one of: ${TEMPLATE_REPOS.join(', ')}.`);
+              return;
+            }
+            // Validate the RESOLVED value too, so an edited WEBSITE_TEMPLATE_REPO default
+            // cannot bypass the allowlist either.
+            const templateRepo = requestedTemplate || process.env.WEBSITE_TEMPLATE_REPO || TEMPLATE_REPOS[0];
+            if (!TEMPLATE_REPOS.includes(templateRepo)) {
+              core.setFailed(`Template repo "${templateRepo}" is not an allowed template. Use one of: ${TEMPLATE_REPOS.join(', ')}.`);
+              return;
+            }
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             // Maintainers to add: requester + technical POC, deduped and validated
@@ -1539,6 +1584,18 @@ jobs:
 
           $json = $content | ConvertTo-Json -Depth 8
           $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
+          # The site's CI runs `prettier --check .`, and ConvertTo-Json's layout of
+          # a short array is not prettier's, so an unformatted record turns the
+          # new repo red. Format it with the prettier version the repo pins.
+          # Best-effort: CI names the file if this fails.
+          try {
+            $pinned = [string]((Get-Content -Raw 'package.json' | ConvertFrom-Json).devDependencies.prettier)
+            $pinned = $pinned -replace '^[\^~>=\s]+', ''
+            $spec = if ($pinned -match '^\d+\.\d+\.\d+$') { "prettier@$pinned" } else { 'prettier@3' }
+            & npx --yes $spec --write ffc-content.json | Out-Host
+          } catch {
+            Write-Warning "Could not format ffc-content.json: $_"
+          }
 
           # Patch the actual React template files in the newly provisioned repo.
           function Test-SocialLinksPresent {
@@ -1568,7 +1625,8 @@ jobs:
             (Test-SocialLinksPresent -Links @($footerSocial))
           )
 
-          $is501c3 = $irsStatus -match '501\(c\)3|501\s*\(c\)\s*3'
+          # Same anchored test as the resolve step (see the comment there).
+          $is501c3 = $irsStatus -match '^\s*501\s*\(c\)\s*\(?3\)?'
           if ($is501c3) {
             $canApplyTemplate = $canApplyTemplate -and
               -not [string]::IsNullOrWhiteSpace($guideStarProfileUrl) -and
@@ -1601,7 +1659,8 @@ jobs:
                 -LeadershipLines @($leadership) `
                 -Mission $mission `
                 -DonationUrl $donationUrl `
-                -VolunteerUrl $volunteerUrl
+                -VolunteerUrl $volunteerUrl `
+                -IrsStatus $irsStatus
               $contentStatus = 'applied'
             } else {
               # 'skipped' refers to the React template patch only. ffc-content.json
@@ -1759,9 +1818,9 @@ jobs:
               contentStatus === 'applied'
                 ? '- Content (footer + leadership) was applied to the React template and recorded in `ffc-content.json`.'
                 : contentStatus === 'failed'
-                  ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned; footer/leadership can be applied later by re-running or editing the repo.'
+                  ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned, but it still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until the charity\'s details are applied by re-running or editing `src/lib/site.config.ts`.'
                   : contentStatus === 'skipped'
-                    ? '- Content patch skipped (admin-minimal provision — no footer/leadership inputs provided); provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
+                    ? '- ⚠️ Content patch skipped: not every footer field was provided (contact email, phone, EIN, address, leadership and all four social links are needed; admin-minimal provisions give none). The site still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until those are added. Provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
                     : '- ❔ Content step did not record a status (it may have been skipped or errored before reporting) — the site itself is provisioned.';
             const dnsManual = zoneControlled
               ? []

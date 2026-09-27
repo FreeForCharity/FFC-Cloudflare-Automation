@@ -103,6 +103,16 @@ const SILENT_THRESHOLD_HOURS = 48;
 const RUN_HEADER =
   /^(?:[#_ \t]|\*(?!\s))*(?:conductor[ \t]+)?run[ \t]+(\d+)[ \t]*[—–-]?[ \t]*(START|END)(?![A-Za-z0-9])/i;
 
+// Applied to RUN_HEADER's own matched text, never to the whole line: the
+// separator above is optional for the pre-87 bare form, and these two are what
+// stop that optionality reading dashless Conductor PROSE as a header. See the
+// guard in findDeadConductorRuns for why the rule cannot live in the pattern.
+// The separator class must stay byte-identical to the pattern's; a divergence
+// would silently narrow or widen the guard, so
+// `test_the_guard_reuses_the_patterns_own_separator_class` compares them.
+const CONDUCTOR_WORD_RE = /conductor/i;
+const SEPARATOR_RE = /[—–-]/;
+
 const DAY_MS = 24 * 3600 * 1000;
 const HOUR_MS = 3600 * 1000;
 
@@ -430,6 +440,27 @@ function findDeadConductorRuns(comments, nowIso, thresholdHours, opts) {
     const firstLine = body.split('\n', 1)[0].trim();
     const m = RUN_HEADER.exec(firstLine);
     if (!m) continue;
+    // The separator is optional ONLY for the pre-87 `RUN 86 START` form, and that
+    // form never carried the word "Conductor" — every Conductor-labelled spelling
+    // #719 has used has a separator. So a dashless `Conductor run 174 END was the
+    // last one before the outage` is PROSE, and RUN_HEADER alone matches it:
+    // measured on the shipped pattern before this guard existed, along with
+    // `Conductor run 174 START was hours ago`.
+    //
+    // It is the forgery direction that MASKS an outage rather than inventing one:
+    // the scan takes the newest match, so one such sentence at the top of a
+    // worker's comment supplies its `created_at` as a heartbeat and also retires a
+    // live dead-run alarm. Under-reporting a header nobody writes costs a false
+    // alarm a human then investigates; over-reporting one costs an outage nobody
+    // looks at.
+    //
+    // Enforced here rather than in the pattern because JS has no conditional
+    // group: "separator required iff the Conductor word is present" would need two
+    // alternatives, which moves the capture indices for no gain. `m[0]` is the
+    // matched header text only, and the prefix class admits no dash, so the only
+    // `[—–-]` it can contain is the separator. Pinned by
+    // `test_dashless_conductor_prose_is_not_a_heartbeat`.
+    if (CONDUCTOR_WORD_RE.test(m[0]) && !SEPARATOR_RE.test(m[0])) continue;
     const run = Number(m[1]);
     // RUN_HEADER is case-insensitive (the pre-87 form is `RUN 86 START`), so the
     // phase must be folded before it is compared. Reading `m[2]` raw would send

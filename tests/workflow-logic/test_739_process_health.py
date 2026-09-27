@@ -1275,11 +1275,25 @@ def test_the_pattern_matches_every_separator_the_log_has_carried():
 
     A cp1252 round-trip that mangles them makes the separator class match
     nothing, which is the same silent failure the widening exists to fix — and a
-    comment cannot defend against it. The absent separator is the pre-87 form.
+    comment cannot defend against it.
+
+    **The absent-separator case is spelled as the pre-87 form, and that correction
+    is the point.** This test first built it as `**Conductor run 174 END**` —
+    emphasis plus the Conductor word plus no separator — and called it "the pre-87
+    form", which it is not: that era wrote a bare `RUN 86 START`. The round-5 guard
+    (dashless + the Conductor word is prose) reddened this case, correctly, and the
+    fixture was wrong rather than the guard. A third instance in this PR of a
+    fixture testing something other than what its label claims.
     """
-    for label, sep in (("em dash", " — "), ("en dash", " – "), ("hyphen", " - "), ("absent", " ")):
-        sil = _sil([_comment(LIVE_174_AT, f"**Conductor run 174{sep}END**")], now=AFTER_174)
-        assert sil["lastRun"] == 174, f"{label} separator: {sil}"
+    for label, line in (
+        ("em dash", "**Conductor run 174 — END**"),
+        ("en dash", "**Conductor run 174 – END**"),
+        ("hyphen", "**Conductor run 174 - END**"),
+        # No separator AND no Conductor word — the pre-87 form as the log wrote it.
+        ("absent (pre-87 bare)", "RUN 174 END"),
+    ):
+        sil = _sil([_comment(LIVE_174_AT, line)], now=AFTER_174)
+        assert sil["lastRun"] == 174, f"{label} separator: `{line}` -> {sil}"
 
 
 def test_a_lowercase_end_closes_the_run_rather_than_opening_one():
@@ -1362,6 +1376,71 @@ def test_prose_mentioning_a_run_number_is_not_a_heartbeat():
     ):
         sil = _sil([_comment(LIVE_174_AT, f"{line}\n\nnarrative.")], now=AFTER_174)
         assert sil["lastRunIso"] is None, f"`{line}` is prose, not a header: {sil}"
+
+
+def test_dashless_conductor_prose_is_not_a_heartbeat():
+    """#1353 round 5 (Copilot). The hole the pre-87 form's optional separator opened.
+
+    `[—–-]?` is optional so `RUN 86 START` matches, and that optionality also let
+    `Conductor run 174 END was the last one before the outage` match — measured on
+    the shipped pattern, extracted from source rather than retyped. My existing
+    prose control (`Run 174 was the last one…`) missed only because `was` is not a
+    phase keyword, so it never exercised the dashless-WITH-phase shape. The
+    negative controls had a gap exactly where the optionality lives.
+
+    This is the forgery direction that MASKS an outage: the scan takes the newest
+    match, so one such sentence opening a worker's comment supplies its
+    `created_at` as a heartbeat and additionally retires a live dead-run alarm.
+
+    The rule is that every Conductor-labelled spelling #719 has used carries a
+    separator; only the pre-87 bare form, which never carried the word, does not.
+    Under-reporting a spelling nobody writes costs a false alarm someone then
+    investigates — the safe direction.
+    """
+    for line in (
+        "Conductor run 174 END was the last one before the outage",
+        "Conductor run 174 START was hours ago",
+        "**Conductor run 174 END**",
+        "_Conductor run 174 END_",
+    ):
+        sil = _sil([_comment(LIVE_174_AT, f"{line}\n\nnarrative.")], now=AFTER_174)
+        assert sil["lastRunIso"] is None, (
+            f"dashless + the Conductor word is prose, not a header: `{line}` -> {sil}"
+        )
+        assert sil["silent"] is True, sil
+    # Both halves of the guard's condition must stay load-bearing: the dashless
+    # form is accepted WITHOUT the word (pre-87), and the worded form is accepted
+    # WITH a separator. A guard that rejected either would pass the loop above
+    # while breaking real headers.
+    assert _sil([_comment(LIVE_174_AT, "RUN 174 END")], now=AFTER_174)["lastRun"] == 174, (
+        "control: the pre-87 bare form is dashless and must still be a heartbeat"
+    )
+    assert _sil([_comment(LIVE_174_AT, LIVE_174_END), ], now=AFTER_174)["lastRun"] == 174, (
+        "control: the worded form WITH a separator must still be a heartbeat"
+    )
+
+
+def test_the_guard_reuses_the_patterns_own_separator_class():
+    """The guard lives outside RUN_HEADER, so its separator class can drift from
+    the pattern's — silently narrowing or widening it.
+
+    Both hold literal em dash, en dash and ASCII hyphen. A cp1252 round-trip that
+    mangles one and not the other would leave a guard that rejects headers the
+    pattern accepts, which is the L215 failure shape one level out. Compared as
+    source text because there is no runtime handle on the pattern's class.
+    """
+    src = LIB.read_text(encoding="utf-8")
+    pattern = [ln for ln in src.splitlines() if "(START|END)(?![A-Za-z0-9])" in ln]
+    guard = [ln for ln in src.splitlines() if ln.startswith("const SEPARATOR_RE")]
+    assert len(pattern) == 1, f"expected exactly one RUN_HEADER line, found {len(pattern)}"
+    assert len(guard) == 1, f"expected exactly one SEPARATOR_RE line, found {len(guard)}"
+    assert "[—–-]" in pattern[0], (
+        f"the pattern's separator class changed spelling; update this test and the "
+        f"guard together: {pattern[0]!r}"
+    )
+    assert "[—–-]" in guard[0], (
+        f"the guard's separator class no longer matches the pattern's: {guard[0]!r}"
+    )
 
 
 def test_a_worker_comment_first_line_is_not_a_conductor_heartbeat():

@@ -28,15 +28,25 @@ line and an `expect` block.
      fixture repo shaped like the templates.
    - `test_701_apply_website_template.py` and `test_701_parse.py` hold the targeted regression
      cases.
+   - `test_check_provisioned_build.py` pins the built-page check that 748 runs (below).
 2. **Real templates** (workflow **748**, on PRs touching the provisioning path, weekly, and on
    demand). For every template × charity pair, 748 clones the template, applies the charity exactly
    as 701's content job does, and runs that template's own checks: format, lint, unit tests,
-   site-config schema, drift and build. A red cell means that charity would get a site whose own CI
-   fails, and so never deploys, or one that still carries Free For Charity's identity. To reproduce
-   a cell locally:
+   site-config schema, drift and build. It then reads the built pages with
+   `check_provisioned_build.py`, because a template's own checks can pass over a wrong site (#1391:
+   they were green while a charity's Donate section embedded Free For Charity's endowment form).
+   That check fails unless the pages link the charity's own donation and volunteer pages (or, when
+   it gave none, a `mailto:` to its contact address), and fails if any page other than FFC's own
+   donation policy links one of FFC's donation, volunteer, Facebook or application-form targets.
+
+   A red cell means that charity would get a site whose own CI fails (and so never deploys), one
+   that still carries Free For Charity's identity, or one that sends its donors or volunteers to
+   FFC. To reproduce a cell locally:
 
    ```bash
    python3 tests/workflow-logic/apply_sample_charity.py --charity st-marys-shelter --repo <template-clone>
+   (cd <template-clone> && corepack pnpm run build)
+   python3 tests/workflow-logic/check_provisioned_build.py --charity st-marys-shelter --out <template-clone>/out
    ```
 
 3. **Live** (a real repo). Dispatch 701 with one charity's `inputs` plus `dry_run=false` and a

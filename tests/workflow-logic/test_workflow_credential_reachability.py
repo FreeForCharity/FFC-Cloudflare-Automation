@@ -686,8 +686,7 @@ def test_the_real_tree_reaches_credentials():
     assert not unreadable and scanned > 50, (scanned, unreadable)
     sites = guard.reachability_by_site(findings)
 
-    # The floor is DERIVED from the freeze, never a literal, and it is allowed
-    # to reach ZERO.
+    # The floor is DERIVED, never a literal, and it is allowed to reach ZERO.
     #
     # It was `> 10`, which made this module a second mutex on the #1080
     # burn-down (#1210, one file over): every lane removes call sites, so a hard
@@ -705,11 +704,34 @@ def test_the_real_tree_reaches_credentials():
     # appears after a burn-down, the lanes that held credentials were fixed."
     # A test asserting that state is impossible contradicts the code it tests.
     #
-    # So the floor is `n // 2` with no clamp, and below 4 frozen workflows it is
-    # 0 and the count assertions DO NOT RUN. That is not a gap being tolerated:
-    # at that size a count cannot distinguish a dead extractor (0) from a
-    # correct empty answer (0), so any assertion here would be deciding by
-    # coin-flip and reporting the wrong subsystem when it lost. The
+    # So the floor is derived from AN ORACLE, not from the freeze size, because
+    # the freeze size is not what decides whether there is anything to find.
+    # `frozen_workflows // 2` was the shipped spelling and Copilot caught it on
+    # #1361 twice over: the comment here claimed the floor reached 0 "below 4
+    # frozen workflows", and `n // 2` is 1 at n=2 and n=3, so it did not. The
+    # arithmetic was the visible half. The defect underneath is that a freeze of
+    # CREDENTIAL-FREE workflows has no credential to report at any size, so a
+    # floor keyed to its length fails a correct tree — measured red at a freeze
+    # of 5 credential-free workflows, and 46 of this repo's 111 workflows are
+    # credential-free, so that is an ordinary future state rather than a corner.
+    #
+    # The suggested remedy — clamp the floor to 0 below 4 — was measured and NOT
+    # taken. It fixes n=2 and leaves the n=5 case red, because the threshold is
+    # a number where the question is "is there a credential in here"; and it
+    # newly passes a DEAD extractor at a freeze of 2 credential-bearing
+    # workflows, trading a false red for a false green.
+    #
+    # `_frozen_workflows_with_a_kv_credential()` answers the question actually
+    # being asked, from the workflow YAML, so a broken resolver cannot switch
+    # the assertion off. The `// 2` discount stays: the oracle counts
+    # WORKFLOWS while `sites` counts SITES, and a frozen site can sit in a job
+    # the from-kv action never runs in, so a one-site-per-workflow floor would
+    # be asserting more than the oracle knows.
+    #
+    # Below 2 credential-bearing frozen workflows the floor is 0 and the count
+    # assertions DO NOT RUN. At that size a count cannot distinguish a dead
+    # extractor (0) from a correct empty answer (0), so any assertion would be
+    # deciding by coin-flip and reporting the wrong subsystem when it lost. The
     # discrimination that does not shrink lives in the ~30 synthetic per-shape
     # cases above and in the two mutation controls beside them
     # (`test_deleting_306s_export_…`, `test_deleting_101s_azure_login_…`), which
@@ -726,14 +748,15 @@ def test_the_real_tree_reaches_credentials():
     #
     # So the note lives here instead of in an assertion: WHEN THE FREEZE REACHES
     # ZERO, retire this case. Nothing below it will fail, because with no
-    # findings there are no sites, and `floor` is 0 — which is the honest
-    # reading, not a loophole.
-    frozen_workflows = len(guard.KNOWN_UNGUARDED)
-    floor = frozen_workflows // 2
+    # findings there are no sites, and the oracle reports 0, so `floor` is 0 —
+    # which is the honest reading, not a loophole.
+    credential_bearing = len(_frozen_workflows_with_a_kv_credential())
+    floor = credential_bearing // 2
     if floor:
         assert len(sites) >= floor, (
-            f"only {len(sites)} of {frozen_workflows} frozen workflows' sites "
-            f"reach a credential (floor {floor}) — check the extractor"
+            f"only {len(sites)} sites reach a credential, from "
+            f"{credential_bearing} frozen workflows that carry one "
+            f"(floor {floor}) — check the extractor"
         )
         hidden = [k for k, v in sites.items() if any(r.hidden for r in v)]
         assert len(hidden) >= floor, (

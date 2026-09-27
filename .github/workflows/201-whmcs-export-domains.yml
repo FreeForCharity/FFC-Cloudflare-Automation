@@ -114,9 +114,22 @@ jobs:
           # guards below are the load-bearing half of this block.
           #
           # The move to `env:` also widens the predicate's DOMAIN from string to
-          # string-or-null: an omitted input reached the interpolated body as
-          # the empty string between two quotes and reaches this one as `$null`.
-          # `IsNullOrWhiteSpace` is true for both; `-ne ''` is true for `$null`.
+          # string-or-null. That is true, and the REASON first written here was
+          # not: it said an OMITTED input arrives blank. It does not — the input
+          # declares a default, so omitting it yields that path and never
+          # reaches this guard at all, which is what the throw below already
+          # says. The case this guard actually closes is an EXPLICIT blank or
+          # whitespace override.
+          #
+          # Such an override arrives as an env var set to the empty string, and
+          # pwsh reads that back as `$null` rather than as `''` — measured on
+          # 7.4.6, `$env:X = ''` then `$null -eq $env:X` is True. `-ne ''` is
+          # also True for `$null`, so a comparison would pass the blank straight
+          # through; `IsNullOrWhiteSpace` is true for null, empty and whitespace
+          # alike, which is why it is the test. Raised by Copilot on #1361 —
+          # the SECOND claim in this block corrected rather than argued, and the
+          # first one's lesson restated: a sentence that sounds like the
+          # neighbouring lane's is not evidence about this one (ledger L260).
           if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
             throw "output_file is blank. It is consumed BOTH here and by the 'Upload CSV Artifact' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
           }

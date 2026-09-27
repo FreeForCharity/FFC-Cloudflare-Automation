@@ -1366,9 +1366,16 @@ jobs:
   # a bad/owner/non-existent login warns instead of failing provisioning.
   maintainers:
     needs: [resolve, repo]
+    # always(): `dns` is skipped for every zone FFC does not control, and without it
+    # GitHub's implicit success() treats that skipped ancestor as a failure and skips
+    # this job too, so the requester was never added. needs.repo.result keeps the
+    # real precondition. A dry run creates no repo, so there is nobody to add (this
+    # job never ran on a dry run before either: dns is always skipped then).
+    # test_701_job_graph.py requires always() on every job below dns and pins these
+    # preconditions for this job and `content`.
     if: >-
-      needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
-      needs.resolve.outputs.maintainers_csv != ''
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.repo.result == 'success' && needs.resolve.outputs.maintainers_csv != ''
     # A `uses:` job does not inherit a permissions block implicitly in a way that is
     # obvious to readers, and 729 now mints an OIDC token for Key Vault. Declared
     # explicitly so this call cannot silently lose id-token when 701's
@@ -1391,7 +1398,12 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, repo]
-    if: needs.resolve.outputs.skip != 'true'
+    # always() for the same reason as `maintainers`: without it a skipped `dns` (any
+    # zone FFC does not control, and every dry run) skipped this job, and the new
+    # site kept the template's placeholder identity. It runs on a dry run on
+    # purpose: that is the content rehearsal (it renders and stages, never pushes),
+    # and when the repo does not exist yet it rehearses against the template.
+    if: always() && needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success'
     # Best-effort by design: content patching is cosmetic polish on an already-provisioned
     # site. The inner try/catch covers the patch/commit/push, but earlier steps (clone,
     # gh auth setup-git) can still fail the job — continue-on-error ensures no content
@@ -1511,6 +1523,7 @@ jobs:
           DONATION_URL: ${{ needs.resolve.outputs.donation_url }}
           VOLUNTEER_URL: ${{ needs.resolve.outputs.volunteer_url }}
           DRY_RUN: ${{ inputs.dry_run }}
+          TEMPLATE_REPO: ${{ needs.resolve.outputs.template_repo }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -1543,8 +1556,27 @@ jobs:
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir }
           New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
+          # A dry run creates no repo, so a first-time dry run has nothing to clone.
+          # Rehearse against the template the repo would be created from: the
+          # content applied to it is exactly what the new repo would receive, and
+          # the dry-run branch below never commits or pushes.
+          $cloneSource = $repoFull
+          # Only a genuine not-found falls back; any other failure (auth, rate
+          # limit, network) fails the rehearsal with gh's own message rather than
+          # being mistaken for "the repo does not exist yet".
+          if (([string]$env:DRY_RUN) -eq 'true') {
+            $viewOut = gh repo view $repoFull --json nameWithOwner 2>&1 | Out-String
+            $viewExit = $LASTEXITCODE
+            if ($viewExit -ne 0) {
+              if ($viewOut -notmatch 'Could not resolve to a Repository|HTTP 404') {
+                throw "gh repo view $repoFull failed (exit $viewExit) without reporting it missing: $($viewOut.Trim())"
+              }
+              $cloneSource = [string]$env:TEMPLATE_REPO
+              Write-Host "::notice::dry_run=true and GitHub reports $repoFull does not exist yet - rehearsing the content patch against the template $cloneSource."
+            }
+          }
           $cloneDir = Join-Path $workDir 'repo'
-          gh repo clone $repoFull $cloneDir
+          gh repo clone $cloneSource $cloneDir
           Set-Location $cloneDir
 
           git config user.name "github-actions"

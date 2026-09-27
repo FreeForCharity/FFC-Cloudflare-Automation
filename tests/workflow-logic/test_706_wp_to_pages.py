@@ -1489,6 +1489,49 @@ def test_max_pdf_mb_reaches_the_capture():
     assert 'args+=(--max-pdf-mb "$MAX_PDF_MB")' in step["run"]
 
 
+def test_recode_all_images_reaches_the_capture():
+    """Same two-part wiring as max_pdf_mb, and inert unless BOTH halves are
+    present. Asserting only the input exists passes while every capture still
+    runs the per-file budget gate and the tree stays over the host limit."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["RECODE_ALL_IMAGES"] == "${{ inputs.recode_all_images }}", step["env"]
+    assert 'args+=(--recode-all-images)' in step["run"]
+
+
+def test_recode_all_images_is_off_by_default():
+    """It renames thousands of files. A migration that already fits under the
+    host's limit should not pay that churn, and turning it on must be a
+    deliberate act rather than something a caller inherits."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    spec = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_recode_all_images_is_only_passed_when_true():
+    """A boolean input arrives as the STRING 'false' when unchecked. Appending
+    the flag on truthiness alone would turn whole-tree re-encoding on for every
+    run that left the box alone."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert '[ "$RECODE_ALL_IMAGES" = "true" ]' in step["run"], step["run"][-600:]
+
+
+def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
+    """The input exists because the per-file budget answers a different
+    question from a host's total-size limit. An operator reading only
+    `max_pdf_mb` and `max-image-kb` has no reason to guess this one exists, so
+    the description has to name the case it is for."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]["description"]
+    assert "TOTAL size limit" in desc, desc
+    # The measurement is what makes the trade-off checkable rather than a claim.
+    assert "61.5%" in desc, desc
+
+
 def test_the_resolve_job_publishes_max_pdf_mb():
     """A job output that names a step output the step never sets resolves to
     the empty string, and an empty budget is not an error anywhere downstream

@@ -135,6 +135,24 @@ on:
         required: false
         type: string
         default: ''
+      extract_shared_css:
+        description: >-
+          Lift byte-identical inline <style> blocks out of the captured pages into shared
+          stylesheets under public/_ffc-css, replacing each with a <link> AT THE SAME POSITION so
+          the cascade is unchanged. Unlike the image and PDF passes this is not a quality trade: the
+          visitor stops re-downloading the same CSS on every page and gets it once from cache, so
+          pages get lighter AND the site gets faster. Measured on newheightseducation.org: 130.2 MB
+          of HTML over 785 fragments, mean 170 KB, SMALLEST page 106 KB -- 64.3 MB of that is inline
+          <style> and 62.5 MB is byte-identical repetition. Extracting the 55 safe blocks removes
+          36.7 MB of inline CSS for 0.18 MB of .css plus 0.43 MB of <link>: net 36.4 MB off the
+          repo, and in the built export 133.9 -> 113.9 MB of HTML plus 187.5 -> 157.6 MB of Next's
+          RSC payloads, which embed the same markup -- 49.9 MB off what ships. Blocks carrying
+          url(#fragment) or %%BASE%% stay inline because moving them changes what the reference
+          resolves against. Verified by a built-vs-built pixel diff: 33 of 34 pages identical, every
+          page height identical, same-build control 0.000%. Off by default.
+        required: false
+        type: boolean
+        default: false
       recode_all_images:
         description: >-
           Re-encode EVERY captured raster image to WebP, not only those over the per-file budget.
@@ -532,6 +550,7 @@ jobs:
           node scripts/fetch-asset-subresources.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
+          node scripts/extract-shared-css.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
 
   convert:
@@ -1120,6 +1139,20 @@ jobs:
       # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
       # 108.72 and 167.22 MB. Answering it here costs milliseconds.
       #
+      # Before the size gate on purpose: the gate exists to catch a tree the
+      # host will refuse, and this pass is one of the things that gets a tree
+      # under that limit. Running it afterwards would fail the run on a size
+      # the very next step was about to fix.
+      - name: Lift duplicated inline CSS into shared stylesheets
+        if: inputs.extract_shared_css
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/extract-shared-css.mjs \
+            --content-dir ffc-ex/src/clone-content \
+            --css-dir ffc-ex/public/_ffc-css \
+            --href-base '%%BASE%%/_ffc-css'
+
       # Named files, not a count: an operator told "3 files are too large" has
       # to re-run the crawl to learn which three.
       - name: Gate - the tree must be publishable (push + Pages limits)
@@ -1650,6 +1683,20 @@ jobs:
       # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
       # 108.72 and 167.22 MB. Answering it here costs milliseconds.
       #
+      # Before the size gate on purpose: the gate exists to catch a tree the
+      # host will refuse, and this pass is one of the things that gets a tree
+      # under that limit. Running it afterwards would fail the run on a size
+      # the very next step was about to fix.
+      - name: Lift duplicated inline CSS into shared stylesheets
+        if: inputs.extract_shared_css
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/extract-shared-css.mjs \
+            --content-dir ffc-ex/src/clone-content \
+            --css-dir ffc-ex/public/_ffc-css \
+            --href-base '%%BASE%%/_ffc-css'
+
       # Named files, not a count: an operator told "3 files are too large" has
       # to re-run the crawl to learn which three.
       - name: Gate - the tree must be publishable (push + Pages limits)

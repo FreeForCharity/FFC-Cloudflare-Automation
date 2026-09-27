@@ -1532,6 +1532,58 @@ def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
     assert "61.5%" in desc, desc
 
 
+def test_extract_shared_css_runs_in_BOTH_jobs_that_convert():
+    """`convert` previews the conversion and `deliver` pushes it, and they run
+    the same pipeline. Wiring one and not the other makes the previewed tree
+    and the delivered tree different sizes -- and `deliver` is the one that
+    has to fit under the host's limit, so a one-sided wiring passes every
+    preview and fails at the push."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        step = find_step(wf, job, "Lift duplicated inline CSS into shared stylesheets")
+        assert "automation/scripts/extract-shared-css.mjs" in step["run"], job
+        assert step["if"] == "${{ inputs.extract_shared_css }}" or (
+            step["if"] == "inputs.extract_shared_css"
+        ), (job, step["if"])
+
+
+def test_extract_shared_css_runs_before_the_size_gate():
+    """The gate exists to catch a tree the host will refuse, and this pass is
+    one of the things that gets a tree under that limit. After the gate it
+    would fail the run on a size the very next step was about to fix."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        names = [s.get("name", "") for s in wf["jobs"][job]["steps"]]
+        convert = names.index("Convert the capture into real app routes")
+        css = names.index("Lift duplicated inline CSS into shared stylesheets")
+        gate = names.index("Gate - the tree must be publishable (push + Pages limits)")
+        # after the conversion, because that is what writes src/clone-content
+        assert convert < css < gate, (job, convert, css, gate)
+
+
+def test_extract_shared_css_is_off_by_default():
+    """It rewrites every captured page. A migration that already fits should
+    not take that change unasked."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    spec = triggers["workflow_dispatch"]["inputs"]["extract_shared_css"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_extract_shared_css_description_names_what_stays_inline():
+    """The two refusals are the whole correctness argument, and both are about
+    what a reference resolves against once it moves. An operator who does not
+    know they exist cannot tell this pass from one that would break the
+    SVG-filter effect on 245 pages."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["extract_shared_css"]["description"]
+    assert "url(#fragment)" in desc, desc
+    assert "%%BASE%%" in desc, desc
+    assert "SAME POSITION" in desc, desc
+
+
 def test_the_resolve_job_publishes_max_pdf_mb():
     """A job output that names a step output the step never sets resolves to
     the empty string, and an empty budget is not an error anywhere downstream

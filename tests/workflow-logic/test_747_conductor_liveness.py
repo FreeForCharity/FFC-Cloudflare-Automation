@@ -41,6 +41,7 @@ might need to report, goes dark exactly when it is needed.
 
 from __future__ import annotations
 
+import datetime
 import json
 import pathlib
 import subprocess
@@ -301,6 +302,72 @@ def test_a_future_timestamp_is_a_finding_not_very_fresh():
     assert a["hasFinding"]
     s = _sig(a, "conductor-silence")
     assert s["verdict"] == "UNKNOWN" and "future" in s["detail"], s
+
+
+def _shift(iso: str, hours: float) -> str:
+    """`iso` moved by `hours`, negative for earlier, to the second.
+
+    Computed rather than written out. These tests turn on 2m24s either side of a
+    threshold, and a hand-typed timestamp a minute off would pass for the wrong
+    reason -- which is the failure this whole module is about.
+    """
+    t = datetime.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc
+    )
+    return (t + datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_timestamp_just_past_the_future_tolerance_is_refused():
+    """The tolerance must be compared against the raw delta, not the rounded one.
+
+    `ageInHours` rounds to 0.1h for reporting. Comparing that rounded value let a
+    timestamp 1.04h ahead read as -1.0, which is not `< -1`, so up to 0.05h of
+    extra tolerance leaked -- a fail-open in the module whose entire contract is
+    that a reading it cannot believe is a finding.
+    """
+    tol = const("FUTURE_TOLERANCE_HOURS")
+    fresh = {"mergedPRs": [{"number": 1, "merged_at": LAST_MERGE}], "openPRs": 2}
+
+    # Inside the tolerance, still accepted: the fix must not simply refuse more.
+    inside = analyze(comments=[_comment(_shift(NOW, tol * 0.9))], **fresh)
+    assert "future" not in _sig(inside, "conductor-silence")["detail"], inside
+
+    # 0.04h past it, which rounds back to exactly -tol and used to pass.
+    leaked = analyze(comments=[_comment(_shift(NOW, tol + 0.04))], **fresh)
+    s = _sig(leaked, "conductor-silence")
+    assert leaked["hasFinding"], leaked
+    assert s["verdict"] == "UNKNOWN" and "future" in s["detail"], s
+
+
+def test_a_threshold_is_crossed_on_the_raw_age_not_the_rounded_one():
+    """Same cause as the future check, at the three other comparison sites.
+
+    Rounding before comparing cost a level just past every boundary: 6.04h read
+    as 6.0 and stayed OK, 12.04h read as 12.0 and stayed WARN. It never
+    fabricated an alert -- it arrived up to 3 minutes late, which is the
+    direction that looks like nothing is wrong.
+    """
+    warn = const("SILENCE_WARN_HOURS")
+    alert = const("SILENCE_ALERT_HOURS")
+
+    def verdict(hours_ago: float) -> str:
+        a = analyze(
+            comments=[_comment(_shift(NOW, -hours_ago))],
+            mergedPRs=[{"number": 1, "merged_at": _shift(NOW, -1)}],
+            openPRs=2,
+        )
+        return _sig(a, "conductor-silence")["verdict"]
+
+    assert verdict(warn - 0.04) == "OK", (
+        f"{warn - 0.04}h is inside the {warn}h warn threshold; rounding up to "
+        f"{warn}.0 must not raise a warning that is not due"
+    )
+    assert verdict(warn + 0.04) == "WARN", (
+        f"{warn + 0.04}h is past the {warn}h warn threshold but rounds to {warn}.0"
+    )
+    assert verdict(alert + 0.04) == "ALERT", (
+        f"{alert + 0.04}h is past the {alert}h alert threshold but rounds to {alert}.0"
+    )
 
 
 def test_an_unparseable_now_cannot_read_as_alive():

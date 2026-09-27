@@ -194,7 +194,7 @@ const ISSUE_LABELS = ['bug', 'agentic-os'];
  * @param {string} label what `iso` is, for the error text
  */
 function ageInHours(iso, nowIso, label) {
-  const bad = (error) => ({ ageHours: null, error });
+  const bad = (error) => ({ ageHours: null, rawAgeHours: null, error });
   if (typeof iso !== 'string' || iso.trim() === '') {
     return bad(`${label} is absent or empty`);
   }
@@ -210,11 +210,15 @@ function ageInHours(iso, nowIso, label) {
   if (!Number.isFinite(now)) {
     return bad(`cannot establish age: run timestamp \`${nowIso}\` did not parse`);
   }
-  const ageHours = Math.round(((now - then) / 3600000) * 10) / 10;
-  if (ageHours < -FUTURE_TOLERANCE_HOURS) {
+  const rawAgeHours = (now - then) / 3600000;
+  const ageHours = Math.round(rawAgeHours * 10) / 10;
+  // Compare the RAW delta. Rounding first let a timestamp up to 0.05h past the
+  // tolerance through (-1.04h rounds to -1.0, and -1.0 < -1 is false), and cost
+  // the thresholds a level at 6.04h and 12.04h. `ageHours` is for reporting.
+  if (rawAgeHours < -FUTURE_TOLERANCE_HOURS) {
     return bad(`${label} is ${Math.abs(ageHours)}h in the future: \`${value}\``);
   }
-  return { ageHours, error: null };
+  return { ageHours, rawAgeHours, error: null };
 }
 
 /**
@@ -314,7 +318,7 @@ function classifySilence(input, nowIso) {
         'the log changed format and this pattern no longer matches it (ledger L215)',
     );
   }
-  const { ageHours, error } = ageInHours(
+  const { ageHours, rawAgeHours, error } = ageInHours(
     parsed.newest.at,
     nowIso,
     'the newest Conductor comment timestamp',
@@ -322,7 +326,7 @@ function classifySilence(input, nowIso) {
   if (error) return _signal(name, 'UNKNOWN', null, error);
 
   const where = `run ${parsed.newest.run} ${parsed.newest.phase}`;
-  if (ageHours > SILENCE_ALERT_HOURS) {
+  if (rawAgeHours > SILENCE_ALERT_HOURS) {
     return _signal(
       name,
       'ALERT',
@@ -330,7 +334,7 @@ function classifySilence(input, nowIso) {
       `${ageHours}h since ${where} — past the ${SILENCE_ALERT_HOURS}h alert threshold`,
     );
   }
-  if (ageHours > SILENCE_WARN_HOURS) {
+  if (rawAgeHours > SILENCE_WARN_HOURS) {
     return _signal(
       name,
       'WARN',
@@ -370,11 +374,15 @@ function classifyMergeSilence(input, nowIso) {
   if (!newest) {
     return _signal(name, 'UNKNOWN', null, 'no merged agentic-os PR carried a usable `merged_at`');
   }
-  const { ageHours, error } = ageInHours(newest.merged_at, nowIso, 'the newest `merged_at`');
+  const { ageHours, rawAgeHours, error } = ageInHours(
+    newest.merged_at,
+    nowIso,
+    'the newest `merged_at`',
+  );
   if (error) return _signal(name, 'UNKNOWN', null, error);
 
   const where = `#${newest.number}`;
-  if (ageHours > MERGE_ALERT_HOURS) {
+  if (rawAgeHours > MERGE_ALERT_HOURS) {
     return _signal(
       name,
       'ALERT',
@@ -382,7 +390,7 @@ function classifyMergeSilence(input, nowIso) {
       `${ageHours}h since ${where} merged — past the ${MERGE_ALERT_HOURS}h alert threshold`,
     );
   }
-  if (ageHours > MERGE_WARN_HOURS) {
+  if (rawAgeHours > MERGE_WARN_HOURS) {
     return _signal(
       name,
       'WARN',

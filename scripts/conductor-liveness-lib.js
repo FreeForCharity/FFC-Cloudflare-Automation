@@ -435,9 +435,24 @@ function classifyPrCap(input) {
  *
  * This is the signal that models the actual #1339 failure: the pile grew 4 -> 13
  * across five days and ~39 worker runs without one alert, because nobody was
- * looking at the SHAPE of the sequence. A strictly increasing run of
- * GROWTH_SAMPLES samples that ends above the cap is a finding; anything shorter,
- * flat, or falling is not.
+ * looking at the SHAPE of the sequence.
+ *
+ * Three outcomes over the last GROWTH_SAMPLES samples, and the middle one is the
+ * one to read carefully:
+ *
+ *   strictly rising, ending ABOVE the cap   ALERT
+ *   strictly rising, ending at or below it  WARN  -- still a finding; `analyze`
+ *                                                counts WARN in `hasFinding`
+ *   fewer than GROWTH_SAMPLES, flat, or     OK
+ *   falling
+ *
+ * A rise that has not yet crossed the cap warns rather than passing, on purpose.
+ * The LEVEL is context -- the pile sat at 4, above the cap of 3, throughout the
+ * healthy window before the outage, which is why `open-pr-cap` reports the count
+ * and is never a finding -- so the SHAPE is what carries the signal. Waiting for
+ * the cap to be crossed before saying anything would reproduce the day-5
+ * detection #1339 was filed about. `test_growth_below_the_cap_only_warns` pins
+ * it.
  *
  * @param {Array<{at?:string, openPRs?:number}>} history oldest-first, current sample last
  */

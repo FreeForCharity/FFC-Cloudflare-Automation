@@ -1532,6 +1532,69 @@ def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
     assert "61.5%" in desc, desc
 
 
+def test_recode_all_images_description_names_the_set_it_actually_recodes():
+    """It said "EVERY captured raster image", and GIF is a raster image that
+    `RECODABLE` deliberately excludes because re-encoding one drops the
+    animation. An operator reading that would expect the 13 GIFs in the
+    newheightseducation.org export to be covered; none of them is. Caught by
+    Copilot on #1394 after it had already merged, so this test exists to stop
+    the wording drifting back."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]["description"]
+    assert "PNG, JPEG and WebP" in desc, desc
+    assert "GIF is deliberately NOT included" in desc, desc
+    # The overstatement itself must not come back.
+    assert "EVERY captured raster image" not in desc, desc
+
+
+def test_shrink_all_pdfs_reaches_the_capture():
+    """The PDF half of the same gap, and inert unless BOTH halves are present.
+    On newheightseducation.org the budget gate examined zero of 24 PDFs because
+    the largest was 13.1 MB against a 90 MB budget, while those 24 carried
+    142.1 MB of a tree that was 145.6 MB over Pages' ceiling."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["SHRINK_ALL_PDFS"] == "${{ inputs.shrink_all_pdfs }}", step["env"]
+    assert "args+=(--shrink-all-pdfs)" in step["run"]
+
+
+def test_shrink_all_pdfs_is_off_by_default():
+    """These are the charity's own publications. Re-encoding one is a real if
+    small quality loss, so it has to be asked for rather than inherited."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    spec = triggers["workflow_dispatch"]["inputs"]["shrink_all_pdfs"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_shrink_all_pdfs_is_only_passed_when_true():
+    """Same string-'false' trap as recode_all_images: an unchecked boolean
+    arrives as a non-empty string, so a truthiness test turns it on for every
+    run that left the box alone."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert '[ "$SHRINK_ALL_PDFS" = "true" ]' in step["run"], step["run"][-600:]
+
+
+def test_shrink_all_pdfs_description_states_the_measured_trade():
+    """The saving is large and the cost is a genuine quality reduction, so the
+    description has to carry both numbers -- and the fact that names are kept,
+    which is what makes it safe for links people have already bookmarked."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["shrink_all_pdfs"]["description"]
+    assert "TOTAL-size limit" in desc, desc
+    assert "108.8 MB" in desc, desc
+    assert "KEEPS ITS NAME" in desc, desc
+    # The profile is a LADDER, not a fixed /ebook. Saying "/ebook" alone
+    # understates the worst case an operator can reach by lowering
+    # max_pdf_mb, and /screen is a markedly coarser image than /ebook.
+    assert "/screen" in desc, desc
+    assert "PDF_DOWNSAMPLE_LADDER" in desc, desc
+
+
 def test_the_resolve_job_publishes_max_pdf_mb():
     """A job output that names a step output the step never sets resolves to
     the empty string, and an empty budget is not an error anywhere downstream

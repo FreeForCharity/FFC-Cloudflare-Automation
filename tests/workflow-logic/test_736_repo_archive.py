@@ -26,7 +26,7 @@ ARCHIVED_META = '{"archived": true, "visibility": "public", "pushed_at": "2026-0
 
 BASE_ENV = {
     "TARGET_ORG": "FreeForCharity",
-    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-Footer_Only_Template .github",
+    "DENYLIST": "FFC-Cloudflare-Automation FFC_Single_Page_Template FFC-IN-FFC_Single_Page_Template FFC-IN-Single_Page_Template_Jekell FFC-IN-Footer_Only_Template .github",
     "THIS_REPO": "FreeForCharity/FFC-Cloudflare-Automation",
     "IN_REASON": "test reason",
 }
@@ -80,6 +80,8 @@ def test_denylist_refused_before_any_api_call():
     for protected in (
         "FFC-Cloudflare-Automation",
         "FFC_Single_Page_Template",
+        "FFC-IN-FFC_Single_Page_Template",
+        "FFC-IN-Single_Page_Template_Jekell",
         "FFC-IN-Footer_Only_Template",
         ".github",
     ):

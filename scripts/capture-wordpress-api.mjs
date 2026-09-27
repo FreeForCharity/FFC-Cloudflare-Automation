@@ -1727,8 +1727,29 @@ export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
  * budget is left byte-identical to what the charity uploaded. Only the ones
  * that would be a problem for a visitor are touched.
  */
-export function shouldReencodeImage(absUrl, bytes, maxBytes) {
+export function shouldReencodeImage(absUrl, bytes, maxBytes, recodeAll = false) {
   if (!RECODABLE.test(absUrl)) return false;
+  // `recodeAll` asks a different question from the budget gate, and the
+  // difference is the whole point of the flag.
+  //
+  // `bytes > maxBytes` answers "does THIS image blow the per-file budget?".
+  // It is the right guard for the template's performance budget and it works:
+  // on newheightseducation.org it correctly caught and fixed all 34 offenders.
+  //
+  // It cannot answer "is the SITE too heavy?", and GitHub Pages refuses a site
+  // over 1024 MB, not a file over 400 KB. Measured on that same site: of 3,888
+  // captured JPEGs totalling 175.8 MB, **zero** exceed 400 KB -- mean size
+  // 46 KB -- so the budget gate examines 0% of those bytes while they are
+  // 42.7% of the asset tree. The three-host capture came to 1169.6 MB and was
+  // refused.
+  //
+  // Re-encoding all of them at the ladder's first rung (q85, original
+  // dimensions -- `encodeWebp` returns there because a 46 KB image is already
+  // under any budget) yields 67.7 MB, a 61.5% saving, measured with sharp at
+  // the exact settings this file uses. `keepReencoded`'s existing 25% floor
+  // still decides each file on merit: 268 of 280 sampled clear it, and the
+  // dozen that do not keep their original bytes.
+  if (recodeAll) return Number.isFinite(bytes) && bytes > 0;
   return Number.isFinite(bytes) && Number.isFinite(maxBytes) && bytes > maxBytes;
 }
 
@@ -2521,6 +2542,63 @@ function selfTest() {
     'an SVG is never re-encoded',
     shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
     false,
+  );
+
+  // --- Whole-tree re-encoding (--recode-all-images) -------------------------
+  // The budget gate answers "does THIS file blow the per-file budget?". A host
+  // total-size limit asks a different question, and on
+  // newheightseducation.org the two diverge completely: of 3,888 captured
+  // JPEGs totalling 175.8 MB, ZERO exceed 400 KB (mean 46 KB), so the budget
+  // gate examines 0% of 42.7% of the asset tree while the three-host capture
+  // is refused at 1169.6 MB against Pages' 1024 MB ceiling.
+  eq(
+    'an under-budget JPEG IS a candidate once whole-tree re-encoding is on',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, 400 * 1024, true),
+    true,
+  );
+  eq(
+    'the same JPEG is NOT a candidate under the budget gate alone',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, 400 * 1024),
+    false,
+  );
+  // Whole-tree mode widens WHICH files are offered to the encoder; it does not
+  // widen what may be re-encoded at all. A GIF would lose its animation and an
+  // SVG is not raster, so both stay out regardless.
+  eq(
+    'whole-tree mode still never re-encodes a GIF',
+    shouldReencodeImage('https://x.org/a/spinner.gif', 46 * 1024, 400 * 1024, true),
+    false,
+  );
+  eq(
+    'whole-tree mode still never re-encodes an SVG',
+    shouldReencodeImage('https://x.org/a/icon.svg', 46 * 1024, 400 * 1024, true),
+    false,
+  );
+  // An over-budget file is a candidate either way -- turning the flag on must
+  // not LOSE the guarantee the budget gate already provides.
+  eq(
+    'whole-tree mode still catches an over-budget file',
+    shouldReencodeImage('https://x.org/a/flyer.png', 900_000, 400 * 1024, true),
+    true,
+  );
+  // A zero-byte or unmeasured file has nothing to encode, and handing it to
+  // sharp would raise rather than shrink anything.
+  eq(
+    'a zero-byte image is not a candidate even in whole-tree mode',
+    shouldReencodeImage('https://x.org/a/empty.jpg', 0, 400 * 1024, true),
+    false,
+  );
+  eq(
+    'an unmeasured image is not a candidate even in whole-tree mode',
+    shouldReencodeImage('https://x.org/a/photo.jpg', NaN, 400 * 1024, true),
+    false,
+  );
+  // maxBytes is irrelevant in whole-tree mode, so an absent one must not make
+  // the predicate fail closed the way it does for the budget gate.
+  eq(
+    'whole-tree mode does not need a budget to be supplied',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, NaN, true),
+    true,
   );
   // This case used to assert `false`, on the reasoning that WebP is already the
   // destination format. That is true about the CONTAINER and says nothing
@@ -4233,6 +4311,11 @@ const includePosts = flag('include-posts');
 // captured bytes verbatim, which is the right choice only when the originals
 // are themselves the deliverable.
 const optimizeImages = !flag('no-optimize-images');
+// Off by default, because it renames thousands of files and a migration that
+// already fits should not pay that churn. Turn it on when the tree is over a
+// host's total-size limit: the per-file budget above cannot help there, since
+// a site can be far too heavy without any single file being too big.
+const recodeAllImages = flag('recode-all-images');
 const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 // On by default for the same reason images are: an oversized PDF is a cost the
 // visitor pays, and past 100 MB the receiving repo cannot accept it at all.
@@ -4255,7 +4338,7 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
     'Usage:\n' +
       '  --domain <domain> --inspect [--json-out <file>]\n' +
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
-      '      [--no-optimize-images] [--max-image-kb 400]\n' +
+      '      [--no-optimize-images] [--recode-all-images] [--max-image-kb 400]\n' +
       '  --self-test',
   );
   process.exit(2);
@@ -5056,7 +5139,7 @@ async function capture() {
     // pass: `localizeAsset` returns the local name, and every reference — in
     // markup, in srcset, in CSS — is rewritten from that return value, so a
     // renamed file cannot leave a stale reference behind.
-    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
+    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes, recodeAllImages)) {
       // Overwriting a real .webp the site already ships would lose a file, so
       // a taken name is DISAMBIGUATED rather than surrendered to. Only when
       // even the disambiguated name is taken is the original kept -- and that
@@ -5553,6 +5636,7 @@ async function capture() {
       pdfBytesBefore: pdfShrink.bytesBefore,
       pdfBytesAfter: pdfShrink.bytesAfter,
       enabled: optimizeImages,
+      recodeAll: recodeAllImages,
       encoderAvailable: imageRecode.available,
       maxImageKb: Math.round(maxImageBytes / 1024),
       recoded: imageRecode.recoded,

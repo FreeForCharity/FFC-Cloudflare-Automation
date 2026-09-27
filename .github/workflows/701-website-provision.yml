@@ -1371,7 +1371,8 @@ jobs:
     # this job too, so the requester was never added. needs.repo.result keeps the
     # real precondition. A dry run creates no repo, so there is nobody to add (this
     # job never ran on a dry run before either: dns is always skipped then).
-    # test_701_job_graph.py pins both for every job below dns.
+    # test_701_job_graph.py requires always() on every job below dns and pins these
+    # preconditions for this job and `content`.
     if: >-
       always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
       needs.repo.result == 'success' && needs.resolve.outputs.maintainers_csv != ''

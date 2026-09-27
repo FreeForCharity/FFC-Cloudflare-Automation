@@ -35,7 +35,12 @@ param(
     # leaves the template's fallback in place: a mailto: to the contact email.
     [string]$DonationUrl,
 
-    [string]$VolunteerUrl
+    [string]$VolunteerUrl,
+
+    # 701's IRS status value. Drives siteConfig.taxStatusLabel: the footer's
+    # "a US 501c3 Non Profit" clause and the donation policy's deductibility
+    # sentence are legal claims, made only for a recognized 501(c)(3).
+    [string]$IrsStatus
 )
 
 $ErrorActionPreference = 'Stop'
@@ -628,7 +633,8 @@ function Update-SiteConfig {
         [string[]]$Social,
         [string]$Mission,
         [string]$DonationUrl,
-        [string]$VolunteerUrl
+        [string]$VolunteerUrl,
+        [string]$IrsStatus
     )
 
     $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
@@ -642,9 +648,32 @@ function Update-SiteConfig {
     $text = Set-SiteConfigValue -Source $text -Key 'name' -ValueTs (ConvertTo-TsString $CharityName)
     $text = Set-SiteConfigValue -Source $text -Key 'mission' -ValueTs $missionTs -Optional
     # The template's description is FFC's own; the charity's mission is the
-    # honest replacement for the meta and social-card descriptions.
-    $text = Set-SiteConfigValue -Source $text -Key 'description' -ValueTs $missionTs
+    # honest replacement for the meta and social-card descriptions. The
+    # templates' own tests require a <meta description> over 50 characters,
+    # and a one-sentence mission is often shorter, so a short one is extended
+    # with a sentence naming the charity rather than failing the new repo's CI.
+    $description = $missionText
+    if ($description.Length -le 50) {
+        $description = "$missionText Learn about $CharityName, our team, and how to support our work."
+    }
+    $text = Set-SiteConfigValue -Source $text -Key 'description' -ValueTs (ConvertTo-TsString $description)
     $text = Set-SiteConfigValue -Source $text -Key 'shortDescription' -ValueTs $missionTs
+    # FFC's own tagline ("Reduce Costs, Increase Impact") and keywords ("free
+    # hosting", "Microsoft 365") would otherwise title and describe every
+    # charity's site.
+    $text = Set-SiteConfigValue -Source $text -Key 'tagline' -ValueTs (ConvertTo-TsString 'Nonprofit Organization')
+    $keywordsTs = '[' + ((@('nonprofit', 'charity', 'donate', 'volunteer', $CharityName) | ForEach-Object { ConvertTo-TsString $_ }) -join ', ') + ']'
+    $text = Set-SiteConfigValue -Source $text -Key 'keywords' -ValueTs $keywordsTs
+
+    # Legal claims follow the IRS status 701 recorded (same anchored test as
+    # 701): recognized -> the standard clause; anything else -> none.
+    $recognized = $IrsStatus -match '^\s*501\s*\(c\)\s*\(?3\)?'
+    $taxLabel = if ($recognized) { 'a US 501c3 Non Profit' } else { '' }
+    $text = Set-SiteConfigValue -Source $text -Key 'taxStatusLabel' -ValueTs (ConvertTo-TsString $taxLabel) -Optional
+    # Single Page template extras that describe FFC, not the charity: its 2014
+    # founding date, and the schema.org 501(c)(3) claim for an org without one.
+    $text = Remove-SiteConfigValue -Source $text -Key 'foundingDate'
+    if (-not $recognized) { $text = Remove-SiteConfigValue -Source $text -Key 'nonprofitStatus' }
     # A provisioned charity is standalone: the template's "a project of Free
     # For Charity" parentOrg (Single Page template) is FFC's own relationship.
     # FFC attribution stays via the permanent supportedBy key.
@@ -675,10 +704,13 @@ function Update-SiteConfig {
 
     $addrLines = @()
     if (-not [string]::IsNullOrWhiteSpace($Address)) {
-        $addrLines = @($Address -split "`r`n|`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        # Also split a literal backslash-n: 701's issue-form path emitted one
+        # until it was fixed, and a re-run on its recorded data must not
+        # render "\n" in the footer.
+        $addrLines = @($Address -split "`r`n|`n|\\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
     $addressesTs = if ($addrLines.Count -gt 0) {
-        $mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + (Convert-AddressToMapsQuery -Address $Address)
+        $mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + (Convert-AddressToMapsQuery -Address ($addrLines -join ' '))
         $linesTs = ($addrLines | ForEach-Object { ConvertTo-TsString $_ }) -join ', '
         "[`n    {`n      label: 'Main Address',`n      lines: [$linesTs],`n      mapUrl: $(ConvertTo-TsString $mapUrl),`n    },`n  ]"
     }
@@ -724,7 +756,10 @@ function Update-SecurityTxtContact {
         $path = Join-Path $RepoRoot $rel
         if (-not (Test-Path -LiteralPath $path)) { continue }
         $body = Get-Content -LiteralPath $path -Raw -Encoding utf8
-        $updated = [regex]::Replace($body, '(?m)^Contact:\s*mailto:\S+', "Contact: mailto:$Email")
+        # A MatchEvaluator, not a replacement string: "$&", "$1" or "$0" in an
+        # address would otherwise be read as substitutions.
+        $contactLine = "Contact: mailto:$Email"
+        $updated = [regex]::Replace($body, '(?m)^Contact:\s*mailto:\S+', { param($m) $contactLine })
         Write-LfFile -Path $path -Text $updated
     }
 }
@@ -755,12 +790,33 @@ function Update-TeamData {
         throw 'No usable leadership lines (each needs a name); refusing to leave the template team on the charity site.'
     }
 
+    # One card per person. Small boards often give one person two offices
+    # ("President" and "Secretary"); two cards with the same name fail the
+    # templates' duplicate-name test and React's key uniqueness, so the roles
+    # are merged instead, in the order given.
+    $byName = [ordered]@{}
+    foreach ($m in $members) {
+        $key = $m.Name.Trim().ToLowerInvariant()
+        if ($byName.Contains($key)) {
+            $prev = $byName[$key]
+            if ($prev.Title -notmatch ('(^|&\s)' + [regex]::Escape($m.Title) + '(\s&|$)')) {
+                $prev.Title = "$($prev.Title) & $($m.Title)"
+            }
+            if (-not $prev.LinkedIn -and $m.LinkedIn) { $prev.LinkedIn = $m.LinkedIn }
+        }
+        else { $byName[$key] = $m }
+    }
+    $members = @($byName.Values)
+
     # Only the JSON imports and the `team` array are replaced; everything else
     # in team.ts (the TeamMember type, derived exports such as the Single Page
     # template's `configuredTeam`) is the template's and is kept as-is.
     $indexText = Get-Content -LiteralPath $teamIndexFile -Raw -Encoding utf8
     $importRe = "(?m)^import\s+\w+\s+from\s+'\./team/[^']+\.json'\r?\n"
-    $arrayRe = '(?s)(export const team\s*(?::\s*TeamMember\[\])?\s*=\s*\[).*?(\n\])'
+    # The closing bracket may sit on its own line (as the templates ship it) or
+    # on the same line (as prettier leaves a short array after an earlier run),
+    # so a second run over the same repo matches too.
+    $arrayRe = '(?s)(export const team\s*(?::\s*TeamMember\[\])?\s*=\s*\[).*?(\s*\])'
     if (-not [regex]::IsMatch($indexText, $importRe) -or -not [regex]::IsMatch($indexText, $arrayRe)) {
         throw 'src/data/team.ts no longer has ./team/*.json imports and an "export const team = [ ... ]" array; the template changed shape.'
     }
@@ -792,7 +848,7 @@ function Update-TeamData {
     $withoutImports = [regex]::Replace($indexText, $importRe, '')
     $teamTs = $withoutImports.Substring(0, $firstImport) + ($imports -join "`n") + "`n" + $withoutImports.Substring($firstImport)
     $arrayBody = "`n" + ($vars -join "`n")
-    $teamTs = [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + $m.Groups[2].Value }, 'None')
+    $teamTs = [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + "`n]" }, 'None')
     Write-LfFile -Path $teamIndexFile -Text $teamTs
 }
 
@@ -838,7 +894,8 @@ if (Test-Path -LiteralPath $siteConfigFile) {
         -Social $FooterSocial `
         -Mission $Mission `
         -DonationUrl $DonationUrl `
-        -VolunteerUrl $VolunteerUrl
+        -VolunteerUrl $VolunteerUrl `
+        -IrsStatus $IrsStatus
 
     Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail
 

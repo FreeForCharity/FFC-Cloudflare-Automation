@@ -1615,7 +1615,10 @@ export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
  *
  * `worthShrinking` still has the last word in both modes, which is what makes
  * whole-tree safe to switch on blindly: of those 24, two came back LARGER
- * (-1% and -3%) and are declined rather than kept.
+ * (61,925 -> 62,502 bytes, +0.9%; 55,319 -> 56,895, +2.8%) and are declined
+ * rather than kept. The sign is the point: a growth is a POSITIVE percentage
+ * here, and an earlier draft of this comment wrote them as -1% and -3%, which
+ * reads as a saving and says the opposite of what the guard is for.
  */
 export function shouldShrinkPdf(absUrl, bytes, maxBytes, shrinkAll = false) {
   if (typeof absUrl !== 'string' || !/\.pdf(\?|$)/i.test(absUrl)) return false;
@@ -2803,9 +2806,11 @@ function selfTest() {
   );
   // whole-tree does not disable worthShrinking, and that is what makes it
   // safe to switch on blindly: two of the 24 measured files came back LARGER.
+  // The real pair, not a made-up one: video-production-and-new-media-release-
+  // form.pdf under `--shrink-all-pdfs`, which /ebook grows by 0.9%.
   eq(
     'worthShrinking still refuses a whole-tree result that grew',
-    worthShrinking(58000, 59700),
+    worthShrinking(61925, 62502),
     false,
   );
   // The ladder's top rung MEASURED larger than its input on a scan-shaped

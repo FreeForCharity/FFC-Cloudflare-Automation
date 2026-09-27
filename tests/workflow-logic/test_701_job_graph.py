@@ -50,13 +50,36 @@ def test_every_job_downstream_of_dns_opts_out_of_implicit_success():
     )
 
 
-def test_content_and_maintainers_still_require_a_created_repo_and_a_real_run():
+def test_content_and_maintainers_still_require_a_created_repo():
     for name in ("content", "maintainers"):
         cond = " ".join(str(JOBS[name]["if"]).split())
         assert "needs.repo.result == 'success'" in cond, (name, cond)
         assert "needs.resolve.outputs.skip != 'true'" in cond, (name, cond)
-        # A dry run creates no repo; neither job ever ran on one (dns is skipped then).
-        assert "inputs.dry_run != true" in cond, (name, cond)
+
+
+def test_maintainers_is_skipped_on_a_dry_run():
+    # A dry run creates no repo, so there is nobody to add anyone to.
+    cond = " ".join(str(JOBS["maintainers"]["if"]).split())
+    assert "inputs.dry_run != true" in cond, cond
+
+
+def test_content_rehearses_on_a_dry_run_against_the_template_when_no_repo_exists():
+    # `content` is the content rehearsal (test_dry_run_skips_write_gates lists it
+    # as REHEARSAL-INSIDE), so a dry run must reach it. A first-time dry run has
+    # no repo to clone, so it clones the template the repo would come from.
+    cond = " ".join(str(JOBS["content"]["if"]).split())
+    assert "dry_run" not in cond, cond
+    step = next(s for s in JOBS["content"]["steps"] if s.get("id") == "apply")
+    assert step["env"]["TEMPLATE_REPO"] == "${{ needs.resolve.outputs.template_repo }}", step["env"]
+    body = step["run"]
+    fallback = body.index("$cloneSource = [string]$env:TEMPLATE_REPO")
+    guard = body.index("if (([string]$env:DRY_RUN) -eq 'true') {")
+    assert guard < fallback < body.index("gh repo clone $cloneSource $cloneDir"), body[:400]
+    # The only push stays behind the dry-run branch.
+    assert body.count("git push origin") == 1
+    assert body.index("content rendered and staged, not committed or pushed") < body.index(
+        "git push origin HEAD:main"
+    )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

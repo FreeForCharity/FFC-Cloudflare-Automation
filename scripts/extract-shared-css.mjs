@@ -49,7 +49,7 @@
  *   2. A built-vs-built pixel diff of the two exports. See the PR for the run.
  */
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,6 +91,39 @@ export const MIN_PAGES = 2;
 export const MIN_BYTES = 256;
 
 const STYLE = /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi;
+
+/**
+ * The shape of a filename THIS tool writes: `hashCss`'s 16 hex characters.
+ *
+ * Used to sweep a previous run's output without touching anything else in the
+ * directory. Deliberately narrow: `--css-dir` is an operator-supplied path and
+ * a glob for `*.css` would delete a hand-written stylesheet that happened to
+ * share the folder.
+ */
+const GENERATED_CSS = /^[0-9a-f]{16}\.css$/;
+
+/**
+ * Which files in the output directory a run should delete.
+ *
+ * Kept = chosen this run UNION still referenced by the rewritten pages, and
+ * the second half is not optional. Run the CLI twice and the second pass sees
+ * content this tool already rewrote: no <style> blocks remain, so nothing is
+ * chosen, so a chosen-only sweep deletes the very file every page now links
+ * to. Measured before that union existed -- run 2 left
+ * `<link href="/x/06f971d6a50d6aa6.css">` pointing at nothing. Sweeping cruft
+ * is worth doing; breaking the site to do it is not.
+ *
+ * Only names this tool writes are ever candidates. `--css-dir` is an
+ * operator-supplied path, and deleting every `*.css` would take a
+ * hand-written stylesheet that happened to share the folder.
+ */
+export function filesToSweep(existing, chosenHashes, rewrittenPages) {
+  const keep = new Set([...chosenHashes].map((h) => `${h}.css`));
+  for (const html of rewrittenPages) {
+    for (const m of String(html).matchAll(/([0-9a-f]{16}\.css)/g)) keep.add(m[1]);
+  }
+  return existing.filter((name) => GENERATED_CSS.test(name) && !keep.has(name));
+}
 
 /** Why this CSS must stay inline, or null if it may be extracted. */
 export function refuseReason(css) {
@@ -264,6 +297,18 @@ function main() {
   }
 
   mkdirSync(cssDir, { recursive: true });
+  // Sweep a previous run's output. 706 itself never needs this --
+  // `integrate-clone-into-nextjs` wipes `public/` wholesale and carries back
+  // only root FILES plus PRESERVED_PUBLIC_DIRS (`Images`, `Svgs`,
+  // `.well-known`), so a `_ffc-css` DIRECTORY never survives a run. It is for
+  // the CLI, which an operator will point at a directory that already exists.
+  const stale = filesToSweep(
+    readdirSync(cssDir),
+    chosen.keys(),
+    staged.map((x) => x.next),
+  );
+  for (const name of stale) rmSync(join(cssDir, name));
+  const swept = stale.length;
   for (const [h, { css }] of chosen) writeFileSync(join(cssDir, `${h}.css`), css, 'utf8');
   let before = 0;
   let after = 0;
@@ -277,6 +322,7 @@ function main() {
   const byReason = new Map();
   for (const r of refused.values()) byReason.set(r.why, (byReason.get(r.why) ?? 0) + 1);
   console.log(`[css] ${pages.length} page(s), ${chosen.size} block(s) extracted`);
+  if (swept) console.log(`[css] swept ${swept} stale file(s) from a previous run`);
   for (const [why, n] of byReason) console.log(`[css] ${n} block(s) left inline: ${why}`);
   console.log(
     `[css] html ${mb(before)} -> ${mb(after)} MB, css ${mb(cssBytes)} MB, ` +
@@ -445,6 +491,31 @@ function selfTest() {
     `<style id="keep" media="print">${tiny}</style>`,
   );
   eq('reinline reports a missing link rather than claiming a match', reinline('', tLog), null);
+
+  // --- sweeping a previous run's output ---
+  const A = 'a'.repeat(16) + '.css';
+  const B = 'b'.repeat(16) + '.css';
+  eq(
+    'a generated file that is neither chosen nor referenced is swept',
+    filesToSweep([A, B], ['b'.repeat(16)], ['<p>no links</p>']),
+    [A],
+  );
+  eq(
+    'a file STILL REFERENCED by the rewritten pages is kept even when nothing is chosen',
+    filesToSweep([A], [], [`<link rel="stylesheet" href="/x/${A}" />`]),
+    [],
+  );
+  eq(
+    'a hand-written stylesheet sharing the directory is never a candidate',
+    filesToSweep(['site-overrides.css', 'README.md', A], [], ['']),
+    [A],
+  );
+  eq(
+    'an almost-generated name (wrong length) is not a candidate either',
+    filesToSweep(['abc.css', 'a'.repeat(17) + '.css'], [], ['']),
+    [],
+  );
+  eq('nothing to sweep is an empty list, not a throw', filesToSweep([], [], []), []);
 
   console.log(failures ? `\n${failures} self-test(s) failed` : '\nall self-tests passed');
   return failures ? 1 : 0;

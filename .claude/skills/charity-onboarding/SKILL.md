@@ -97,10 +97,11 @@ file names — the two differ. Map display→file via
 
 - File template **07** (admin-minimal) or **02** (full metadata) and **assign** it — assignment
   fires **`701. Website - Provision`**, which creates `FFC-EX-<domain>` from the template
-  (`FFC-IN-Footer_Only_Template` by default), enables Pages, adds the Technical POC as `maintain`,
-  and (if the zone is in FFC CF) enforces Pages DNS. Template 02 also collects the one-sentence
-  mission and optional Donate / Volunteer page URLs for the footer; a blank URL makes that link
-  email the charity. The `repo` job is **chained behind** the DNS approval.
+  (`FFC-IN-Footer_Only_Template` by default; a dispatch may pass `template_repo` for the Single Page
+  template), enables Pages, adds the Technical POC as `maintain`, and (if the zone is in FFC CF)
+  enforces Pages DNS. Template 02 also collects the one-sentence mission and optional Donate /
+  Volunteer page URLs for the footer; a blank URL makes that link email the charity. The `repo` job
+  is **chained behind** the DNS approval.
 - **Gotcha:** in the issue body, keep all prose **above** the `###` field headings — trailing text
   is slurped into the last field and silently drops the maintainer login.
 

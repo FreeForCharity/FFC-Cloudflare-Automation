@@ -108,11 +108,16 @@ def test_content_skipped_mentions_metadata_still_recorded():
     b = body({"SERVED": "true", "CONTENT_STATUS": "skipped"})
     assert "admin-minimal" in b, b
     assert "ffc-content.json" in b, b
+    # A skip is not only admin-minimal: any missing footer field causes it, and
+    # the site then ships the template's (FFC's) identity. Say so.
+    assert "not every footer field was provided" in b, b
+    assert "placeholder identity" in b, b
 
 
 def test_content_failed_is_nonblocking_warning():
     b = body({"SERVED": "true", "CONTENT_STATUS": "failed"})
     assert "did not complete (non-blocking)" in b, b
+    assert "placeholder identity" in b, b
 
 
 def test_missing_content_status_is_unknown_not_skipped():

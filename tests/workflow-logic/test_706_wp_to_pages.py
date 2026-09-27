@@ -1852,6 +1852,78 @@ def test_captured_fixed_chrome_cannot_sit_above_ffcs_own_modals():
     assert "#ss-floating-bar" not in css, css[-800:]
 
 
+def test_a_full_height_row_is_capped_at_the_phone_breakpoint():
+    """WPBakery's `vc_row-o-full-height` is `min-height: 100vh`, and on a phone
+    that hands the visitor a blank screen: the section's cover image drops to a
+    small srcset variant and the nav collapses into the hamburger, so a
+    full-viewport section holds one small image and nothing else.
+
+    Measured on FFC-EX-newheightseducation.org, where it was found: the home
+    page's first heading sat at y=1005, a full screen below an 844px fold,
+    while `verify:build`, Lighthouse (accessibility 100, SEO 100) and twelve
+    post-deploy smoke specs were green. They measured totals -- 4,806
+    characters of text, 16 visible images -- and none of it was on the first
+    screen.
+
+    Two things are asserted, and the second is the one that actually bites.
+
+    The cap has to be inside a max-width media query, or it would flatten the
+    desktop layout the option exists for. And it has to carry a leading `body`:
+    the capture's `<style>` blocks are inlined into the page fragment, so they
+    land after this file in the cascade and win every tie at equal specificity.
+    Without it the selector matches the source's at (0,3,0), loses, and changes
+    nothing -- which is what the first attempt shipped, with the
+    above-the-fold measurements coming back byte-identical. A rule that is
+    present, scoped correctly and has no effect is the failure mode this test
+    exists for, and reading the file for the selector alone would not see it.
+    """
+    css = (REPO_ROOT / "assets" / "ffc-footer.css").read_text(encoding="utf-8")
+    head = re.search(r"@media \(max-width: (\d+)px\) \{", css)
+    assert head, _around(css, "vc_row-o-full-height", "@media (max-width: ...)")
+    breakpoint_px = int(head.group(1))
+
+    # Brace-matched rather than regex-terminated. `\n\}` stops at the first
+    # closing brace in column 0, which is the OUTER one only as long as
+    # prettier keeps the inner rule indented -- so the block it validated was
+    # the whole media query by luck of formatting, not by construction.
+    # Measured: dedent the inner `}` and the check silently validates a
+    # truncated block; add a second rule after the first and it never reads it.
+    # Raised by copilot-pull-request-reviewer on #1384.
+    depth, block = 0, None
+    for j in range(head.end() - 1, len(css)):
+        if css[j] == "{":
+            depth += 1
+        elif css[j] == "}":
+            depth -= 1
+            if depth == 0:
+                block = css[head.end() : j]
+                break
+    assert block is not None, f"the @media block is never closed:\n{css[head.start() :][:400]}"
+
+    assert "vc_row-o-full-height" in block, block
+    assert "min-height: 0" in block, block
+    # Nothing inside the cap may put a height back. A second rule re-raising
+    # `min-height: 100vh` would undo the whole thing, and the old check read
+    # only as far as the first rule, so it could not have seen one.
+    # Capture the value and compare it, rather than a negative lookahead: `\s*`
+    # backtracks to zero width, so `(?!0\b)` tests the SPACE before the 0 and
+    # passes. Written that way this assertion fired on its own correct input.
+    values = [v.strip().rstrip(";") for v in re.findall(r"min-height\s*:\s*([^;}]+)", block)]
+    revived = [v for v in values if v not in ("0", "0px")]
+    assert not revived, f"a rule inside the cap sets a non-zero min-height: {revived}\n{block}"
+    # A phone breakpoint, not a desktop one -- capping at 1400px would undo the
+    # full-height layout everywhere rather than where it breaks.
+    assert 480 <= breakpoint_px <= 900, breakpoint_px
+    # Every selector in the cap must outrank the capture's inlined copy.
+    selectors = [ln.strip() for ln in block.splitlines() if "vc_row-o-full-height" in ln]
+    assert selectors, block
+    for sel in selectors:
+        assert sel.startswith("body "), (
+            f"{sel!r} ties the source rule at (0,3,0) and loses to it: the capture's "
+            "<style> blocks are inlined after this file"
+        )
+
+
 def _around(src: str, anchor: str, needle: str, span: int = 400) -> str:
     """An excerpt from where the reader should look, not from the file's top.
 

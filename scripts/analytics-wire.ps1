@@ -99,8 +99,20 @@ switch ($siteType) {
         if (Test-Path -LiteralPath $configPath) {
             # Existing config (newer template): update the ids in place.
             $c = Get-Content -LiteralPath $configPath -Raw
+            # Two template shapes carry the id. The Single Page template has an
+            # object (`analyticsConfig = { gtmId: '...' }`); the Footer-Only
+            # template exports a constant (`export const GTM_ID: string = '...'`)
+            # and fires GA4 inside the container, so it has no GA field. Matching
+            # only the first shape left a Footer-Only site on FFC's container
+            # while the run reported "Already wired".
+            $gtmConstRe = "(export\s+const\s+GTM_ID\s*(?::\s*string)?\s*=\s*)'[^']*'"
+            if (-not [regex]::IsMatch($c, "gtmId:\s*'[^']*'") -and -not [regex]::IsMatch($c, $gtmConstRe)) {
+                throw "src/lib/analytics.config.ts has neither a gtmId: key nor an exported GTM_ID constant; cannot wire it."
+            }
             if ($c -match "gtmId:\s*'(GTM-[A-Z0-9]{5,9})'") { $oldGtm = $Matches[1] }
-            $c = [regex]::Replace($c, "gtmId:\s*'[^']*'", "gtmId: '$GtmId'")
+            elseif ($c -match "export\s+const\s+GTM_ID\s*(?::\s*string)?\s*=\s*'(GTM-[A-Z0-9]{5,9})'") { $oldGtm = $Matches[1] }
+            $c = [regex]::Replace($c, "gtmId:\s*'[^']*'", { param($m) "gtmId: '$GtmId'" })
+            $c = [regex]::Replace($c, $gtmConstRe, { param($m) $m.Groups[1].Value + "'$GtmId'" })
             if ($MeasurementId) {
                 $c = [regex]::Replace($c, "gaMeasurementId:\s*'[^']*'", "gaMeasurementId: '$MeasurementId'")
             }

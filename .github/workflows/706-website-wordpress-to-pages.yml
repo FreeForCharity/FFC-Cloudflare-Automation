@@ -150,6 +150,20 @@ on:
         required: false
         type: boolean
         default: false
+      shrink_all_pdfs:
+        description: >-
+          Downsample EVERY captured PDF with Ghostscript's /ebook profile, not only those over
+          max_pdf_mb. The same structural gap as recode_all_images, on the other heavy asset class:
+          a per-file budget cannot answer a TOTAL-size limit. Measured on newheightseducation.org:
+          24 PDFs totalling 142.1 MB, LARGEST 13.1 MB against a 90 MB budget, so the budget pass
+          examined none of them. Downsampling all 24 gives 33.3 MB, a 108.8 MB (77%) saving. Page
+          counts were preserved on all 24 and page-one renders at 100 dpi differ from the originals
+          by 0.00%-3.28% (mean 0.40%). Unlike images, a shrunk PDF KEEPS ITS NAME, so no reference
+          is rewritten and no bookmarked or shared link breaks. Any file the pass makes larger is
+          declined and ships as captured -- two of the 24 did.
+        required: false
+        type: boolean
+        default: false
       max_pdf_mb:
         description: >-
           Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
@@ -779,6 +793,7 @@ jobs:
           MOUNTS: ${{ needs.resolve.outputs.mounts }}
           MAX_PDF_MB: ${{ needs.resolve.outputs.max_pdf_mb }}
           RECODE_ALL_IMAGES: ${{ inputs.recode_all_images }}
+          SHRINK_ALL_PDFS: ${{ inputs.shrink_all_pdfs }}
         shell: bash
         run: |
           set -uo pipefail
@@ -820,6 +835,7 @@ jobs:
             if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
             if [ -n "$MAX_PDF_MB" ]; then args+=(--max-pdf-mb "$MAX_PDF_MB"); fi
             if [ "$RECODE_ALL_IMAGES" = "true" ]; then args+=(--recode-all-images); fi
+            if [ "$SHRINK_ALL_PDFS" = "true" ]; then args+=(--shrink-all-pdfs); fi
 
             echo "::group::capture $label"
             # `|| rc=$?`, never `set +e … set -e`. This step declares

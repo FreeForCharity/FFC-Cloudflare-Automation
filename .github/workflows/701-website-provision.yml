@@ -1366,9 +1366,15 @@ jobs:
   # a bad/owner/non-existent login warns instead of failing provisioning.
   maintainers:
     needs: [resolve, repo]
+    # always(): `dns` is skipped for every zone FFC does not control, and without it
+    # GitHub's implicit success() treats that skipped ancestor as a failure and skips
+    # this job too, so the requester was never added. needs.repo.result keeps the
+    # real precondition. A dry run creates no repo, so there is nobody to add (this
+    # job never ran on a dry run before either: dns is always skipped then).
+    # test_701_job_graph.py pins both for every job below dns.
     if: >-
-      needs.resolve.outputs.skip != 'true' && needs.repo.result == 'success' &&
-      needs.resolve.outputs.maintainers_csv != ''
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.repo.result == 'success' && needs.resolve.outputs.maintainers_csv != ''
     # A `uses:` job does not inherit a permissions block implicitly in a way that is
     # obvious to readers, and 729 now mints an OIDC token for Key Vault. Declared
     # explicitly so this call cannot silently lose id-token when 701's
@@ -1391,7 +1397,13 @@ jobs:
     runs-on: windows-latest
     environment: github-prod
     needs: [resolve, zone_check, repo]
-    if: needs.resolve.outputs.skip != 'true'
+    # always() for the same reason as `maintainers`: without it a skipped `dns` (any
+    # zone FFC does not control) skipped this job, and the new site kept the
+    # template's placeholder identity. A dry run creates no repo to clone, so it
+    # stays excluded, as it always was in effect.
+    if: >-
+      always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' &&
+      needs.repo.result == 'success'
     # Best-effort by design: content patching is cosmetic polish on an already-provisioned
     # site. The inner try/catch covers the patch/commit/push, but earlier steps (clone,
     # gh auth setup-git) can still fail the job — continue-on-error ensures no content

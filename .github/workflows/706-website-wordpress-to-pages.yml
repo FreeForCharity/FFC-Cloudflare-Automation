@@ -137,16 +137,18 @@ on:
         default: ''
       recode_all_images:
         description: >-
-          Re-encode EVERY captured raster image to WebP, not only those over the per-file budget.
-          Off by default: it renames thousands of files, and a migration that already fits should
-          not pay that churn. Turn it on when the tree exceeds a host's TOTAL size limit, which the
-          per-file budget cannot help with -- a site can be far too heavy without any single file
-          being too big. Measured on newheightseducation.org: of 3,888 captured JPEGs totalling
-          175.8 MB, ZERO exceed the 400 KB budget (mean 46 KB), so the budget pass examined none of
-          them, while the three-host tree came to 1169.6 MB against Pages' 1024 MB ceiling.
-          Re-encoding them all yields 67.7 MB, a 61.5% saving. Each file still has to clear the
-          existing 25% floor to be kept, so one that does not earn its rename keeps its original
-          bytes.
+          Re-encode every captured PNG, JPEG and WebP to WebP, not only those over the per-file
+          budget. GIF is deliberately NOT included -- re-encoding one drops its animation -- and SVG
+          is vector, so "every raster image" would overstate what this does: `RECODABLE` in
+          capture-wordpress-api.mjs is the authority on the set. Off by default: it renames
+          thousands of files, and a migration that already fits should not pay that churn. Turn it
+          on when the tree exceeds a host's TOTAL size limit, which the per-file budget cannot help
+          with -- a site can be far too heavy without any single file being too big. Measured on
+          newheightseducation.org: of 3,888 captured JPEGs totalling 175.8 MB, ZERO exceed the 400
+          KB budget (mean 46 KB), so the budget pass examined none of them, while the three-host
+          tree came to 1169.6 MB against Pages' 1024 MB ceiling. Re-encoding them all yields 67.7
+          MB, a 61.5% saving. Each file still has to clear the existing 25% floor to be kept, so one
+          that does not earn its rename keeps its original bytes.
         required: false
         type: boolean
         default: false

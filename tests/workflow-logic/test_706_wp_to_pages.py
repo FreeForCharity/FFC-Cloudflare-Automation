@@ -1532,6 +1532,22 @@ def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
     assert "61.5%" in desc, desc
 
 
+def test_recode_all_images_description_names_the_set_it_actually_recodes():
+    """It said "EVERY captured raster image", and GIF is a raster image that
+    `RECODABLE` deliberately excludes because re-encoding one drops the
+    animation. An operator reading that would expect the 13 GIFs in the
+    newheightseducation.org export to be covered; none of them is. Caught by
+    Copilot on #1394 after it had already merged, so this test exists to stop
+    the wording drifting back."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]["description"]
+    assert "PNG, JPEG and WebP" in desc, desc
+    assert "GIF is deliberately NOT included" in desc, desc
+    # The overstatement itself must not come back.
+    assert "EVERY captured raster image" not in desc, desc
+
+
 def test_shrink_all_pdfs_reaches_the_capture():
     """The PDF half of the same gap, and inert unless BOTH halves are present.
     On newheightseducation.org the budget gate examined zero of 24 PDFs because

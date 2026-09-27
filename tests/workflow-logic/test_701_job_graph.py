@@ -72,14 +72,22 @@ def test_content_rehearses_on_a_dry_run_against_the_template_when_no_repo_exists
     step = next(s for s in JOBS["content"]["steps"] if s.get("id") == "apply")
     assert step["env"]["TEMPLATE_REPO"] == "${{ needs.resolve.outputs.template_repo }}", step["env"]
     body = step["run"]
-    fallback = body.index("$cloneSource = [string]$env:TEMPLATE_REPO")
-    guard = body.index("if (([string]$env:DRY_RUN) -eq 'true') {")
-    assert guard < fallback < body.index("gh repo clone $cloneSource $cloneDir"), body[:400]
+    anchors = {
+        "guard": "if (([string]$env:DRY_RUN) -eq 'true') {",
+        "not_found": "-notmatch 'Could not resolve to a Repository|HTTP 404'",
+        "fallback": "$cloneSource = [string]$env:TEMPLATE_REPO",
+        "clone": "gh repo clone $cloneSource $cloneDir",
+        "dry_notice": "content rendered and staged, not committed or pushed",
+        "push": "git push origin HEAD:main",
+    }
+    for name, text in anchors.items():
+        assert text in body, f"content step no longer contains its {name} anchor: {text!r}"
+    at = {name: body.index(text) for name, text in anchors.items()}
+    # Only a genuine not-found falls back to the template; anything else throws.
+    assert at["guard"] < at["not_found"] < at["fallback"] < at["clone"], at
     # The only push stays behind the dry-run branch.
     assert body.count("git push origin") == 1
-    assert body.index("content rendered and staged, not committed or pushed") < body.index(
-        "git push origin HEAD:main"
-    )
+    assert at["dry_notice"] < at["push"], at
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

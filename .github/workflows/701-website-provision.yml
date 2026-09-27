@@ -1561,11 +1561,18 @@ jobs:
           # content applied to it is exactly what the new repo would receive, and
           # the dry-run branch below never commits or pushes.
           $cloneSource = $repoFull
+          # Only a genuine not-found falls back; any other failure (auth, rate
+          # limit, network) fails the rehearsal with gh's own message rather than
+          # being mistaken for "the repo does not exist yet".
           if (([string]$env:DRY_RUN) -eq 'true') {
-            gh repo view $repoFull --json nameWithOwner 1>$null 2>$null
-            if ($LASTEXITCODE -ne 0) {
+            $viewOut = gh repo view $repoFull --json nameWithOwner 2>&1 | Out-String
+            $viewExit = $LASTEXITCODE
+            if ($viewExit -ne 0) {
+              if ($viewOut -notmatch 'Could not resolve to a Repository|HTTP 404') {
+                throw "gh repo view $repoFull failed (exit $viewExit) without reporting it missing: $($viewOut.Trim())"
+              }
               $cloneSource = [string]$env:TEMPLATE_REPO
-              Write-Host "::notice::dry_run=true and $repoFull does not exist yet - rehearsing the content patch against the template $cloneSource."
+              Write-Host "::notice::dry_run=true and GitHub reports $repoFull does not exist yet - rehearsing the content patch against the template $cloneSource."
             }
           }
           $cloneDir = Join-Path $workDir 'repo'

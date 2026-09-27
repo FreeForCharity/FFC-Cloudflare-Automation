@@ -72,22 +72,32 @@ def test_content_rehearses_on_a_dry_run_against_the_template_when_no_repo_exists
     step = next(s for s in JOBS["content"]["steps"] if s.get("id") == "apply")
     assert step["env"]["TEMPLATE_REPO"] == "${{ needs.resolve.outputs.template_repo }}", step["env"]
     body = step["run"]
+    guard = "if (([string]$env:DRY_RUN) -eq 'true') {"
+    # Two dry-run branches: the clone-source fallback, then the write gate.
+    assert body.count(guard) == 2, body.count(guard)
+    clone_guard = body.index(guard)
+    write_guard = body.index(guard, clone_guard + 1)
     anchors = {
-        "guard": "if (([string]$env:DRY_RUN) -eq 'true') {",
+        "view": "$viewOut = gh repo view $repoFull",
         "not_found": "-notmatch 'Could not resolve to a Repository|HTTP 404'",
         "fallback": "$cloneSource = [string]$env:TEMPLATE_REPO",
         "clone": "gh repo clone $cloneSource $cloneDir",
         "dry_notice": "content rendered and staged, not committed or pushed",
+        "commit": 'git commit -m "chore: apply footer + leadership content"',
         "push": "git push origin HEAD:main",
     }
     for name, text in anchors.items():
-        assert text in body, f"content step no longer contains its {name} anchor: {text!r}"
+        assert body.count(text) == 1, f"content step should contain its {name} anchor once: {text!r}"
     at = {name: body.index(text) for name, text in anchors.items()}
     # Only a genuine not-found falls back to the template; anything else throws.
-    assert at["guard"] < at["not_found"] < at["fallback"] < at["clone"], at
-    # The only push stays behind the dry-run branch.
+    assert clone_guard < at["view"] < at["not_found"] < at["fallback"] < at["clone"], at
+    assert at["clone"] < write_guard, (at, write_guard)
+    # The only commit and push sit in the else of the write gate: the dry-run
+    # branch prints its notice, then `} else {` hands off to commit and push.
     assert body.count("git push origin") == 1
-    assert at["dry_notice"] < at["push"], at
+    else_ = body.find("} else {", at["dry_notice"])
+    assert write_guard < at["dry_notice"] < else_ < at["commit"] < at["push"], (write_guard, else_, at)
+    assert guard not in body[write_guard + 1 : at["push"]], "another dry-run branch opened before the push"
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

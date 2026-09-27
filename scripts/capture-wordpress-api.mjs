@@ -1723,9 +1723,23 @@ export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
 /**
  * Whether this asset is a candidate for re-encoding at all.
  *
- * Size is part of the predicate, not a separate check: an image already under
- * budget is left byte-identical to what the charity uploaded. Only the ones
- * that would be a problem for a visitor are touched.
+ * Two modes, and they answer different questions -- see the body for the
+ * measurement that separates them.
+ *
+ * BUDGET GATE (default). Size is part of the predicate, not a separate check:
+ * an image already under budget is left byte-identical to what the charity
+ * uploaded. Only the ones that would be a problem for a visitor on their own
+ * are touched.
+ *
+ * WHOLE TREE (`recodeAll`, from `--recode-all-images`). Every recodable image
+ * is offered to the encoder regardless of its size, because a site can exceed
+ * a host's TOTAL limit without any single file exceeding the per-file one. An
+ * under-budget image is then no longer guaranteed byte-identical -- though
+ * `keepReencoded`'s 25% floor still decides each file on merit, so one that
+ * does not earn its rename keeps its original bytes.
+ *
+ * Neither mode widens WHAT may be re-encoded: `RECODABLE` still excludes GIF
+ * (an animation would be lost) and SVG (not raster).
  */
 export function shouldReencodeImage(absUrl, bytes, maxBytes, recodeAll = false) {
   if (!RECODABLE.test(absUrl)) return false;

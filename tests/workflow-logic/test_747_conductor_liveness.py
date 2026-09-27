@@ -689,6 +689,52 @@ def test_growth_below_the_cap_only_warns():
     assert _sig(a, "pr-growth")["verdict"] == "WARN", _sig(a, "pr-growth")
 
 
+def test_a_count_that_cannot_be_a_pr_count_is_dropped_not_believed():
+    """An open-PR count is a non-negative integer; -1 and 1.5 are corruption.
+
+    `_finiteCount` was added to stop empty-ish values coercing to 0, and it
+    stopped half way -- it still accepted negatives and fractions, from a source
+    that is the rolling issue body rather than our own wiring. Measured before
+    the fix: a history of `5, -1, 9` classified OK, "not monotonically rising",
+    where `5, 7, 9` ALERTs with "nothing is draining the queue". One unusable
+    sample suppressed a real alert AND supplied a confident wrong reason for it,
+    which is the pair of failures this module exists to refuse.
+    """
+
+    def samples(*counts):
+        return [
+            {"at": "2026-09-19T0%d:00:00Z" % (i + 1), "openPRs": c}
+            for i, c in enumerate(counts)
+        ]
+
+    def growth(prior, open_now):
+        a = analyze(
+            comments=[_comment(NOW)],
+            mergedPRs=[{"number": 1, "merged_at": NOW}],
+            openPRs=open_now,
+            priorBody=render_history(prior),
+        )
+        return _sig(a, "pr-growth")
+
+    # The honest sequences must still reach their verdicts, or this could pass
+    # by dropping everything -- which is how a tightened filter usually fails.
+    assert growth(samples(5, 7), 9)["verdict"] == "ALERT", growth(samples(5, 7), 9)
+    assert growth(samples(0, 1), 2)["verdict"] == "WARN", growth(samples(0, 1), 2)
+
+    for bad in (-1, 1.5):
+        # suppression: a corrupt sample inside a real rise
+        s = growth(samples(5, bad), 9)
+        assert s["verdict"] == "OK" and "not enough" in s["detail"], (bad, s)
+        assert "not monotonically rising" not in s["detail"], (
+            f"{bad} must degrade to 'cannot judge', not to a confident "
+            f"statement about the shape of a sequence it could not read: {s}"
+        )
+
+        # manufacture: a rise built out of counts that cannot exist
+        s = growth(samples(bad, 0), 1)
+        assert s["verdict"] == "OK" and "not enough" in s["detail"], (bad, s)
+
+
 def test_a_flat_or_falling_pile_is_not_growth():
     for prior in ([9, 9], [9, 8], [2, 12]):
         a = analyze(

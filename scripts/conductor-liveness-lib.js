@@ -281,15 +281,27 @@ function _signal(name, verdict, measured, detail) {
  * laundered into a zero is neither suppressed nor said.
  *
  * Numeric strings stay acceptable, because callers and older history blocks may
- * carry them; only the empty-ish values that coerce to zero are refused.
+ * carry them.
+ *
+ * A count of open PRs is a NON-NEGATIVE INTEGER. Refusing only the empty-ish
+ * values left the other half of the same hole open: measured on the shipped
+ * library, a history of `5, -1, 9` classified OK -- "not monotonically rising"
+ * -- where `5, 7, 9` ALERTs, so one unusable sample suppressed a real alert and
+ * gave a confident wrong reason for it; and `-1, 0, 1` manufactured a WARN out
+ * of counts that cannot exist. Dropping them instead degrades to "only 2 of 3
+ * samples ... not enough history yet", which is what this module promises a
+ * corrupt block will say.
  */
 function _finiteCount(value) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'string' && value.trim() !== '') {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
+  let n = NaN;
+  if (typeof value === 'number') {
+    n = value;
+  } else if (typeof value === 'string' && value.trim() !== '') {
+    n = Number(value);
   }
-  return null;
+  // Number.isInteger is false for NaN and Infinity, so this one test covers the
+  // unparseable, the infinite, the fractional and the empty-ish alike.
+  return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 /**

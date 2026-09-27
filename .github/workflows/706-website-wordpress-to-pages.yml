@@ -135,6 +135,21 @@ on:
         required: false
         type: string
         default: ''
+      recode_all_images:
+        description: >-
+          Re-encode EVERY captured raster image to WebP, not only those over the per-file budget.
+          Off by default: it renames thousands of files, and a migration that already fits should
+          not pay that churn. Turn it on when the tree exceeds a host's TOTAL size limit, which the
+          per-file budget cannot help with -- a site can be far too heavy without any single file
+          being too big. Measured on newheightseducation.org: of 3,888 captured JPEGs totalling
+          175.8 MB, ZERO exceed the 400 KB budget (mean 46 KB), so the budget pass examined none of
+          them, while the three-host tree came to 1169.6 MB against Pages' 1024 MB ceiling.
+          Re-encoding them all yields 67.7 MB, a 61.5% saving. Each file still has to clear the
+          existing 25% floor to be kept, so one that does not earn its rename keeps its original
+          bytes.
+        required: false
+        type: boolean
+        default: false
       max_pdf_mb:
         description: >-
           Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
@@ -763,6 +778,7 @@ jobs:
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
           MOUNTS: ${{ needs.resolve.outputs.mounts }}
           MAX_PDF_MB: ${{ needs.resolve.outputs.max_pdf_mb }}
+          RECODE_ALL_IMAGES: ${{ inputs.recode_all_images }}
         shell: bash
         run: |
           set -uo pipefail
@@ -803,6 +819,7 @@ jobs:
             if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
             if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
             if [ -n "$MAX_PDF_MB" ]; then args+=(--max-pdf-mb "$MAX_PDF_MB"); fi
+            if [ "$RECODE_ALL_IMAGES" = "true" ]; then args+=(--recode-all-images); fi
 
             echo "::group::capture $label"
             # `|| rc=$?`, never `set +e … set -e`. This step declares

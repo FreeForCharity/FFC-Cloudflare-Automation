@@ -672,8 +672,43 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 #   git --config-env a.b=HOME status -> 0, "On branch master"
 #   git --git-dir <path> status      -> 0, "On branch master"
 #
-# `--exec-path` is deliberately absent: bare, it PRINTS the exec path and
-# exits without running the subcommand at all, so it can never precede a push.
+# `--exec-path` IS present, and the reason it was once absent is worth keeping,
+# because the fact was right and the conclusion did not follow. Bare, it PRINTS
+# the exec path and exits without running the subcommand -- true on git 2.43.0,
+# re-measured -- so it can never precede a real push. But leaving it out of
+# this list did not stop `GIT_PUSH_RE` matching it: the generic
+# `--?[A-Za-z]\S*` alternative below swallows `--exec-path` like any other
+# option, and `push` after it then reads as the verb. So the old comment
+# described git correctly while the regex did the opposite of what it claimed,
+# and `git --exec-path push --force origin main` -- a command that only prints
+# a path -- was BLOCKED. Copilot on #1336.
+#
+# Measured on git 2.43.0 in a repo with no remote, against a `git push origin
+# main` control that fails identically to the `=` row (which is what proves the
+# `=` form really runs push -- not the absence of a remote error, since git
+# rejects the refspec before it resolves the remote):
+#
+#   git --exec-path push --force origin main        -> 0, prints /usr/lib/git-core
+#   git --exec-path /usr/lib/git-core push ... main -> 0, prints /usr/lib/git-core
+#   git --exec-path=/usr/lib/git-core push origin main
+#       -> 1, "src refspec main does not match any"
+#   git push origin main             (control)      -> 1, the same error, so
+#       the `=` row really ran push
+#
+# Listing it here makes the bare form ALLOW (the value slot eats the next word,
+# so `push` is no longer the verb) while `--exec-path=<path>` keeps matching
+# through the generic alternative and stays BLOCKED.
+#
+# It also flips the separate-word spelling the OTHER way, which is a change in
+# its own right and not a preserved behaviour -- the first draft of this comment
+# claimed it was already blocked and the mutation test said otherwise. Before
+# this entry existed, `git --exec-path /usr/lib/git-core push --force origin
+# main` was ALLOWED: the generic alternative matched `--exec-path`, and
+# `/usr/lib/git-core` is not option-shaped, so the scan stopped there and never
+# reached `push`. It now BLOCKS. That is a NEW over-block, taken on purpose:
+# this git only prints and exits, but an older one that consumed the path and
+# went on to run the subcommand would make that spelling a real force-push, and
+# a verb rule must fail closed on the shape it cannot measure.
 # `--super-prefix` is present and is the one entry not confirmed here -- this
 # git rejects it (129, like the bogus control), because it was removed as an
 # internal-only option. It is kept because older gits accept it and listing it
@@ -682,7 +717,9 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 # `git.exe` is the same rule reached from the other end: `\bgit\s` wants
 # whitespace right after `git`, and `git.exe push --force origin main` is a
 # working spelling on a Windows host -- which is where the Conductor runs.
-GIT_SEPARATE_ARG_OPT = r"(?:-[cC]|--(?:git-dir|work-tree|namespace|config-env|super-prefix))"
+GIT_SEPARATE_ARG_OPT = (
+    r"(?:-[cC]|--(?:git-dir|work-tree|namespace|config-env|super-prefix|exec-path))"
+)
 GIT_GLOBAL_OPT = (
     rf"(?:{GIT_SEPARATE_ARG_OPT}\s+\S+|(?!{GIT_SEPARATE_ARG_OPT}\s)--?[A-Za-z]\S*)"
 )

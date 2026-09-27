@@ -499,6 +499,49 @@ RULES = [
         # `\bgit\s` wants whitespace right after `git`; the Conductor runs on
         # Windows, where `git.exe push` is an ordinary spelling.
         ("force-push main via git.exe", "git.exe push --force origin main", BLOCK),
+        # `--exec-path` splits three ways, and only one of them can push.
+        # Measured on git 2.43.0 in a repo with no remote, against a
+        # `git push origin main` control:
+        #
+        #   bare, then the verb        -> 0, prints /usr/lib/git-core, NO push
+        #   bare + a separate path     -> 0, prints it too; the word is ignored
+        #   `=<path>`, then the verb   -> 1, "src refspec main does not match
+        #                                 any" -- identical to the control, so
+        #                                 push really ran
+        #
+        # The control is what carries that last row: a repo with no remote was
+        # supposed to make a real push fail by naming `origin`, but git rejects
+        # the refspec first, so the error looks nothing like a push until you
+        # see the plain `git push` control produce the same line.
+        #
+        # So the ALLOW row is the fix (`--exec-path` now takes the value slot,
+        # so `push` stops being the verb) and the `=` row must stay BLOCK
+        # because it is a real force-push. The separate-path row is the one to
+        # read carefully: it was ALLOWED before this change, because the generic
+        # option alternative matched `--exec-path` and `/usr/lib/git-core` is
+        # not option-shaped, so the scan stopped there and never reached `push`.
+        # It BLOCKS now -- a NEW over-block, taken on purpose, since an older
+        # git that consumed the path and ran on would make that a real
+        # force-push. Stated because the first draft of this comment said it
+        # "stays BLOCK", and the mutation below is what proved otherwise.
+        #
+        # Discrimination, measured: dropping `exec-path` from
+        # GIT_SEPARATE_ARG_OPT on a copy flips exactly two of these rows, in
+        # OPPOSITE directions -- the ALLOW row reddens (`want=allow got=block`,
+        # the false positive returning) and the separate-path row loosens
+        # (`want=block got=allow`). The `=` row does not move, because it
+        # matches through the generic alternative either way. A pair that fails
+        # both ways is what makes this entry's behaviour pinned rather than
+        # merely covered.
+        # Copilot on #1336; its finding was right and its stated mechanism was
+        # not -- git does not take `push` as the option's value, it exits before
+        # reading it.
+        ("bare git --exec-path cannot push, so not a force-push",
+         "git --exec-path push --force origin main", ALLOW),
+        ("force-push main via git --exec-path=<path>",
+         "git --exec-path=/usr/lib/git-core push --force origin main", BLOCK),
+        ("git --exec-path with a separate path, over-blocked on purpose",
+         "git --exec-path /usr/lib/git-core push --force origin main", BLOCK),
         # ...and the long options must not arm the rule either. The second is
         # run 170's row: `log` is not option-shaped, so it ends the scan and
         # the `push` after `--grep` is never read as the verb.

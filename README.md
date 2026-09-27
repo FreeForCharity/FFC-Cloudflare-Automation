@@ -165,7 +165,7 @@ This workflow currently hardcodes:
   Donate / Volunteer links); a dispatch can pass
   `template_repo: FreeForCharity/FFC-IN-FFC_Single_Page_Template` instead. Either way the content
   job writes the charity's details into the template's `src/lib/site.config.ts`. Tested per template
-  by **747** (see `docs/testing-provisioning-with-sample-charities.md`).
+  by **748** (see `docs/testing-provisioning-with-sample-charities.md`).
 
 ## Quick Start
 

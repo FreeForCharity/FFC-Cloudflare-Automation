@@ -1,4 +1,4 @@
-"""Apply one sample charity to a real template checkout (used by workflow 747).
+"""Apply one sample charity to a real template checkout (used by workflow 748).
 
     python3 tests/workflow-logic/apply_sample_charity.py --charity riverbend-pantry --repo site
 

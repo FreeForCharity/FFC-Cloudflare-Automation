@@ -1,4 +1,4 @@
-name: '747. Repo - Template Provisioning Matrix [Repo]'
+name: '748. Repo - Template Provisioning Matrix [Repo]'
 run-name: 'Template provisioning matrix (${{ github.event_name }})'
 
 # Proves that website provisioning (701) produces a site that passes its OWN CI
@@ -28,7 +28,7 @@ on:
       - 'tests/workflow-logic/test_701_apply_website_template.py'
       - 'tests/workflow-logic/test_701_parse.py'
       - '.github/workflows/701-website-provision.yml'
-      - '.github/workflows/747-template-provisioning-matrix.yml'
+      - '.github/workflows/748-template-provisioning-matrix.yml'
   schedule:
     # Weekly, Tuesday 08:17 UTC
     - cron: '17 8 * * 2'

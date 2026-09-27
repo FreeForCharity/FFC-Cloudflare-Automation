@@ -8,7 +8,7 @@ URL points at an `ffc-test` handle. `test_sample_charities.py` fails if any of t
 true, so a test run can never provision, email or link a real organization.
 
 Each charity's `inputs` object uses 701's `workflow_dispatch` input names verbatim (every value a
-string), so the same data drives the offline tests, workflow 747 and a live 701 run. Its `expect`
+string), so the same data drives the offline tests, workflow 748 and a live 701 run. Its `expect`
 block records what the content step must produce for it.
 
 | Charity            | Covers                                                                                                                                     |
@@ -28,8 +28,8 @@ line and an `expect` block.
      fixture repo shaped like the templates.
    - `test_701_apply_website_template.py` and `test_701_parse.py` hold the targeted regression
      cases.
-2. **Real templates** (workflow **747**, on PRs touching the provisioning path, weekly, and on
-   demand). For every template × charity pair, 747 clones the template, applies the charity exactly
+2. **Real templates** (workflow **748**, on PRs touching the provisioning path, weekly, and on
+   demand). For every template × charity pair, 748 clones the template, applies the charity exactly
    as 701's content job does, and runs that template's own checks: format, lint, unit tests,
    site-config schema, drift and build. A red cell means that charity would get a site whose own CI
    fails, and so never deploys, or one that still carries Free For Charity's identity. To reproduce

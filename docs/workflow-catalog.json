@@ -2208,12 +2208,12 @@
       "categoryCode": "GH"
     },
     {
-      "number": 747,
+      "number": 748,
       "title": "Repo - Template Provisioning Matrix",
       "apis": [
         "Repo"
       ],
-      "file": "747-template-provisioning-matrix.yml",
+      "file": "748-template-provisioning-matrix.yml",
       "triggers": [
         "pull_request",
         "schedule",

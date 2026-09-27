@@ -14,7 +14,7 @@ through the parts of 701 that can run offline:
   701's content job feeds it, against the config-driven fixture repo from
   test_701_apply_website_template.py; each charity's `expect` block is checked.
 
-Workflow 747 applies the same dataset to the REAL templates and runs each
+Workflow 748 applies the same dataset to the REAL templates and runs each
 template's own CI; this module is the fast, offline half that runs on every PR.
 """
 

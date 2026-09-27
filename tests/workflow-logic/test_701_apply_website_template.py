@@ -156,7 +156,7 @@ def run_apply(repo: pathlib.Path, args: dict) -> subprocess.CompletedProcess:
     # Called the way 701 calls it: in-process, with real string arrays. `pwsh
     # -File` would flatten an array argument into one string.
     params = " ".join(f"-{k} {ps_literal(v)}" for k, v in args.items())
-    # The wrapper lives in its own temp dir, never beside the repo: workflow 747
+    # The wrapper lives in its own temp dir, never beside the repo: workflow 748
     # applies to a checkout inside the Actions workspace.
     with tempfile.TemporaryDirectory() as wd:
         wrapper = pathlib.Path(wd) / "invoke.ps1"

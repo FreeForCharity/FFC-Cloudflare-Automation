@@ -1567,6 +1567,31 @@ def test_extract_shared_css_is_off_by_default():
     wf = load_workflow(WORKFLOW)
     triggers = wf[True] if True in wf else wf["on"]
     spec = triggers["workflow_dispatch"]["inputs"]["extract_shared_css"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_every_test_in_this_module_actually_asserts_something():
+    """A test with no assertion passes, so the suite cannot report its own
+    damage -- and that is not hypothetical here. Resolving the #1395 merge,
+    a conflict boundary fell INSIDE
+    `test_extract_shared_css_is_off_by_default`, the "keep both sides"
+    resolution dropped its two asserts, and the suite went on reporting 169
+    green. Copilot caught it; the test count could not.
+
+    Cheap, total, and it fails in the loud direction: a helper that genuinely
+    needs no assertion is not named `test_*`."""
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    bodies, current = {}, None
+    for line in src.splitlines():
+        m = re.match(r"^def (test_\w+)\(", line)
+        if m:
+            current = m.group(1)
+            bodies[current] = []
+        elif current is not None:
+            bodies[current].append(line)
+    silent = [name for name, body in bodies.items() if not any("assert" in x for x in body)]
+    assert not silent, f"test(s) with no assertion: {silent}"
 
 
 def test_recode_all_images_description_names_the_set_it_actually_recodes():

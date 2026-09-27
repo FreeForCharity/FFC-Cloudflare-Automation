@@ -370,6 +370,37 @@ def test_a_threshold_is_crossed_on_the_raw_age_not_the_rounded_one():
     )
 
 
+def test_the_merge_threshold_is_also_crossed_on_the_raw_age():
+    """`classifyMergeSilence` had the same two rounded comparisons.
+
+    Found by mutating each comparison site separately rather than trusting that
+    one reddening test covered the fix: reverting these two left the module green
+    while the silence sites were caught, so the merge half was correct and
+    unpinned.
+    """
+    warn = const("MERGE_WARN_HOURS")
+    alert = const("MERGE_ALERT_HOURS")
+
+    def verdict(hours_ago: float) -> str:
+        a = analyze(
+            comments=[_comment(_shift(NOW, -1))],
+            mergedPRs=[{"number": 1, "merged_at": _shift(NOW, -hours_ago)}],
+            openPRs=2,
+        )
+        return _sig(a, "merge-silence")["verdict"]
+
+    assert verdict(warn - 0.04) == "OK", (
+        f"{warn - 0.04}h is inside the {warn}h warn threshold; rounding up to "
+        f"{warn}.0 must not raise a warning that is not due"
+    )
+    assert verdict(warn + 0.04) == "WARN", (
+        f"{warn + 0.04}h is past the {warn}h warn threshold but rounds to {warn}.0"
+    )
+    assert verdict(alert + 0.04) == "ALERT", (
+        f"{alert + 0.04}h is past the {alert}h alert threshold but rounds to {alert}.0"
+    )
+
+
 def test_an_unparseable_now_cannot_read_as_alive():
     """NaN fails both the future test and the threshold test, so without an
     explicit guard a silence of any length falls through to OK."""

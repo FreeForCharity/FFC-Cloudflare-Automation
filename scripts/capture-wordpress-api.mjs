@@ -1608,7 +1608,9 @@ export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
  * 24 PDFs, 142.1 MB, `max-pdf-mb` at its 90 MB default, LARGEST FILE 13.1 MB.
  * Zero of the 24 were over budget, so the budget gate examined none of them,
  * while the tree as a whole was 1169.6 MB against GitHub Pages' 1024 MB
- * ceiling. Running every one through `/ebook` took the set to 33.3 MB, a
+ * ceiling. Running every one through the ladder -- which returns at `/ebook`
+ * for all 24, since its largest output is 3.5 MB against the 90 MB budget, so
+ * `/screen` is never reached on this corpus -- took the set to 33.3 MB, a
  * 108.8 MB saving, with page counts preserved on all 24 (checked with
  * Ghostscript's own `pdfpagecount`) and page-one renders at 100 dpi differing
  * by 0.00%-3.28% (mean 0.40%) from the originals.

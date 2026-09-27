@@ -154,14 +154,19 @@ on:
         default: false
       shrink_all_pdfs:
         description: >-
-          Downsample EVERY captured PDF with Ghostscript's /ebook profile, not only those over
-          max_pdf_mb. The same structural gap as recode_all_images, on the other heavy asset class:
-          a per-file budget cannot answer a TOTAL-size limit. Measured on newheightseducation.org:
-          24 PDFs totalling 142.1 MB, LARGEST 13.1 MB against a 90 MB budget, so the budget pass
-          examined none of them. Downsampling all 24 gives 33.3 MB, a 108.8 MB (77%) saving. Page
-          counts were preserved on all 24 and page-one renders at 100 dpi differ from the originals
-          by 0.00%-3.28% (mean 0.40%). Unlike images, a shrunk PDF KEEPS ITS NAME, so no reference
-          is rewritten and no bookmarked or shared link breaks. Any file the pass makes larger is
+          Downsample EVERY captured PDF with Ghostscript, not only those over max_pdf_mb. The
+          profile is not fixed: PDF_DOWNSAMPLE_LADDER is tried in order (/ebook, then /screen) and
+          the FIRST rung whose output lands under max_pdf_mb wins, so a file /ebook cannot bring
+          under budget is kept at /screen, which is a markedly coarser image. On
+          newheightseducation.org that rung is unreachable -- the largest /ebook output is 3.5 MB
+          against a 90 MB budget -- but lowering max_pdf_mb far enough would reach it. The same
+          structural gap as recode_all_images, on the other heavy asset class: a per-file budget
+          cannot answer a TOTAL-size limit. Measured on newheightseducation.org: 24 PDFs totalling
+          142.1 MB, LARGEST 13.1 MB against a 90 MB budget, so the budget pass examined none of
+          them. Downsampling all 24 gives 33.3 MB, a 108.8 MB (77%) saving. Page counts were
+          preserved on all 24 and page-one renders at 100 dpi differ from the originals by
+          0.00%-3.28% (mean 0.40%). Unlike images, a shrunk PDF KEEPS ITS NAME, so no reference is
+          rewritten and no bookmarked or shared link breaks. Any file the pass makes larger is
           declined and ships as captured -- two of the 24 did.
         required: false
         type: boolean

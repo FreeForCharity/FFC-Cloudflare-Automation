@@ -1588,6 +1588,11 @@ def test_shrink_all_pdfs_description_states_the_measured_trade():
     assert "TOTAL-size limit" in desc, desc
     assert "108.8 MB" in desc, desc
     assert "KEEPS ITS NAME" in desc, desc
+    # The profile is a LADDER, not a fixed /ebook. Saying "/ebook" alone
+    # understates the worst case an operator can reach by lowering
+    # max_pdf_mb, and /screen is a markedly coarser image than /ebook.
+    assert "/screen" in desc, desc
+    assert "PDF_DOWNSAMPLE_LADDER" in desc, desc
 
 
 def test_the_resolve_job_publishes_max_pdf_mb():

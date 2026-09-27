@@ -21,6 +21,7 @@ rather than left to review.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 import subprocess
@@ -1573,25 +1574,30 @@ def test_extract_shared_css_is_off_by_default():
 
 def test_every_test_in_this_module_actually_asserts_something():
     """A test with no assertion passes, so the suite cannot report its own
-    damage -- and that is not hypothetical here. Resolving the #1395 merge,
-    a conflict boundary fell INSIDE
-    `test_extract_shared_css_is_off_by_default`, the "keep both sides"
-    resolution dropped its two asserts, and the suite went on reporting 169
-    green. Copilot caught it; the test count could not.
+    damage -- and that is not hypothetical here. Resolving the #1395 merge, a
+    conflict boundary fell INSIDE `test_extract_shared_css_is_off_by_default`,
+    the "keep both sides" resolution dropped its two asserts, and the suite
+    went on reporting 169 green. Copilot caught it; the test count could not.
 
-    Cheap, total, and it fails in the loud direction: a helper that genuinely
-    needs no assertion is not named `test_*`."""
-    src = pathlib.Path(__file__).read_text(encoding="utf-8")
-    bodies, current = {}, None
-    for line in src.splitlines():
-        m = re.match(r"^def (test_\w+)\(", line)
-        if m:
-            current = m.group(1)
-            bodies[current] = []
-        elif current is not None:
-            bodies[current].append(line)
-    silent = [name for name, body in bodies.items() if not any("assert" in x for x in body)]
-    assert not silent, f"test(s) with no assertion: {silent}"
+    Parsed with `ast`, not grepped for the substring "assert". A grep is
+    satisfied by the word appearing in a docstring or a comment -- including
+    a docstring that says the test asserts nothing -- so the check would pass
+    for the wrong reason on exactly the function it exists to catch. This
+    docstring alone contains the word six times.
+
+    `ast.Assert` only, deliberately: `self.assertEqual` is unittest and this
+    suite is plain asserts, so counting attribute calls would widen the check
+    to no purpose. A helper that legitimately needs no assertion is not named
+    `test_*`."""
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    silent = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+        and not any(isinstance(n, ast.Assert) for n in ast.walk(node))
+    ]
+    assert not silent, f"test(s) with no assert statement: {silent}"
 
 
 def test_recode_all_images_description_names_the_set_it_actually_recodes():

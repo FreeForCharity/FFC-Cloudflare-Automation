@@ -78,6 +78,15 @@ export const MIN_PAGES = 2;
  * A <link> costs ~86 bytes of markup, so below a few hundred bytes the
  * transform can cost more than it saves on a block that appears only twice.
  * 256 keeps the smallest win comfortably positive.
+ *
+ * BYTES, measured with Buffer.byteLength, not `String.length`. The latter
+ * counts UTF-16 code units, so a block of accented text or an emoji in a
+ * `content:` rule is heavier on disk than it looks and the threshold would be
+ * applied to the wrong number -- while the saving accounting below already
+ * uses Buffer.byteLength, so the two would disagree about the same block.
+ * One of the 359 blocks on newheightseducation.org is non-ASCII and none
+ * changes verdict there, which is why this is encoded rather than left to
+ * the corpus.
  */
 export const MIN_BYTES = 256;
 
@@ -145,7 +154,7 @@ export function plan(pages) {
   for (const [h, onPages] of seenOn) {
     const n = onPages.size;
     const css = text.get(h);
-    if (n < MIN_PAGES || css.length < MIN_BYTES) continue;
+    if (n < MIN_PAGES || Buffer.byteLength(css, 'utf8') < MIN_BYTES) continue;
     const why = refuseReason(css);
     if (why) refused.set(h, { css, n, why });
     else chosen.set(h, { css, n });
@@ -381,6 +390,22 @@ function selfTest() {
   );
   eq('a block on 1 page is not', chosen.has(hashCss(once)), false);
   eq('a block under MIN_BYTES is not, however often it appears', chosen.has(hashCss(tiny)), false);
+  // MIN_BYTES is BYTES. This block is 200 UTF-16 code units and 400 UTF-8
+  // bytes, so `String.length` would reject it and the real on-disk size
+  // accepts it -- and the saving accounting uses Buffer.byteLength either way.
+  const wide = '/*' + '\u00e9'.repeat(196) + '*/';
+  eq(
+    'the fixture really is short in UTF-16 and long in bytes',
+    [wide.length, Buffer.byteLength(wide, 'utf8')],
+    [200, 396],
+  );
+  eq(
+    'a block under MIN_BYTES in UTF-16 units but OVER it in bytes is chosen',
+    plan([{ html: `<style>${wide}</style>` }, { html: `<style>${wide}</style>` }]).chosen.has(
+      hashCss(wide),
+    ),
+    true,
+  );
   eq('nothing was refused in this corpus', refused.size, 0);
   eq('identical CSS under DIFFERENT ids is one block, not two', chosen.get(hashCss(shared)).n, 2);
   const refusable = `.a{filter:url(#f)}`.padEnd(400, ' ');

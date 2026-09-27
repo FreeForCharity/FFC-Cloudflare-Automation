@@ -131,3 +131,44 @@
 .ffc-clone {
   isolation: isolate;
 }
+
+/* WPBakery's "full height row" option is a desktop assumption, and on a phone
+   it hands the visitor a blank screen.
+
+   `vc_row-o-full-height` carries `min-height: 100vh` unconditionally. That is
+   the SOURCE site's own CSS, not a capture artifact -- confirmed with CDP
+   `CSS.getMatchedStylesForNode` against a built export rather than by reading
+   markup. It works on a desktop, where the section's cover image renders
+   1280x400 inside a 915px box and the site navigation sits above it. At 390px
+   the same image drops to its 414x129 srcset variant and the navigation
+   collapses into the hamburger, so a full-height section holds one small image
+   and nothing else.
+
+   Measured on FFC-EX-newheightseducation.org, which is where this was found:
+   the home page's first heading sat at y=1005, a full screen below an 844px
+   fold, while `verify:build`, Lighthouse (accessibility 100, SEO 100) and
+   twelve post-deploy smoke specs were all green. Every one of them measured
+   totals -- the page had 4,806 characters of text and 16 visible images; none
+   of it was on the first screen.
+
+   Capping rather than editing the captured markup: the class comes from the
+   source, so the next capture brings it back. 768px is WPBakery's own
+   breakpoint, where its grid already reflows to a single column.
+
+   The leading `body` is load-bearing, for the same reason the
+   `#glt-translate-trigger` rule above needs it: the capture's `<style>` blocks
+   are inlined into the page fragment, so they land AFTER this file in the
+   cascade and win every tie. Written without it this selector matches the
+   source's at (0,3,0), loses, and changes nothing -- which is exactly what it
+   did on the first attempt, with the above-the-fold measurements coming back
+   byte-identical.
+
+   Same reasoning as the `iframe` max-width rule: the source site has the same
+   markup and the same problem, and reproducing a layout break faithfully is
+   not a goal. */
+@media (max-width: 768px) {
+  body .ffc-clone .vc_section.vc_row-o-full-height,
+  body .ffc-clone .vc_row.vc_row-o-full-height {
+    min-height: 0;
+  }
+}

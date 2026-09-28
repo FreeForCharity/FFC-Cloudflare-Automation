@@ -6,11 +6,13 @@ Runs each hook as a subprocess with crafted stdin and asserts the exit code
 """
 
 import ast
+import glob
 import json
 import os
 import re
 import subprocess
 import sys
+import warnings
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HOOKS, "..", ".."))
@@ -1218,6 +1220,52 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
            f"walked {walked:,} of {corpus_size:,} strings")
 
 
+def test_no_hook_module_has_an_invalid_escape_sequence():
+    r"""A hook must not prepend a compiler warning to its own refusal.
+
+    Hook diagnostics reach the agent on STDERR, which is where an invalid
+    escape sequence surfaces too -- so the warning arrives in front of the
+    `BLOCKED by ...` explanation it is supposed to be reading. A guard whose
+    job is to explain itself should not open with noise, and a reader who sees
+    a warning above a block has one more reason to distrust the block.
+
+    Found by the Conductor (run 175) on #1313: a docstring here illustrated a
+    Windows path as `/c/Program\ Files/...`, and `\ ` is not a valid escape in
+    a non-raw string. Prose examples containing Windows paths are exactly what
+    keeps reintroducing this, so the assertion is mechanical.
+
+    ⚠️ The obvious form of this check is version-dependent and would have
+    passed on the host that needed it. Python >= 3.12 raises SyntaxWarning for
+    an invalid escape; <= 3.11 raises DeprecationWarning. Measured here on
+    3.11.15, the defect reported as DeprecationWarning, so a
+    `py_compile(..., doraise=True)` under `-W error::SyntaxWarning` -- the
+    natural spelling -- was GREEN on this interpreter while the warning was
+    live. Match on the message instead of the category, and this holds on both.
+
+    Every hook module is scanned rather than just `guard_bash.py`: the cause is
+    prose, and prose is in all of them.
+    """
+    offenders = []
+    for path in sorted(glob.glob(os.path.join(HOOKS, "*.py"))):
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                compile(src, path, "exec")
+            except SyntaxError as exc:  # a broken module is a louder failure
+                offenders.append(f"{os.path.basename(path)}: SyntaxError {exc}")
+                continue
+        for entry in caught:
+            if "invalid escape sequence" in str(entry.message):
+                offenders.append(
+                    f"{os.path.basename(path)}:{entry.lineno} "
+                    f"{entry.category.__name__}: {entry.message} "
+                    "-- make the string raw, or double the backslash")
+    record("no hook module compiles with an invalid escape sequence",
+           not offenders, "\n".join(offenders))
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -1361,6 +1409,7 @@ def main():
     test_strip_quoted_matches_a_bash_accurate_scanner()
     test_rule_attribution()
     test_refusal_site_coverage()
+    test_no_hook_module_has_an_invalid_escape_sequence()
 
     print("guard_edit:")
     check("write .env", "guard_edit.py", write(".env", "X=1"), True)

@@ -322,7 +322,7 @@ SHELL_BASENAMES = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 
 
 def _is_shell_word(word):
-    """True when `word` names a shell, however the invocation spells it.
+    r"""True when `word` names a shell, however the invocation spells it.
 
     A bare `bash` was the first version and it missed every path-qualified
     spelling, which on this host is the NORMAL one: `"/c/Program Files/Git/bin/

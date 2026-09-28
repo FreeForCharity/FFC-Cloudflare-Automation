@@ -114,7 +114,8 @@ gh pr list -R $F --head data/sites-list-sync --json number,title,state
 gh pr merge <n> --auto -R $F
 ```
 
-It needs no secrets and no approval. Merging to `main` deploys the site.
+It needs no secrets and no approval. Merging to `main` deploys the site. No PR after a green run
+means upstream was unchanged (see Gotchas).
 
 ## Step 5 — Verify on the published page, not on a green run
 
@@ -135,11 +136,11 @@ mtime at build time, which is the checkout time on CI, so it always looks recent
   Log names the exact instant.
 - **Cancelled ≠ failed.** Five consecutive janitor-reaped runs once froze the page for six weeks
   with nothing red anywhere (#1238). Read `conclusion`, not just "no failures".
-- **`sites_list.prev.csv` loses the "changed" highlights on a no-op sync.** The sync copies the
-  current CSV to `prev` every run, and `create-pull-request` still opens a PR for that one file. So
-  when upstream has not changed, merging the sync PR makes `prev == current` and the page's
-  changed-row markers disappear. If upstream did not change, you may close that sync PR instead of
-  merging it.
+- **No sync PR is not a failure.** Since FFC-IN-ffcadmin.org#1255 the sync compares the fetched
+  files with the committed ones and exits green without opening a PR when upstream is unchanged, so
+  the page's changed-row markers (diffed against `sites_list.prev.csv`) survive a quiet week. If the
+  sync ran and no `data/sites-list-sync` PR appeared, upstream simply has nothing new — check that
+  step 3's data PR actually merged before assuming anything else.
 - **Dispatch inputs over MCP must be strings** (703 and the sync take none, so this only matters if
   you extend them).
 - **Never** approve a gate you did not mean to, `--admin`-merge, or push to `main` directly.

@@ -156,17 +156,23 @@ on:
       recode_all_images:
         description: >-
           Re-encode every captured PNG, JPEG and WebP to WebP, not only those over the per-file
-          budget. GIF is deliberately NOT included -- re-encoding one drops its animation -- and SVG
-          is vector, so "every raster image" would overstate what this does: `RECODABLE` in
-          capture-wordpress-api.mjs is the authority on the set. Off by default: it renames
-          thousands of files, and a migration that already fits should not pay that churn. Turn it
-          on when the tree exceeds a host's TOTAL size limit, which the per-file budget cannot help
-          with -- a site can be far too heavy without any single file being too big. Measured on
-          newheightseducation.org: of 3,888 captured JPEGs totalling 175.8 MB, ZERO exceed the 400
-          KB budget (mean 46 KB), so the budget pass examined none of them, while the three-host
-          tree came to 1169.6 MB against Pages' 1024 MB ceiling. Re-encoding them all yields 67.7
-          MB, a 61.5% saving. Each file still has to clear the existing 25% floor to be kept, so one
-          that does not earn its rename keeps its original bytes.
+          budget. On a REUSED capture (reuse_capture_from_run) the mechanism differs and so does the
+          saving: the WebP pass renames files, which is only safe while the capture is building its
+          URL-to-local map, so a reused capture instead gets a name-preserving mozjpeg re-encode of
+          its JPEGs at the optimizer's default quality of 85 -- measured at 175.8 -> 102.3 MB (42%)
+          on newheightseducation.org against 175.8 -> 68.9 MB (61%) for the renaming WebP pass. PNGs
+          are not touched on that path, because shrinking one means renaming it. GIF is deliberately
+          NOT included -- re-encoding one drops its animation -- and SVG is vector, so "every raster
+          image" would overstate what this does: `RECODABLE` in capture-wordpress-api.mjs is the
+          authority on the set. Off by default: it renames thousands of files, and a migration that
+          already fits should not pay that churn. Turn it on when the tree exceeds a host's TOTAL
+          size limit, which the per-file budget cannot help with -- a site can be far too heavy
+          without any single file being too big. Measured on newheightseducation.org: of 3,888
+          captured JPEGs totalling 175.8 MB, ZERO exceed the 400 KB budget (mean 46 KB), so the
+          budget pass examined none of them, while the three-host tree came to 1169.6 MB against
+          Pages' 1024 MB ceiling. Re-encoding them all yields 67.7 MB, a 61.5% saving. Each file
+          still has to clear the existing 25% floor to be kept, so one that does not earn its rename
+          keeps its original bytes.
         required: false
         type: boolean
         default: false
@@ -571,6 +577,7 @@ jobs:
           node scripts/fetch-asset-subresources.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
+          node scripts/optimize-captured-assets.mjs --self-test
           node scripts/extract-shared-css.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
 
@@ -799,6 +806,24 @@ jobs:
           fi
 
           echo "Reused the capture from run $REUSE_RUN: $expected host(s) re-verified and re-assessed. The live site was not contacted."
+
+      # Only after a REUSED capture. A fresh capture applies these inline, per
+      # asset, as it downloads; the reuse path skips that step entirely
+      # (`if: reuse_run == ''`), which silently turned both flags into no-ops
+      # (#1401). `deliver` needs no copy of this: it downloads the capture
+      # this job uploads, already optimized.
+      - name: Optimize the reused capture's heavy assets
+        if: >-
+          needs.resolve.outputs.reuse_run != '' && (inputs.recode_all_images ||
+          inputs.shrink_all_pdfs)
+        working-directory: automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--dir "$RUNNER_TEMP/capture/site")
+          if [ "${{ inputs.recode_all_images }}" = "true" ]; then args+=(--recode-jpegs); fi
+          if [ "${{ inputs.shrink_all_pdfs }}" = "true" ]; then args+=(--shrink-pdfs); fi
+          node scripts/optimize-captured-assets.mjs "${args[@]}"
 
       - name: Capture the live WordPress site
         id: capture

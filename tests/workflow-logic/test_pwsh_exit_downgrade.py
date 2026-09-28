@@ -87,9 +87,12 @@ LATER ROUND (#1347, Copilot: here-strings)
     would have chased it. And the fix is latent rather than live: the lexer finds
     **0** here-string openers anywhere in the repo's `run:` bodies today.
 
-    Of the five tests added, three discriminate and two are pins; the table in
+    Of the six tests added, four discriminate and two are pins; the table in
     the here-string section says which and why, replayed against the pre-fix
-    revision before any was counted as coverage.
+    revision before any was counted as coverage. The sixth exists because the
+    mutation review found the column-0 terminator rule untested -- relaxing it
+    to `lstrip()` survived the whole module, and its failure direction is the
+    silent one again.
 """
 
 from __future__ import annotations
@@ -365,7 +368,7 @@ if ($code -ne 0) {
 
 # --- here-strings (multi-line literals) --------------------------------------
 #
-# THREE of the five below discriminate; two are pins, and they are labelled as
+# FOUR of the six below discriminate; two are pins, and they are labelled as
 # such rather than counted as evidence. Replayed against the pre-fix revision
 # (`git show HEAD:scripts/check-pwsh-exit-downgrade.py`, loaded beside the fixed
 # one) before any of them was claimed as coverage:
@@ -374,8 +377,14 @@ if ($code -ne 0) {
 #   dq here-string w/ 'exit'     []                       [no-terminal-exit]   YES
 #   sq here-string w/ 'exit'     []                       [no-terminal-exit]   YES
 #   unterminated here-string     [no-terminal-exit]       [unterminated-...]   YES
+#   indented "@ is not the end   []                       [no-terminal-exit]   YES
 #   here-string + a real exit    []                       []                   pin
 #   'user@' is not an opener     [no-terminal-exit]       [no-terminal-exit]   pin
+#
+# The indented-terminator case was added by the MUTATION review, not this replay:
+# `line.startswith(...)` -> `line.lstrip().startswith(...)` survived the module
+# until it existed. Its pre-fix column is `[]` for a different reason than the
+# first two -- there, no here-string was tracked at all.
 #
 # The first two are the reported defect: the scanner was line-based with no
 # cross-line state, so a here-string's TEXT was read as code and `exit` in prose
@@ -476,6 +485,36 @@ if ($code -ne 0) {
     assert _kinds(body) == [guard.NO_EXIT], (
         "a trailing @\" inside a normal string must not swallow the rest of the "
         f"body as here-string text; got {_kinds(body)!r}"
+    )
+
+
+def test_an_indented_closing_delimiter_does_not_end_the_here_string():
+    """PowerShell requires the closing `"@` to be the FIRST thing on its line, so
+    an indented one is prose. `_scan_lines` matches column 0 deliberately rather
+    than `lstrip()`ing.
+
+    Added because the mutation review found that choice UNTESTED: swapping the
+    match for `line.lstrip().startswith(...)` survived the whole module. It is not
+    cosmetic -- closing early hands the literal's remaining text back to the code
+    view, so the `exit` below becomes a terminator and the finding disappears:
+
+        column-0 (correct) -> ['no-terminal-exit']
+        lstrip mutant      -> []                    <- silent, the bad direction
+    """
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+  "@ this indented terminator is prose, not the end
+do not exit here
+"@
+  Write-Warning $msg
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "an indented `\"@` is literal text; treating it as the terminator lets the "
+        f"rest of the literal be read as code. got {_kinds(body)!r}"
     )
 
 

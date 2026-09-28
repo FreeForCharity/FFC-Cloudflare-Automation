@@ -531,13 +531,108 @@ natural terminal state, and that is what this section supplies.
 
 **A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
 review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
-PR against that test **before** starting a sweep.
+PR against that test **before** starting a sweep. Every clause is measured **per PR against
+`main`**, which is what the test is for and also its limit — read "the cohort is not the sum of its
+PRs" below before publishing any punch list built from it.
 
-**If _every_ open PR is complete, do not re-verify.** Post a one-paragraph "still blocked, nothing
-changed" note on #719, escalate the stall to a human, and spend the run on the backlog instead. The
-load-bearing clause is the last one: a fully-complete PR set means **no landing work is available**,
-not _work to redo_. Re-measuring an unchanged tree produces a verification matrix that reads like
-progress and moves nothing.
+**A fully-complete PR set is a reportable failure of the system, not a clean result.** It means no
+_worker_ action is available; it does not mean nothing is wrong. Five complete PRs aged 3–7 days is
+the pipeline not running. The framing this section used to carry — "no landing work is available,
+not _work to redo_" — is correct about the worker's next action and reads benign, and that is how
+fifteen consecutive runs filed a two-week stall as a routine no-op (#1388). Report it as a stall
+with a number attached, never as a state.
+
+**Do not re-verify an unchanged tree**: re-measuring produces a verification matrix that reads like
+progress and moves nothing. **But do measure the one thing the PRs cannot tell you — whether `main`
+is moving.** "Every PR is complete" renders two different situations identically, and they need
+different escalations:
+
+| reading                                                                        | cause                                                                                                   | what the note must say                                                            |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| no merges at all in the recent window                                          | **nobody with promotion rights is present**                                                             | escalate the absence                                                              |
+| merges landing, none from the stalled cohort, **and the supervisor is silent** | **the landing actor itself is absent** — nothing is wrong with the PRs and no actor exists to move them | escalate the **supervisor's** absence, and say the cohort is merely waiting on it |
+| merges landing, none from the stalled cohort, **supervisor alive**             | **queue starvation** — a human is present, working another lane                                         | escalate _that_, by name, with the punch list                                     |
+
+**The middle row is the one this section was written without, and it is the one that actually
+happened** (Conductor run 175). The first sixteen escalations measured `main` correctly, found it
+frozen, and reported **starvation** — a human present and prioritising elsewhere. The true cause was
+that the Conductor, which is what promotes and enqueues, had not run for **fourteen days**: six
+complete PRs, nothing structurally wrong with any of them, and no actor to move them. Every fact
+quoted was right and the label was wrong, which is the same failure this section exists to prevent,
+one level in.
+
+So **the merge reading alone cannot separate rows two and three** — both show merges landing and
+none from the cohort. Spend one more read on the supervisor before choosing between them; the block
+above on checking that the actor you are waiting on still exists is that read, and
+`747. Repo - Conductor Liveness` is its mechanical form. A silent supervisor turns "a human is busy
+elsewhere" into "the thing that lands PRs does not exist", and those need different notes to
+different readers.
+
+One call decides the merge half of it:
+
+```bash
+gh api 'repos/FreeForCharity/FFC-Cloudflare-Automation/pulls?state=closed&sort=updated&direction=desc&per_page=20' \
+  --jq '.[] | select(.merged_at) | "\(.merged_at) #\(.number) \(.title)"'
+```
+
+Three parameters are each load-bearing, and dropping any one of them fails **toward the absent-human
+reading** — the wrong answer, in the reassuring direction. All three were measured, two of them
+after this section shipped without them:
+
+- **`select(.merged_at)`**, because `state=closed` returns closed-**unmerged** PRs too, and counting
+  one of those as a merge turns starvation back into absence.
+- **`sort=updated`**, because the default is `created` — and the window is then the newest 20 PRs
+  _by creation_, which is not the newest 20 merges. **This repo is a live instance, not a
+  hypothetical:** the newest 20 closed-by-creation reach back only to 2026-09-22, while #1341 was
+  created 09-19. The stalled PRs are by definition the **oldest-created** ones, so the moment one of
+  them merges it is exactly the merge a `created`-sorted window drops. The discriminator would go
+  blind to the event it exists to detect.
+- **`direction=desc`**, and this one is a trap rather than a refinement. `direction` defaults to
+  `desc` only while `sort` is `created` or absent; **once you name a `sort` it defaults to `asc`.**
+  Measured: `state=closed&sort=updated` with no direction returns PRs **#1, #3 and #5, merged in
+  November 2025**. So adding `sort=updated` _alone_ is strictly worse than changing nothing — it
+  reports zero recent merges off a ten-month-old page. The two parameters are a pair; never add the
+  first without the second.
+
+**The sandboxed worker has no `gh` CLI at all** (#1360), so from there read the same fact through
+the GitHub MCP server's **`list_pull_requests`** tool with `state: closed`, `sort: updated`,
+**`direction: desc`** and the `merged_at` field — the `asc` default applies identically there, and
+it was measured through that client. The discriminator is the field, not the client.
+
+Named bare, as `CLAUDE.md` names every other MCP tool (`actions_run_trigger`, `pending_deployments`,
+`actions_list`, `get_job_logs`), because **the prefix is the runtime's, not the tool's**: the same
+tool is `mcp__github__list_pull_requests` to a Claude Code session and something else again to
+another agent, and this file is onboarding for _any_ of them. Match on the tool name and the
+parameters; if your runtime's spelling differs, that is a prefix, not a different tool.
+
+One residual imprecision, stated rather than left to be rediscovered: `updated_at` is not
+`merged_at`, so an old PR commented on today outranks an untouched newer merge. It is a sound
+**bound** rather than an ordering — `merged_at <= updated_at` always — so one page suffices unless
+the page's oldest `updated_at` is still above the newest `merged_at` seen, in which case page
+forward. #1341's `79e230e` paid for that reasoning in code; this is the hand-run form of it.
+
+Measured instance — the run that filed #1388 and the run that fixed it: `main` had advanced **ten**
+times on 2026-09-24/25 (#1370 #1371 #1373 #1374 #1376 #1378 #1379 #1382 #1383 #1384), **zero** of
+them `agentic-os`, while #1341 #1346 #1347 #1361 #1386 sat `clean` and 0 behind. The Conductor
+really was down and promotion really was blocked _by the Conductor_ — so every fact quoted in
+support of the absent-human reading stayed true while the **inference** from it expired. L215's
+shape one level up: the premise went stale, not the evidence.
+
+**Escalate on persistence, not only on state.** Prescribing the same note however long the state has
+held is what made it unreadable. Carry these, and let them grow:
+
+- **how many consecutive runs** the cap has been held by complete PRs (fifteen, by #1388's count,
+  before anything said so);
+- **the age of the oldest complete PR**, in days — not "a while";
+- **whether that count rose since the last run.** The cap is **monotonic by construction**: each run
+  in the terminal state spends itself on the backlog, which opens one more PR, which becomes
+  complete, which raises the cap. No worker run can lower it. A stall two weeks old must not read
+  like one that started this morning.
+
+**Never post a note byte-identical to the previous one.** It is indistinguishable from the last
+fifteen, which is exactly why they went unread. At minimum it must carry the oldest-complete-PR age
+and the merge-activity reading above: both change even when the verdict does not, so a reader sees
+movement or its absence without diffing prose.
 
 **Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
 only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
@@ -623,6 +718,46 @@ concluding anything:
 Nothing in this repository can restart the Conductor — it runs on an operator workstation reachable
 only by @clarkemoyer — so the deliverable is the escalation, not a fix.
 
+**The cohort is not the sum of its PRs — test it pairwise before publishing a punch list.**
+`mergeable_state: clean` and `behind=0` are each evaluated **against `main`**, independently per PR,
+so a set can be uniformly complete and still contain a pair whose **second** enqueue fails. Nothing
+in the four-part test asks whether the complete PRs are mergeable **with each other**, and a punch
+list that says "five enqueues, nothing else" inherits that gap: every clause true per PR, the batch
+conclusion false. One loop, seconds, no network:
+
+```bash
+git merge-tree --write-tree origin/<branch-a> origin/<branch-b>   # rc 0 = clean, rc 1 = conflict
+```
+
+⚠️ **Read the output, not only the exit code — and do not redirect it away.** `rc 1` is also what a
+**mistyped or unfetched ref** returns (`merge-tree: <ref> - not something we can merge`), measured
+identical to a real conflict. So the first draft of this bullet, which ended `>/dev/null`, made the
+two indistinguishable — and this failure points the expensive way: a phantom conflict invents a
+coupling that is not there, and the enqueuer then serializes the cohort or hand-resolves a file
+nothing is wrong with. A genuine conflict **names the path** with stage numbers:
+
+```
+100644 de98044…  1	docs/lessons-ledger.md
+100644 83b8316…  2	docs/lessons-ledger.md
+```
+
+That is CLAUDE.md's non-zero-exit rule applied to a doc rather than a test: a check asserting a
+failure code must also assert something about the output, or it cannot tell the system under test
+from its own harness. Caught by the test module for this section, on the command this section ships.
+
+Then publish an **order**, name the coupled pairs, and for each coupling give the end state the
+second merge must reach — not merely "these two conflict". **A conflict whose resolution has a
+correctness condition beyond applying cleanly is where the red actually lands**, because that
+resolution passes review by eye and fails CI. `docs/lessons-ledger.md`'s `reserved-ids` block is the
+known case (#1278): `test_lessons_ledger.py` fails in **both** directions — an undeclared gap is an
+error, and so is a reservation for an id that has since become a row.
+
+Measured on the #1388 cohort: nine of the ten pairs among #1341/#1346/#1347/#1361/#1386 compose
+cleanly. #1346 (which appends row `L302`) and #1347 (which appends `L303` **and** declares `L302` in
+`reserved-ids`) conflict in **either** order, and the natural resolution — markers removed, both
+rows kept, block untouched — then fails that module. The correct end state is the same whichever
+merges second: **both rows present in id order, and the `reserved-ids` block empty.**
+
 Two mechanics for whoever does have promotion authority, both already paid for:
 
 - **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with
@@ -688,6 +823,29 @@ have exhausted the points budget for hours.
     interval of now), or that the match **count** is a sane fraction of the total the endpoint
     returned. Applies to any extractor over an append-only log — #719, a changelog, a CI history.
     Ledger **L215**.
+
+    **And this bullet's own example went stale in exactly the way it warns about — #719 has carried
+    THREE formats, not two.** "Every run since ~87 writes `## Run N — START`" was true when it was
+    written and stopped being true at **run 167**, where the log switched to a **bold** form:
+    `**Conductor run 174 — END** (2026-09-14 10:04–10:20Z)`. An agent following the sentence above
+    would write the heading-only pattern again, which is what `739`'s
+    `scripts/process-health-metrics-lib.js` had — so it reported "has not run since run 163" (#1343)
+    while `747` and #1339 both read run **174**, the era ceiling rather than the Conductor's last
+    breath (#1353). Read the enumeration out of **code** rather than retyping it from a doc, this
+    one included. **There are two copies in the tree and they differ on purpose**: `RUN_HEADER` in
+    `scripts/process-health-metrics-lib.js` (739) and `CONDUCTOR_RE` in
+    `scripts/conductor-liveness-lib.js` (747, landed in
+    [#1341](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/pull/1341)). 747 admits a
+    blockquote prefix and scans the whole body; 739 refuses both, because it also pairs START with
+    END, so a blockquoted `END` there would retire a live dead-run alarm as well as fake a
+    heartbeat. Read whichever module you are editing, expect them to differ, and do not "reconcile"
+    them. The table below is a reading aid, not the source.
+
+    | era      | spelling                          |
+    | -------- | --------------------------------- |
+    | run 167+ | `**Conductor run 174 — END** (…)` |
+    | ~87–166  | `## Run 166 — END`                |
+    | ≤86      | `RUN 86 START`                    |
 
 - **An unpaginated list read cannot support an ABSENCE claim.** `per_page=100` is the maximum, not a
   guarantee, and the **default is 30**. A truncated list is indistinguishable from a complete one,

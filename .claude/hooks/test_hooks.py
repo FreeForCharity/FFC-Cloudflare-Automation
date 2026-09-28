@@ -515,6 +515,45 @@ RULES = [
          'gh api --jq ".a > 1" /markdown', BLOCK),
         ("gh api apostrophe inside double quotes then endpoint",
          "gh api -f body=\"it's\" /markdown", BLOCK),
+        # Reading quoted text as data opens exactly one hole that is NOT data:
+        # a `-c` payload, whose quotes are how the command is passed. Reported
+        # in review of #1313 and reproduced before fixing -- all four of these
+        # block on `main` and were ALLOWED once the span became quote-aware.
+        # The nested shell is MSYS bash too, so the inner call is mangled the
+        # same way; blocking is right on the merits, not only for the guard.
+        ("bash -c double-quoted endpoint",
+         'bash -c "gh api /markdown"', BLOCK),
+        ("bash -c single-quoted endpoint",
+         "bash -c 'gh api /markdown'", BLOCK),
+        ("sh -c single-quoted endpoint",
+         "sh -c 'gh api /markdown'", BLOCK),
+        # A cluster CONTAINING `c` takes the next word, which is how the shell
+        # reads it -- `-lc` must not slip past a scan looking only for `-c`.
+        ("bash -lc clustered flag then endpoint",
+         'bash -lc "gh api /markdown"', BLOCK),
+        # Nesting is scanned too. The first fix stopped at one level and this
+        # shape was going to be pinned as an accepted limitation; a limitation
+        # that can be written in one line is a bypass with a docstring.
+        ("nested bash -c endpoint",
+         'bash -c "bash -c \'gh api /markdown\'"', BLOCK),
+        # Controls for the opposite error. The whole point of the quote-aware
+        # span is that quoted text which is DATA stays allowed, so unwrapping
+        # `-c` payloads must not drag those back into blocking.
+        ("bash -c slash-less endpoint allowed",
+         'bash -c "gh api markdown"', ALLOW),
+        ("the endpoint quoted as prose in a comment body allowed",
+         "gh issue comment 1 -f body='do not write gh api /markdown'", ALLOW),
+        # REGRESSION PINS, not discriminators -- said plainly because a green
+        # row that proves nothing is how a table stops meaning anything. Both
+        # survive every mutation tried against the payload scanner, including
+        # deleting the option-word `break` they were written for: neither
+        # command contains a leading-slash endpoint anywhere, so no scanning
+        # mistake can reach them. They are kept to pin the shapes against a
+        # FUTURE over-eager change, and they do not evidence this one.
+        ("bash running a script file allowed",
+         "bash scripts/deploy.sh && gh api rate_limit", ALLOW),
+        ("unrelated -c flag allowed",
+         "sort -c /tmp/list.txt", ALLOW),
     ]),
 
     Rule("pipeline-exit-code", 'ledger L50', BLOCK_TIER, [

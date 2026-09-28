@@ -279,6 +279,64 @@ def _skip_word(text, i):
     return i
 
 
+SHELL_WORD_RE = re.compile(r"(?<![\w./-])(?:bash|sh|dash|zsh|ksh)(?:\.exe)?(?=[ \t])")
+
+
+def _shell_c_payloads(cmd, depth=3):
+    """Every `-c` payload handed to a nested shell, outer quote pair removed.
+
+    A quote-aware rule reads quoted text as DATA, which is right for a jq
+    filter or a header value and wrong for `bash -c "..."`: there the quotes
+    are how the command is passed, and the inner call runs. Reported by review
+    on #1313 and reproduced before fixing -- `bash -c "gh api /markdown"` was
+    ALLOWED once rule 8's span became quote-aware, and blocks on `main`.
+
+    Blocking it is right on the merits and not only for the guard's integrity:
+    the nested shell here is MSYS bash too, so it hands `/markdown` to a native
+    `gh` across the same boundary and the endpoint is mangled identically. The
+    wrapper changes who is fooled, not whether the call works.
+
+    Any single-dash cluster CONTAINING `c` takes the next word as the payload
+    (`-c`, `-lc`, `-cx`), which is how the shell reads it; a `--long` option or
+    a bare word before it means this is not a `-c` invocation and the scan
+    stops. A LEADING `$(`/backtick is not unwrapped either -- `_skip_word`
+    keeps a substitution as one word, and its contents are not a `-c` payload.
+
+    Only the OUTER quote pair comes off each payload, and the payload is then
+    re-scanned, so `bash -c "bash -c 'gh api /markdown'"` is reached too. The
+    first draft stopped at one level and pinned that shape as an allowed
+    limitation; a limitation a reader can spell in one line is a bypass with
+    a docstring, so the scan recurses instead. `depth` bounds it because the
+    input is untrusted text, not because a real command nests three deep.
+    """
+    if depth <= 0:
+        return
+    for m in SHELL_WORD_RE.finditer(cmd):
+        i = m.end()
+        saw_c = False
+        while i < len(cmd):
+            while i < len(cmd) and cmd[i] in " \t":
+                i += 1
+            if i >= len(cmd):
+                break
+            j = _skip_word(cmd, i)
+            word = cmd[i:j]
+            if not word:
+                break
+            if saw_c:
+                if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
+                    word = word[1:-1]
+                yield word
+                for nested in _shell_c_payloads(word, depth - 1):
+                    yield nested
+                break
+            if not word.startswith("-") or word.startswith("--"):
+                break
+            if "c" in word[1:]:
+                saw_c = True
+            i = j
+
+
 def _strip_assignments(segment):
     """Split a segment into (command part, [assigned values]).
 
@@ -984,7 +1042,17 @@ def main():
     #    Measured on the quote-blind span, that call is ALLOWED -- and so is
     #    `--jq '... | select(...)' /repos/...`, whose `|` predates the `<>`
     #    stop, so this closes an older bypass rather than only a new one.
-    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]", _strip_quoted(cmd)):
+    #    Reading quoted text as data opens one hole that is not data, and it
+    #    is the OBVIOUS one: `bash -c "gh api /markdown"` executes its quotes.
+    #    So every `-c` payload is searched as its own candidate alongside the
+    #    command itself -- see `_shell_c_payloads`. Scoped to this rule, which
+    #    is the one this branch made quote-aware; the same wrapper in front of
+    #    another quote-aware rule is that rule's to answer for, not this one's.
+    endpoint_re = r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]"
+    if any(
+        re.search(endpoint_re, _strip_quoted(text))
+        for text in [cmd, *_shell_c_payloads(cmd)]
+    ):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

@@ -117,6 +117,20 @@ export function readOrNull(path) {
   }
 }
 
+/**
+ * Which of the three PDF outcomes a shrink attempt produced.
+ *
+ * A pure function because the decision is the thing worth locking, and it
+ * lived inline in the loop where no assertion could reach it: the end-to-end
+ * showed the right counts, but a mutation that folded `unprocessable` back
+ * into `declined` passed every self-test. "The integration proves it" is how
+ * the miscount got here in the first place.
+ */
+export function classifyPdfResult(result, originalBytes) {
+  if (!result || !result.ok || !result.buffer) return 'unprocessable';
+  return worthKeeping(originalBytes, result.buffer.length) ? 'kept' : 'declined';
+}
+
 /** Every file under `dir`, recursively. */
 export function walkFiles(dir, out = []) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -138,6 +152,13 @@ export function selectTargets(files, { jpegs, pdfs }) {
 /**
  * Downsample one PDF with Ghostscript.
  *
+ * Returns `{ ok: true, buffer }` or `{ ok: false }` rather than a buffer or
+ * null. A null collapses two different outcomes into one: Ghostscript failed,
+ * and Ghostscript succeeded but the result was not smaller. The caller could
+ * only report the union, so a gs failure was logged as "left as captured" --
+ * the phrase for a deliberate no-op. On a pass whose entire purpose is hitting
+ * a size target, that hides the reason the target was missed.
+ *
  * Shelling out for the same reason the capture does: there is no usable
  * pure-JS downsampler, and `gs` is present on `ubuntu-latest`. A missing
  * binary and a PDF that defeats Ghostscript need opposite responses -- stop
@@ -145,7 +166,7 @@ export function selectTargets(files, { jpegs, pdfs }) {
  * them.
  */
 export async function shrinkPdf(buf, state) {
-  if (state.gsMissing) return null;
+  if (state.gsMissing) return { ok: false };
   const dir = mkdtempSync(join(tmpdir(), 'ffc-optpdf-'));
   const src = join(dir, 'in.pdf');
   const dest = join(dir, 'out.pdf');
@@ -170,12 +191,12 @@ export async function shrinkPdf(buf, state) {
         (err) => (err ? rej(err) : res()),
       );
     });
-    return existsSync(dest) ? readFileSync(dest) : null;
+    return existsSync(dest) ? { ok: true, buffer: readFileSync(dest) } : { ok: false };
   } catch (err) {
     // Preflight already refused a run whose gs is missing, so an ENOENT here
     // means it vanished mid-run; either way this file is not downsampled.
     if (err && err.code === 'ENOENT') state.gsMissing = true;
-    return null;
+    return { ok: false };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -225,6 +246,7 @@ async function main() {
     jpegFailed: 0,
     pdfKept: 0,
     pdfDeclined: 0,
+    pdfUnprocessable: 0,
     pdfFailed: 0,
   };
   let before = 0;
@@ -285,14 +307,23 @@ async function main() {
       continue;
     }
     before += buf.length;
-    const out = await shrinkPdf(buf, state);
-    if (out && worthKeeping(buf.length, out.length)) {
-      writeFileSync(f, out);
-      after += out.length;
-      tally.pdfKept += 1;
-    } else {
-      after += buf.length;
-      tally.pdfDeclined += 1;
+    const res = await shrinkPdf(buf, state);
+    switch (classifyPdfResult(res, buf.length)) {
+      case 'kept':
+        writeFileSync(f, res.buffer);
+        after += res.buffer.length;
+        tally.pdfKept += 1;
+        break;
+      case 'declined':
+        after += buf.length;
+        tally.pdfDeclined += 1;
+        break;
+      default:
+        // Ghostscript could not process this file. NOT the same as declining
+        // it on merit, and reporting it as one would explain a missed size
+        // target as a series of deliberate no-ops.
+        after += buf.length;
+        tally.pdfUnprocessable += 1;
     }
   }
 
@@ -305,7 +336,9 @@ async function main() {
   if (doPdfs)
     console.log(
       `[optimize] pdf ${PDF_PROFILE}: ${tally.pdfKept} downsampled, ` +
-        `${tally.pdfDeclined} left as captured, ${tally.pdfFailed} could not be read`,
+        `${tally.pdfDeclined} left as captured (no smaller), ` +
+        `${tally.pdfUnprocessable} ghostscript could not process, ` +
+        `${tally.pdfFailed} could not be read`,
     );
   console.log(
     `[optimize] ${mb(before)} MB -> ${mb(after)} MB (saved ${mb(before - after)} MB). ` +
@@ -317,7 +350,7 @@ async function main() {
 /* ---------------------------------------------------------------------
  * Self-test — `node scripts/optimize-captured-assets.mjs --self-test`
  * ------------------------------------------------------------------ */
-function selfTest() {
+async function selfTest() {
   let failures = 0;
   const eq = (name, actual, expected) => {
     const a = JSON.stringify(actual);
@@ -385,6 +418,56 @@ function selfTest() {
     eq('readOrNull returns the bytes of a file it CAN read', got && got.toString(), 'hello');
   }
 
+  // --- the three outcomes must stay distinguishable ---------------------
+  eq(
+    'a smaller result is kept',
+    classifyPdfResult({ ok: true, buffer: Buffer.alloc(10) }, 100),
+    'kept',
+  );
+  eq(
+    'a result that is not smaller is DECLINED, not unprocessable',
+    classifyPdfResult({ ok: true, buffer: Buffer.alloc(100) }, 100),
+    'declined',
+  );
+  eq(
+    'a ghostscript refusal is UNPROCESSABLE, not declined',
+    classifyPdfResult({ ok: false }, 100),
+    'unprocessable',
+  );
+  eq(
+    'an ok result with no buffer is unprocessable, not a zero-byte keep',
+    classifyPdfResult({ ok: true }, 100),
+    'unprocessable',
+  );
+  eq('a null result is unprocessable', classifyPdfResult(null, 100), 'unprocessable');
+
+  // --- a gs failure is not a decline -----------------------------------
+  // The three PDF outcomes must stay distinguishable: downsampled, declined
+  // because the output was not smaller, and not processed at all. Collapsing
+  // the last two reports a broken encoder as a run of deliberate no-ops.
+  eq(
+    'shrinkPdf reports a refusal as {ok:false}, not as a buffer-or-null',
+    await shrinkPdf(Buffer.from('not a pdf'), { gsMissing: true }),
+    { ok: false },
+  );
+  {
+    // gs on a real (tiny) PDF: ok:true, and the caller then decides on size.
+    const tiny = Buffer.from(
+      '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
+        '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+        '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 99 99]>>endobj\n' +
+        'trailer<</Root 1 0 R>>\n',
+      'latin1',
+    );
+    const res = await shrinkPdf(tiny, {});
+    eq('shrinkPdf on a parseable PDF reports ok:true', res.ok, true);
+    eq('...and carries a buffer', Buffer.isBuffer(res.buffer), true);
+  }
+  {
+    const res = await shrinkPdf(Buffer.from('definitely not a pdf'), {});
+    eq('shrinkPdf on bytes ghostscript cannot parse reports ok:false', res.ok, false);
+  }
+
   // --- preflight: a requested pass that cannot run is an ERROR -----------
   eq(
     'asking for jpegs without sharp is refused',
@@ -418,16 +501,23 @@ function selfTest() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  if (process.argv.includes('--self-test')) process.exit(selfTest());
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      // Without this an unexpected throw is an unhandled rejection: no
-      // ::error:: annotation, and a step whose failure reads as a crash
-      // rather than as this script refusing.
-      console.error(
-        `::error::optimize-captured-assets crashed: ${err && err.stack ? err.stack : err}`,
-      );
-      process.exit(1);
-    });
+  if (process.argv.includes('--self-test')) {
+    selfTest()
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        console.error(`::error::self-test crashed: ${err && err.stack ? err.stack : err}`);
+        process.exit(1);
+      });
+  } else
+    main()
+      .then((code) => process.exit(code))
+      .catch((err) => {
+        // Without this an unexpected throw is an unhandled rejection: no
+        // ::error:: annotation, and a step whose failure reads as a crash
+        // rather than as this script refusing.
+        console.error(
+          `::error::optimize-captured-assets crashed: ${err && err.stack ? err.stack : err}`,
+        );
+        process.exit(1);
+      });
 }

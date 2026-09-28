@@ -671,6 +671,13 @@ export function shouldLocalize(absUrl, domain, ignoreHosts = []) {
     'twitter.com',
     'x.com',
     'linkedin.com',
+    // Animoto is a video embed service like the rest of this list. Note it
+    // does NOT catch the form this site actually uses --
+    // `s3.amazonaws.com/embed.animoto.com/play.html?...`, whose HOST is the
+    // bucket -- which is what the HTML-document rule below is for. It is here
+    // for the virtual-host form (`embed.animoto.com/...`) and the player's
+    // own media on `s3-p.animoto.com`.
+    'animoto.com',
     'givebutter.com',
     'donorbox.org',
     'paypal.com',
@@ -679,6 +686,28 @@ export function shouldLocalize(absUrl, domain, ignoreHosts = []) {
     'google-analytics.com',
   ];
   if (KEEP_EXTERNAL.some((k) => host === k || host.endsWith(`.${k}`))) return false;
+
+  // A third-party HTML DOCUMENT is not an asset, whatever host serves it.
+  //
+  // This sits ABOVE the ASSET_HOSTS list deliberately. Animoto's player is
+  // served from `s3.amazonaws.com/embed.animoto.com/play.html?w=…&e=…&f=…`, so
+  // the bucket host matches the blanket `amazonaws.com` entry below and the
+  // player page is localized -- against the rule this function's own header
+  // states, that a third-party runtime embed stays external because localizing
+  // it breaks it.
+  //
+  // And it breaks it QUIETLY, which is why the extension test at the bottom of
+  // this function is not enough on its own: `.html` is not in it, so the only
+  // thing localizing this page is an asset-host match. The capture folds a
+  // query string into the filename, so the localized player loads with an empty
+  // `location.search`; its script reads the video id from there, gets nothing,
+  // and requests `configurations/.conf`. Measured on
+  // newheightseducation.org/volunteer-with-nheg/ (706 run 36410991329), where
+  // it took the self-containment gate to 119/120 -- a 404 for an asset whose
+  // name has no stem at all.
+  //
+  // Same-site documents are untouched: `host === domain` returned true above.
+  if (/\.x?html?$/i.test(u.pathname)) return false;
 
   // Known asset providers, plus anything with an asset-ish extension.
   const ASSET_HOSTS = [
@@ -3987,6 +4016,61 @@ function selfTest() {
   eq(
     'shouldLocalize foreign asset by extension',
     shouldLocalize('https://other.org/a.png', 'x.org'),
+    true,
+  );
+
+  // --- a third-party HTML document is not an asset (706 run 36410991329) ---
+  //
+  // The regression anchor. Animoto's player lives in an S3 bucket, so its HOST
+  // is `s3.amazonaws.com` and the `amazonaws.com` asset-host entry would
+  // localize it; the capture then folds the query into the filename and the
+  // player loads with no `location.search`, asking for `configurations/.conf`.
+  eq(
+    'shouldLocalize keeps an embed player page in an S3 bucket external',
+    shouldLocalize(
+      'https://s3.amazonaws.com/embed.animoto.com/play.html?w=swf/production/vp1&e=1577177128&f=BJA1ISt3FQ1yq9U1u7TIHQ&d=0',
+      'x.org',
+    ),
+    false,
+  );
+  // The other half of that pair, and the reason the rule is about DOCUMENTS
+  // rather than about `amazonaws.com`: a WordPress site really does serve its
+  // media from S3, and that must still localize. A fix that reads "stop
+  // trusting amazonaws.com" would pass the test above and break this one.
+  //
+  // The URL is EXTENSIONLESS on purpose. Written with a `.png` the assertion
+  // holds whether or not `amazonaws.com` is in ASSET_HOSTS -- the extension
+  // test at the bottom of the function carries it -- so it passes without ever
+  // exercising the list it claims to protect. Measured: deleting
+  // `'amazonaws.com'` left the whole suite green until this line lost its
+  // extension.
+  eq(
+    'shouldLocalize still takes an extensionless object from the same S3 host',
+    shouldLocalize('https://s3.amazonaws.com/bucket/2024/hero', 'x.org'),
+    true,
+  );
+  eq(
+    'shouldLocalize keeps animoto external by host too',
+    shouldLocalize('https://embed.animoto.com/clip.mp4', 'x.org'),
+    false,
+  );
+  eq(
+    'shouldLocalize keeps any third-party .htm document external',
+    shouldLocalize('https://cdn.example.net/widget.htm', 'x.org'),
+    false,
+  );
+  // Same-site documents are decided before the rule is reached, so a captured
+  // page on the site being migrated is unaffected by it.
+  eq(
+    'shouldLocalize still localizes a same-site html document',
+    shouldLocalize('https://x.org/legacy/flyer.html', 'x.org'),
+    true,
+  );
+  // The rule reads the PATH, not the query: `?ref=index.html` does not make a
+  // PNG into a document.
+  eq(
+    'shouldLocalize ignores html named only in a query string',
+    shouldLocalize('https://other.org/a.png?ref=index.html', 'x.org'),
     true,
   );
 

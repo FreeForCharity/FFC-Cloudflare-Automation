@@ -223,12 +223,29 @@ jobs:
         # interactively" (run 36441804009) -- the one flag the queue refuses.
         # enablePullRequestAutoMerge with no mergeMethod is what gh sends when
         # it does see the queue; the queue picks the method server-side.
+        #
+        # Auto-merge can only be ARMED on a PR that is still waiting on
+        # something. A PR that is already mergeable is refused with "Pull
+        # request is in clean status" (run 36442814848) and must be enqueued
+        # directly instead -- gh's `--auto` makes the same switch internally.
         env:
           GH_TOKEN: ${{ env.GH_WRITE_TOKEN }}
           PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
         run: |
           set -euo pipefail
           pr_id="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .node_id)"
+          if out="$(gh api graphql \
+            -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { number } } }' \
+            -f id="$pr_id" 2>&1)"; then
+            echo "Auto-merge armed on #${PR_NUMBER}; the queue takes it once checks pass."
+            exit 0
+          fi
+          if ! grep -q 'clean status' <<<"$out"; then
+            echo "$out"
+            echo "::error::Could not arm auto-merge on #${PR_NUMBER} (see the GraphQL error above)."
+            exit 1
+          fi
           gh api graphql \
-            -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { number autoMergeRequest { enabledAt } } } }' \
+            -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position state } } }' \
             -f id="$pr_id"
+          echo "#${PR_NUMBER} was already mergeable, so it was enqueued directly."

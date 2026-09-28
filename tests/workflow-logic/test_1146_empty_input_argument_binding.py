@@ -163,9 +163,11 @@ STUB_SCRIPTS = (
 # Which rows are also RUN, and with what the runner would substitute for the
 # non-input expressions still in their bodies.
 BEHAVIOURAL = {
-    "201-whmcs-export-domains.yml/Export domains": {
-        "${{ inputs.output_file }}": "artifacts/whmcs/whmcs_domains.csv",
-    },
+    # #1080 lane 26 moved 201's `output_file` out of this body and into
+    # step-level `env:`, exactly as lane 21 did for 213 below, so there is
+    # nothing left for this render to substitute. What it used to supply as
+    # TEXT the harness now supplies as ENVIRONMENT, in RENDER_ENV.
+    "201-whmcs-export-domains.yml/Export domains": {},
     # #1080 lane 21 moved all four of 213's own inputs out of this body and into
     # step-level `env:`, so there is nothing left for this render to substitute.
     # What they used to supply as TEXT the harness now supplies as ENVIRONMENT,
@@ -191,8 +193,10 @@ CONTROLLED = (
     "INPUT_SEARCH_TERMS",
     "INPUT_SIZE",
     "INPUT_OUTPUT_FILE",
-    # #1080 lane 21: 213's own inputs now arrive as environment rather than as
-    # substituted text, so they join the set the harness owns outright.
+    # #1080 lanes 21 and 26: 213's and 201's own inputs now arrive as
+    # environment rather than as substituted text, so they join the set the
+    # harness owns outright.
+    "IN_OUTPUT_FILE",
     "IN_TRANSACTIONS_OUTPUT",
     "IN_MAX_ROWS",
     "IN_START_DATE",
@@ -205,6 +209,13 @@ CONTROLLED = (
 # 213 case below would exit 1 on a different guard and the WHMCS_API_URL
 # assertions would never be reached — passing or failing for the wrong reason.
 RENDER_ENV = {
+    # Same shape for 201 (#1080 lane 26): its `output_file` guard runs before
+    # the `-ApiUrl` argument this module measures, so without this every 201
+    # case would exit 1 on that guard and the WHMCS_API_URL assertions would
+    # never be reached.
+    "201-whmcs-export-domains.yml/Export domains": {
+        "IN_OUTPUT_FILE": "artifacts/whmcs/whmcs_domains.csv",
+    },
     "213-whmcs-zeffy-payments-import-draft.yml/Export transactions": {
         "IN_TRANSACTIONS_OUTPUT": "artifacts/whmcs/whmcs_transactions.csv",
         "IN_MAX_ROWS": "200000",

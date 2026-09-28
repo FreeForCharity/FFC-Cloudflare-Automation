@@ -646,6 +646,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 744 | Repo - Public Feed Freshness [GH] | `744-repo-public-feed-freshness.yml` | schedule, workflow_dispatch | Reads | — |
 | 745 | Repo - Agentic OS Board Audit [GH] | `745-agentic-os-board-audit.yml` | schedule, workflow_dispatch | Reads | github-prod-read |
 | 746 | Repo - Bulk Enable GitHub Pages [Repo] | `746-bulk-enable-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
+| 747 | Repo - Conductor Liveness [GH] | `747-conductor-liveness.yml` | schedule, workflow_dispatch | Reads | — |
 | 748 | Repo - Template Provisioning Matrix [Repo] | `748-template-provisioning-matrix.yml` | pull_request, schedule, workflow_dispatch | Reads | — |
 ### 8xx — Candid (GuideStar)
 

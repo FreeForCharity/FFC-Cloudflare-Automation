@@ -40,10 +40,26 @@ param(
     # 701's IRS status value. Drives siteConfig.taxStatusLabel: the footer's
     # "a US 501c3 Non Profit" clause and the donation policy's deductibility
     # sentence are legal claims, made only for a recognized 501(c)(3).
-    [string]$IrsStatus
+    [string]$IrsStatus,
+
+    # Optional. When set, a JSON summary { blankFields: [...] } is written here
+    # naming every identity field the charity did not provide and that was
+    # therefore left blank (never filled with the template's FFC value). 701's
+    # finalize comment lists them for a human to fill in.
+    [string]$SummaryPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Identity fields left blank because the charity did not provide them. A blank
+# is the honest state: the template's values are Free For Charity's own (EIN,
+# phone, addresses, GuideStar profile, social links, staff), and leaving any of
+# them on a charity's site presents FFC's identity as the charity's.
+$script:BlankFields = New-Object System.Collections.Generic.List[string]
+function Add-BlankField {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if (-not $script:BlankFields.Contains($Name)) { $script:BlankFields.Add($Name) }
+}
 
 function Assert-FileExists {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -640,6 +656,7 @@ function Update-SiteConfig {
     $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
 
     $missionText = if ([string]::IsNullOrWhiteSpace($Mission)) {
+        Add-BlankField 'mission'
         "$CharityName is a nonprofit organization."
     }
     else { ($Mission -replace "`r`n|`r|`n", ' ').Trim() }
@@ -687,19 +704,28 @@ function Update-SiteConfig {
         $text = Set-SiteConfigValue -Source $text -Key $pair[0] -ValueTs (ConvertTo-TsString $url) -Optional
     }
 
-    # The shared schema requires a non-empty EIN, so a blank cannot be written;
-    # keeping the template's would publish FFC's tax ID as the charity's.
-    if ([string]::IsNullOrWhiteSpace($Ein)) {
-        throw 'No EIN supplied; refusing to leave the template EIN on the charity site.'
+    # No EIN: blank, never the template's. Keeping it would publish FFC's tax
+    # ID (46-2471893) as the charity's -- a false legal claim. The shared
+    # schema and the templates' own tests still want a non-empty EIN, so the
+    # site's CI flags the blank until a human fills it in; that is the right
+    # failure, and the content that IS known still lands.
+    $einValue = if ([string]::IsNullOrWhiteSpace($Ein)) {
+        Write-Warning 'No EIN supplied; siteConfig.ein is left blank (never the template EIN).'
+        Add-BlankField 'EIN'
+        ''
     }
-    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $Ein.Trim())
+    else { $Ein.Trim() }
+    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $einValue)
 
     # An empty phone is the template's documented "no phone" state (no block).
     $telDigits = Get-TelDigits -Phone $Phone
     $phoneTs = if ($telDigits) {
         '{ display: ' + (ConvertTo-TsString $Phone) + ', tel: ' + (ConvertTo-TsString $telDigits) + ' }'
     }
-    else { "{ display: '', tel: '' }" }
+    else {
+        Add-BlankField 'phone'
+        "{ display: '', tel: '' }"
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'phone' -ValueTs $phoneTs
 
     $addrLines = @()
@@ -714,31 +740,58 @@ function Update-SiteConfig {
         $linesTs = ($addrLines | ForEach-Object { ConvertTo-TsString $_ }) -join ', '
         "[`n    {`n      label: 'Main Address',`n      lines: [$linesTs],`n      mapUrl: $(ConvertTo-TsString $mapUrl),`n    },`n  ]"
     }
-    else { '[]' }
+    else {
+        # Never the template's Raleigh / State College offices.
+        Add-BlankField 'address'
+        '[]'
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'addresses' -ValueTs $addressesTs
 
-    # The shared SiteConfig schema requires both Candid URLs, so blanks cannot
-    # be written. When 701 has none (pre-501(c)(3) applications may omit them)
-    # use Candid's profile-by-EIN URL -- the same form as FFC's own -- rather
-    # than leaving FFC's profile on the charity's site.
-    $candidByEin = if (-not [string]::IsNullOrWhiteSpace($Ein)) { "https://www.guidestar.org/profile/$($Ein.Trim())" } else { '' }
+    # Candid / GuideStar. The footer's seal and "Direct GuideStar Profile Link"
+    # are a transparency claim, so they only ever point at the charity's own
+    # profile -- never FFC's (46-2471893 / bbbe173a-...), which is what the
+    # template ships:
+    #  - URLs given (https)           -> used as given.
+    #  - none given, recognized
+    #    501(c)(3) with an EIN        -> Candid's profile-by-EIN URL. Candid
+    #                                    carries every IRS-recognized exempt
+    #                                    org, so this is the charity's own
+    #                                    profile, and it keeps the site's CI
+    #                                    (which wants https URLs) green.
+    #  - otherwise                    -> both blank. A pre-501(c)(3) org has no
+    #                                    Candid profile to link to. The shared
+    #                                    schema (minLength 1) and the Footer-Only
+    #                                    footer (no empty guard) do not accept a
+    #                                    blank yet -- a template gap tracked on
+    #                                    both template repos -- so until that
+    #                                    lands the site's CI flags it rather than
+    #                                    this script inventing a link.
+    $candidByEin = if ($recognized -and -not [string]::IsNullOrWhiteSpace($Ein)) { "https://www.guidestar.org/profile/$($Ein.Trim())" } else { '' }
     $profileUrl = if ($GuideStarProfileUrl -match '^https://\S+$') { $GuideStarProfileUrl.Trim() } else { $candidByEin }
     $directUrl = if ($GuideStarDirectProfileUrl -match '^https://\S+$') { $GuideStarDirectProfileUrl.Trim() } else { $profileUrl }
-    if ($profileUrl) {
-        $guidestarTs = "{`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
-        $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
+    if (-not $profileUrl) {
+        # A direct link alone still names the charity's own profile.
+        $profileUrl = $directUrl
     }
-    else {
-        Write-Warning 'No Candid URL and no EIN; siteConfig.guidestar keeps the template value.'
+    if (-not $profileUrl) {
+        Write-Warning 'No Candid / GuideStar profile for this charity; siteConfig.guidestar is left blank (never the template profile).'
+        Add-BlankField 'Candid/GuideStar profile'
     }
+    $guidestarTs = "{`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
+    $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
 
+    # Only the links the charity gave; none of FFC's (facebook.com/freeforcharity,
+    # x.com/freeforcharity1, linkedin.com/company/freeforcharity, the template repo).
     $socialEntries = Get-SocialEntries -Social $Social
     $socialTs = if ($socialEntries.Count -gt 0) {
         "[`n" + (($socialEntries | ForEach-Object {
                     "    { label: $(ConvertTo-TsString $_.Label), href: $(ConvertTo-TsString $_.Href) },"
                 }) -join "`n") + "`n  ]"
     }
-    else { '[]' }
+    else {
+        Add-BlankField 'social links'
+        '[]'
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'social' -ValueTs $socialTs
 
     $xLink = $socialEntries | Where-Object { $_.Label -eq 'X (Twitter)' } | Select-Object -First 1
@@ -783,11 +836,14 @@ function Update-TeamData {
         $m = Parse-LeadershipLine -Line $line
         if ($null -ne $m) { $members += $m }
     }
-    # Neither outcome of carrying on is acceptable: keeping the template's
-    # sample members publishes FFC's own people as the charity's leadership,
-    # and an empty team breaks the templates' own team tests and /#team link.
+    # No usable lines: an EMPTY team, never the template's sample members --
+    # those are FFC's own people, and publishing them as the charity's
+    # leadership is a false claim. Both templates' team sections render nothing
+    # for an empty roster; the Footer-Only template's own tests still want at
+    # least one member, so the site's CI flags the gap until a human adds them.
     if ($members.Count -eq 0) {
-        throw 'No usable leadership lines (each needs a name); refusing to leave the template team on the charity site.'
+        Write-Warning 'No usable leadership lines (each needs a name); the team is left empty (never the template team).'
+        Add-BlankField 'leadership'
     }
 
     # One card per person. Small boards often give one person two offices
@@ -817,8 +873,10 @@ function Update-TeamData {
     # on the same line (as prettier leaves a short array after an earlier run),
     # so a second run over the same repo matches too.
     $arrayRe = '(?s)(export const team\s*(?::\s*TeamMember\[\])?\s*=\s*\[).*?(\s*\])'
-    if (-not [regex]::IsMatch($indexText, $importRe) -or -not [regex]::IsMatch($indexText, $arrayRe)) {
-        throw 'src/data/team.ts no longer has ./team/*.json imports and an "export const team = [ ... ]" array; the template changed shape.'
+    # The imports may legitimately be absent: a repo whose team was left empty
+    # by an earlier run has none. The array must always be there.
+    if (-not [regex]::IsMatch($indexText, $arrayRe)) {
+        throw 'src/data/team.ts no longer has an "export const team = [ ... ]" array; the template changed shape.'
     }
 
     # Replace the template's sample members (FFC's own team).
@@ -843,12 +901,28 @@ function Update-TeamData {
         $vars.Add("  $var,")
     }
 
-    # Drop the old imports, then put the new ones where the first one was.
-    $firstImport = [regex]::Match($indexText, $importRe).Index
+    # Drop the old imports, then put the new ones where the first one was (or,
+    # with no old imports, just before the first export).
+    $firstImportMatch = [regex]::Match($indexText, $importRe)
     $withoutImports = [regex]::Replace($indexText, $importRe, '')
-    $teamTs = $withoutImports.Substring(0, $firstImport) + ($imports -join "`n") + "`n" + $withoutImports.Substring($firstImport)
-    $arrayBody = "`n" + ($vars -join "`n")
-    $teamTs = [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + "`n]" }, 'None')
+    $insertAt = if ($firstImportMatch.Success) { $firstImportMatch.Index } else {
+        $firstExport = [regex]::Match($withoutImports, '(?m)^export\s')
+        if ($firstExport.Success) { $firstExport.Index } else { 0 }
+    }
+    $importBlock = if ($imports.Count -gt 0) {
+        ($imports -join "`n") + "`n" + $(if ($firstImportMatch.Success) { '' } else { "`n" })
+    }
+    else { '' }
+    $teamTs = $withoutImports.Substring(0, $insertAt) + $importBlock + $withoutImports.Substring($insertAt)
+    $teamTs = if ($vars.Count -gt 0) {
+        $arrayBody = "`n" + ($vars -join "`n")
+        [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + "`n]" }, 'None')
+    }
+    else {
+        [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + ']' }, 'None')
+    }
+    # Removing every import can leave a run of blank lines; collapse to one.
+    $teamTs = [regex]::Replace($teamTs, "\n{3,}", "`n`n")
     Write-LfFile -Path $teamIndexFile -Text $teamTs
 }
 
@@ -903,11 +977,42 @@ if (Test-Path -LiteralPath $siteConfigFile) {
 
     Invoke-RepoPrettier -RepoRoot $repoRoot -Paths @('src/lib/site.config.ts', 'src/data/team.ts', 'src/data/team')
 
+    if ($script:BlankFields.Count -gt 0) {
+        Write-Warning ("Not provided, left blank for a human to fill in: {0}." -f ($script:BlankFields -join ', '))
+    }
+    if ($SummaryPath) {
+        $summary = [ordered]@{ blankFields = @($script:BlankFields) }
+        Write-LfFile -Path $SummaryPath -Text ($summary | ConvertTo-Json -Depth 3)
+    }
+
     Write-Host 'Config-driven template content updated successfully.' -ForegroundColor Green
     return
 }
 
 # Legacy hard-coded footer (pre-site.config.ts repos).
+# Its regex patch can only REPLACE the template's hard-coded values, not blank
+# them, so a missing field would leave Free For Charity's own phone, address,
+# EIN, social link or staff on the charity's site. Refuse instead (701 reports
+# content_status=failed) rather than publish FFC's identity as the charity's.
+$legacyMissing = @()
+if (-not (Get-TelDigits -Phone $FooterPhone)) { $legacyMissing += 'phone' }
+if ([string]::IsNullOrWhiteSpace($FooterAddress)) { $legacyMissing += 'address' }
+if ([string]::IsNullOrWhiteSpace($FooterEin)) { $legacyMissing += 'EIN' }
+if (@($LeadershipLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) { $legacyMissing += 'leadership' }
+$legacySocial = @{}
+foreach ($line in $FooterSocial) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $m = [regex]::Match(($line.Trim() -replace '^[\*-]\s+', ''), '^(?<k>[A-Za-z ]+)\s*:\s*https://\S+$')
+    if ($m.Success) { $legacySocial[$m.Groups['k'].Value.Trim().ToLowerInvariant()] = $true }
+}
+foreach ($k in @('facebook', 'linkedin', 'github')) {
+    if (-not $legacySocial.ContainsKey($k)) { $legacyMissing += "$k link" }
+}
+if (-not ($legacySocial.ContainsKey('x') -or $legacySocial.ContainsKey('twitter'))) { $legacyMissing += 'x link' }
+if ($legacyMissing.Count -gt 0) {
+    throw ("Legacy hard-coded footer (no src/lib/site.config.ts) cannot blank missing fields, so it would keep Free For Charity's own values for: {0}. Edit src/components/footer/index.tsx by hand." -f ($legacyMissing -join ', '))
+}
+
 $footerFile = Join-Path $repoRoot 'src/components/footer/index.tsx'
 
 Update-FooterComponent `

@@ -47,6 +47,8 @@ export const siteConfig: SiteConfig = {
   keywords: ['nonprofit', 'charity'],
   social: [
     { label: 'Facebook', href: 'https://www.facebook.com/freeforcharity' },
+    { label: 'X (Twitter)', href: 'https://x.com/freeforcharity1' },
+    { label: 'LinkedIn', href: 'https://www.linkedin.com/company/freeforcharity/' },
     // Repo name uses underscores, the hyphenated variant 404s.
     { label: 'GitHub', href: 'https://github.com/FreeForCharity/FFC-IN-Footer_Only_Template' },
   ],
@@ -57,6 +59,11 @@ export const siteConfig: SiteConfig = {
       label: 'Main Address',
       lines: ['4030 Wake Forrest Road', 'Raleigh NC 27609'],
       mapUrl: 'https://www.google.com/maps/search/?api=1&query=4030+Wake+Forrest',
+    },
+    {
+      label: 'PA Office Address',
+      lines: ['301 Science Park Road Suite', '119 State College PA 16803'],
+      mapUrl: 'https://www.google.com/maps/place/Free+For+Charity/@40.7768455,-77.8963305,17z',
     },
   ],
   foundingDate: '2014',
@@ -137,9 +144,10 @@ def make_repo(td: pathlib.Path, site_config: str = SITE_CONFIG) -> pathlib.Path:
     (repo / "public" / ".well-known").mkdir(parents=True)
     (repo / "src" / "lib" / "site.config.ts").write_text(site_config, encoding="utf-8", newline="\n")
     (repo / "src" / "data" / "team.ts").write_text(TEAM_TS, encoding="utf-8", newline="\n")
-    for slug in ("clarke-moyer", "chris-rae"):
+    # The template's sample team is FFC's own people.
+    for slug, name in (("clarke-moyer", "Clarke Moyer"), ("chris-rae", "Chris Rae")):
         (repo / "src" / "data" / "team" / f"{slug}.json").write_text(
-            '{"name": "X", "role": "Y"}\n', encoding="utf-8"
+            json.dumps({"name": name, "role": "Free For Charity Board"}) + "\n", encoding="utf-8"
         )
     for rel in ("public/security.txt", "public/.well-known/security.txt"):
         (repo / rel).write_text(SECURITY_TXT, encoding="utf-8", newline="\n")
@@ -236,9 +244,11 @@ def test_blank_mission_becomes_a_sentence_naming_the_charity():
         shutil.rmtree(td)
 
 
-def test_blank_candid_urls_derive_from_the_ein_not_ffc():
-    # The shared SiteConfig schema requires both URLs, so blanks cannot be
-    # written; FFC's own profile must not be left on the charity's footer.
+def test_blank_candid_urls_derive_from_the_ein_for_a_recognized_501c3_not_ffc():
+    # Candid carries every IRS-recognized exempt org, so for a recognized
+    # 501(c)(3) the profile-by-EIN URL is the charity's own profile. FFC's own
+    # profile must never be left on the charity's footer. (Not recognized:
+    # blank, see test_a_pre_501c3_charity_without_candid_urls_gets_blank_guidestar.)
     td, repo, proc = applied()
     try:
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -289,23 +299,244 @@ def test_team_data_uses_the_role_schema_and_keeps_other_exports():
         shutil.rmtree(td)
 
 
-def test_no_usable_leadership_fails_rather_than_keeping_ffcs_team():
+def test_no_usable_leadership_leaves_an_empty_team_not_ffcs():
     # 701 counts raw lines, so lines that parse to no name still reach the
-    # script. Keeping the template's sample team would publish FFC's people;
-    # an empty team breaks the templates' own tests. Fail loudly instead.
+    # script. Keeping the template's sample team would publish FFC's people as
+    # the charity's leadership; an empty team is the honest state (both
+    # templates' team sections render nothing for it).
     td, repo, proc = applied({**FULL_ARGS, "LeadershipLines": ["| Treasurer", "|"]})
     try:
-        assert proc.returncode != 0, proc.stdout
-        assert "No usable leadership lines" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "team is left empty" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+        assert list((repo / "src" / "data" / "team").glob("*.json")) == []
+        team_ts = read(repo, "src/data/team.ts")
+        assert "export const team: TeamMember[] = []" in team_ts, team_ts
+        assert "import " not in team_ts and "clarke" not in team_ts.lower(), team_ts
+        # The rest of team.ts (the type, derived exports) is kept.
+        assert "export type TeamMember = {" in team_ts, team_ts
+        assert "export const configuredTeam" in team_ts, team_ts
+        assert "\n\n\n" not in team_ts, team_ts
     finally:
         shutil.rmtree(td)
 
 
-def test_a_blank_ein_fails_rather_than_keeping_ffcs():
+def test_a_team_left_empty_can_be_filled_by_a_later_run():
+    # Re-running once the charity supplies its leadership must still work on a
+    # team.ts that has no ./team/*.json imports left.
+    td, repo, proc = applied({**FULL_ARGS, "LeadershipLines": []})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        again = run_apply(repo, FULL_ARGS)
+        assert again.returncode == 0, again.stdout + again.stderr
+        team_ts = read(repo, "src/data/team.ts")
+        assert "import member1 from './team/jane-o-doe.json'" in team_ts, team_ts
+        assert "export const team: TeamMember[] = [\n  member1,\n  member2,\n]" in team_ts, team_ts
+        # The imports sit above the first export, as the template has them.
+        assert team_ts.index("import member1") < team_ts.index("export type TeamMember"), team_ts
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_blank_ein_is_written_blank_not_ffcs():
     td, repo, proc = applied({**FULL_ARGS, "FooterEin": "  "})
     try:
-        assert proc.returncode != 0, proc.stdout
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "ein: ''," in cfg, cfg
+        assert "46-2471893" not in cfg, cfg
         assert "No EIN supplied" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_pre_501c3_charity_without_candid_urls_gets_blank_guidestar():
+    # A charity without IRS recognition has no Candid profile: a URL derived
+    # from its EIN would be a dead link behind a transparency seal, and FFC's
+    # own profile would be a false claim. Both are left blank.
+    args = {**FULL_ARGS, "IrsStatus": "Not yet / pending (pre-501(c)(3))"}
+    td, repo, proc = applied(args)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, cfg
+        assert "guidestar.org" not in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_direct_candid_link_alone_fills_both_urls():
+    args = {**FULL_ARGS, "GuideStarDirectProfileUrl": "https://www.guidestar.org/profile/shared/abc"}
+    td, repo, proc = applied({**args, "IrsStatus": ""})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "profileUrl: 'https://www.guidestar.org/profile/shared/abc'," in cfg, cfg
+        assert "directProfileUrl: 'https://www.guidestar.org/profile/shared/abc'," in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
+
+# Mirrors FFC-EX-iwilf.org's application (FFC-EX-iwilf.org#6): a pre-501(c)(3)
+# charity with a name, email, EIN, mission, a single LinkedIn link and three
+# leaders, and NO phone, address, Candid profile or other social links. 701
+# used to skip the whole patch for it, and the site went live as FFC.
+SPARSE_ARGS = {
+    "Domain": "iwilf.example",
+    "CharityName": "Interpreters Legacy Test Foundation",
+    "FooterEmail": "legacy@iwilf.example",
+    "FooterPhone": "",
+    "FooterAddress": "",
+    "FooterEin": "42-0000124",
+    "GuideStarProfileUrl": "",
+    "GuideStarDirectProfileUrl": "",
+    "FooterSocial": ["LinkedIn: https://www.linkedin.com/company/iwilf-test/"],
+    "LeadershipLines": [
+        "Founder - Ali Example",
+        "Samer Example | Treasurer",
+        "Volunteer Coordinator - Adnan Example",
+    ],
+    "Mission": "Preserving and honoring the legacy of the interpreters who served alongside U.S. forces.",
+    "DonationUrl": "",
+    "VolunteerUrl": "",
+    "IrsStatus": "Not yet / pending (pre-501(c)(3))",
+}
+
+# Free For Charity's own identity as the templates ship it. None of it may
+# survive on a charity's site, outside the permanent "Supported by" attribution.
+FFC_IDENTITY = (
+    "46-2471893",
+    "(520) 222-8104",
+    "5202228104",
+    "Raleigh",
+    "Wake Forrest",
+    "State College",
+    "Science Park",
+    "facebook.com/freeforcharity",
+    "x.com/freeforcharity1",
+    "@freeforcharity",
+    "linkedin.com/company/freeforcharity",
+    "github.com/FreeForCharity",
+    "guidestar.org",
+    "bbbe173a",
+    "clarkemoyer@",
+    "Reduce Costs",
+    "Clarke Moyer",
+    "Chris Rae",
+    "clarke-moyer",
+    "chris-rae",
+)
+
+
+def test_a_sparse_charity_gets_its_own_details_and_none_of_ffcs():
+    td = pathlib.Path(tempfile.mkdtemp())
+    try:
+        repo = make_repo(td)
+        summary = td / "summary.json"
+        proc = run_apply(repo, {**SPARSE_ARGS, "SummaryPath": str(summary)})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+
+        # What the charity gave is on the site.
+        assert "name: 'Interpreters Legacy Test Foundation'," in cfg, cfg
+        assert "contactEmail: 'legacy@iwilf.example'," in cfg, cfg
+        assert "ein: '42-0000124'," in cfg, cfg
+        assert "Preserving and honoring the legacy" in cfg, cfg
+        assert (
+            "social: [\n    { label: 'LinkedIn', href: 'https://www.linkedin.com/company/iwilf-test/' },\n  ],"
+            in cfg
+        ), cfg
+
+        # What it did not give is blank, never FFC's.
+        assert "phone: { display: '', tel: '' }," in cfg, cfg
+        assert "addresses: []," in cfg, cfg
+        assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, cfg
+        assert "twitterHandle: ''," in cfg, cfg
+        assert "taxStatusLabel: ''," in cfg, cfg
+        assert "donationUrl: ''," in cfg and "volunteerUrl: ''," in cfg, cfg
+        config_body = cfg.split("export const siteConfig")[1].split("supportedBy:")[0]
+        for ffc in FFC_IDENTITY:
+            assert ffc not in config_body, (ffc, cfg)
+        # FFC attribution stays, and is the only FFC reference.
+        assert "supportedBy: {\n    name: 'Free For Charity'," in cfg, cfg
+
+        # The team is the charity's three leaders, none of FFC's staff.
+        members = sorted(
+            json.loads(p.read_text(encoding="utf-8"))["name"]
+            for p in (repo / "src" / "data" / "team").glob("*.json")
+        )
+        assert members == ["Adnan Example", "Ali Example", "Samer Example"], members
+        team_files = [read(repo, "src/data/team.ts")] + [
+            p.read_text(encoding="utf-8") for p in (repo / "src" / "data" / "team").glob("*.json")
+        ]
+        for text in team_files:
+            for ffc in FFC_IDENTITY:
+                assert ffc not in text, (ffc, text)
+
+        for rel in ("public/security.txt", "public/.well-known/security.txt"):
+            body = read(repo, rel)
+            assert body.startswith("Contact: mailto:legacy@iwilf.example\n"), body
+
+        # The blanks are reported for 701's completion comment.
+        reported = json.loads(summary.read_text(encoding="utf-8"))["blankFields"]
+        assert reported == ["phone", "address", "Candid/GuideStar profile"], reported
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_complete_charity_reports_no_blank_fields():
+    td = pathlib.Path(tempfile.mkdtemp())
+    try:
+        repo = make_repo(td)
+        summary = td / "summary.json"
+        proc = run_apply(repo, {**FULL_ARGS, "SummaryPath": str(summary)})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert json.loads(summary.read_text(encoding="utf-8"))["blankFields"] == []
+    finally:
+        shutil.rmtree(td)
+
+
+def test_every_missing_field_is_blank_and_reported():
+    args = {
+        **SPARSE_ARGS,
+        "FooterEin": "",
+        "FooterSocial": [],
+        "LeadershipLines": [],
+        "Mission": "",
+    }
+    td = pathlib.Path(tempfile.mkdtemp())
+    try:
+        repo = make_repo(td)
+        summary = td / "summary.json"
+        proc = run_apply(repo, {**args, "SummaryPath": str(summary)})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "social: []," in cfg and "ein: ''," in cfg, cfg
+        config_body = cfg.split("export const siteConfig")[1].split("supportedBy:")[0]
+        for ffc in FFC_IDENTITY:
+            assert ffc not in config_body, (ffc, cfg)
+        reported = json.loads(summary.read_text(encoding="utf-8"))["blankFields"]
+        assert sorted(reported) == sorted(
+            ["mission", "EIN", "phone", "address", "Candid/GuideStar profile", "social links", "leadership"]
+        ), reported
+    finally:
+        shutil.rmtree(td)
+
+
+def test_the_legacy_footer_path_refuses_to_keep_ffcs_values():
+    # Pre-site.config.ts repos: the regex patch can only replace, not blank,
+    # so a sparse charity must fail (content_status=failed) rather than ship
+    # FFC's phone / address / social links under the charity's name.
+    td = pathlib.Path(tempfile.mkdtemp())
+    try:
+        repo = td / "repo"
+        (repo / "src" / "components" / "footer").mkdir(parents=True)
+        footer = repo / "src" / "components" / "footer" / "index.tsx"
+        footer.write_text('<a href="tel:15202228104">(520) 222-8104</a>\n', encoding="utf-8")
+        proc = run_apply(repo, SPARSE_ARGS)
+        assert proc.returncode != 0, proc.stdout
+        out = proc.stdout + proc.stderr
+        assert "Legacy hard-coded footer" in out and "phone" in out and "address" in out, out
+        assert "(520) 222-8104" in footer.read_text(encoding="utf-8")  # untouched, not half-patched
     finally:
         shutil.rmtree(td)
 

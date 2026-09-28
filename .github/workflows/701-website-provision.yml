@@ -1411,6 +1411,7 @@ jobs:
     continue-on-error: true
     outputs:
       content_status: ${{ steps.apply.outputs.content_status }}
+      content_blank_fields: ${{ steps.apply.outputs.content_blank_fields }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -1630,40 +1631,27 @@ jobs:
           }
 
           # Patch the actual React template files in the newly provisioned repo.
-          function Test-SocialLinksPresent {
-            param([string[]]$Links)
-            if (-not $Links -or $Links.Count -eq 0) { return $false }
-            $map = @{}
-            foreach ($line in $Links) {
-              if ([string]::IsNullOrWhiteSpace($line)) { continue }
-              $m = [regex]::Match($line.Trim(), '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https://\S+)$')
-              if (-not $m.Success) { continue }
-              $k = $m.Groups['k'].Value.Trim().ToLowerInvariant()
-              $map[$k] = $m.Groups['v'].Value.Trim()
-            }
-            foreach ($k in @('facebook', 'x', 'linkedin', 'github')) {
-              if (-not $map.ContainsKey($k)) { return $false }
-            }
-            return $true
-          }
-
+          #
+          # Only the charity's name and a public contact email are required. Every
+          # other identity field the charity did not give (phone, address, EIN,
+          # Candid/GuideStar profile, social links, leadership) is written BLANK by
+          # the script -- never left at the template's value, which is Free For
+          # Charity's own. The gate used to demand every footer field (and all four
+          # social links), and any gap skipped the patch entirely, so a sparse
+          # application went live as FFC: FFC's EIN, phone, offices, GuideStar seal
+          # and staff under the charity's name (FFC-EX-iwilf.org#6).
+          #
+          # The email stays required: it is the site's only contact channel (the
+          # Contact column, and the fallback target of the Donate / Volunteer
+          # links), it is security.txt's Contact line, and the templates reject an
+          # empty contactEmail. There is no honest blank for it.
           $canApplyTemplate = (
             -not [string]::IsNullOrWhiteSpace($charityName) -and
-            -not [string]::IsNullOrWhiteSpace($footerEmail) -and
-            -not [string]::IsNullOrWhiteSpace($footerPhone) -and
-            -not [string]::IsNullOrWhiteSpace($footerEin) -and
-            -not [string]::IsNullOrWhiteSpace($footerAddress) -and
-            ($leadership.Count -gt 0) -and
-            (Test-SocialLinksPresent -Links @($footerSocial))
+            -not [string]::IsNullOrWhiteSpace($footerEmail)
           )
+          $summaryPath = Join-Path $workDir 'content-summary.json'
+          $blankFields = @()
 
-          # Same anchored test as the resolve step (see the comment there).
-          $is501c3 = $irsStatus -match '^\s*501\s*\(c\)\s*\(?3\)?'
-          if ($is501c3) {
-            $canApplyTemplate = $canApplyTemplate -and
-              -not [string]::IsNullOrWhiteSpace($guideStarProfileUrl) -and
-              -not [string]::IsNullOrWhiteSpace($guideStarDirectProfileUrl)
-          }
           # Content patching is cosmetic polish applied AFTER the repo, Pages, and DNS are
           # already provisioned by earlier jobs. A failure here must NEVER mark the whole
           # provision as failed — that historically showed live, serving sites as red runs
@@ -1692,13 +1680,17 @@ jobs:
                 -Mission $mission `
                 -DonationUrl $donationUrl `
                 -VolunteerUrl $volunteerUrl `
-                -IrsStatus $irsStatus
+                -IrsStatus $irsStatus `
+                -SummaryPath $summaryPath
               $contentStatus = 'applied'
+              if (Test-Path -LiteralPath $summaryPath) {
+                $blankFields = @((Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json).blankFields)
+              }
             } else {
               # 'skipped' refers to the React template patch only. ffc-content.json
               # (provisioning metadata) was still written above and is committed below —
               # that is long-standing intended behavior, and the finalize comment says so.
-              Write-Host 'Skipping React template patch: missing required footer/leadership inputs.' -ForegroundColor Yellow
+              Write-Host 'Skipping React template patch: the charity name and a public contact email are both required.' -ForegroundColor Yellow
               $contentStatus = 'skipped'
             }
 
@@ -1732,6 +1724,9 @@ jobs:
           }
 
           "content_status=$contentStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # A fixed vocabulary written by the script (no user text), comma-joined.
+          $blankList = (@($blankFields) | Where-Object { $_ } | ForEach-Object { ([string]$_) -replace '[^A-Za-z0-9 /()-]', '' }) -join ', '
+          "content_blank_fields=$blankList" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   verify:
     runs-on: ubuntu-latest
@@ -1819,6 +1814,7 @@ jobs:
           SERVED: ${{ needs.verify.outputs.served }}
           SERVED_HOST: ${{ needs.verify.outputs.served_host }}
           CONTENT_STATUS: ${{ needs.content.outputs.content_status }}
+          CONTENT_BLANK_FIELDS: ${{ needs.content.outputs.content_blank_fields }}
         with:
           script: |
             const issueNumber = Number(process.env.ISSUE_NUMBER);
@@ -1846,13 +1842,22 @@ jobs:
                 : servedRaw === 'false'
                   ? `- ⚠️ Not serving yet (checked https://${domain} and https://www.${domain}) — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`
                   : `- ❔ Serving check did not run or did not record a result — verify https://${domain} manually (see the run log).`;
+            // Identity fields the charity did not provide; the content script left
+            // them blank rather than keep the template's (FFC's) values.
+            const blankFields = (process.env.CONTENT_BLANK_FIELDS || '')
+              .split(',')
+              .map((f) => f.trim())
+              .filter(Boolean);
+            const blankNote = blankFields.length
+              ? ` The charity did not provide: **${blankFields.join(', ')}**. Those were left blank (never filled with Free For Charity's values); a human needs to add them in \`src/lib/site.config.ts\` / \`src/data/team/\`. Until then the site's own CI may fail on a blank the template does not accept yet (EIN, address, team, GuideStar), which holds back its deploy.`
+              : '';
             const contentNote =
               contentStatus === 'applied'
-                ? '- Content (footer + leadership) was applied to the React template and recorded in `ffc-content.json`.'
+                ? `- Content (footer + leadership) was applied to the React template and recorded in \`ffc-content.json\`.${blankNote}`
                 : contentStatus === 'failed'
                   ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned, but it still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until the charity\'s details are applied by re-running or editing `src/lib/site.config.ts`.'
                   : contentStatus === 'skipped'
-                    ? '- ⚠️ Content patch skipped: not every footer field was provided (contact email, phone, EIN, address, leadership and all four social links are needed; admin-minimal provisions give none). The site still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until those are added. Provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
+                    ? '- ⚠️ Content patch skipped: the charity name and a public contact email are both required (admin-minimal provisions give neither). Any other missing field would have been left blank, but without a name and an email nothing was applied, so the site still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until they are added. Provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
                     : '- ❔ Content step did not record a status (it may have been skipped or errored before reporting) — the site itself is provisioned.';
             const dnsManual = zoneControlled
               ? []

@@ -108,10 +108,31 @@ def test_content_skipped_mentions_metadata_still_recorded():
     b = body({"SERVED": "true", "CONTENT_STATUS": "skipped"})
     assert "admin-minimal" in b, b
     assert "ffc-content.json" in b, b
-    # A skip is not only admin-minimal: any missing footer field causes it, and
-    # the site then ships the template's (FFC's) identity. Say so.
-    assert "not every footer field was provided" in b, b
+    # Only a missing name or email skips the patch now (any other gap is left
+    # blank), and the site then ships the template's (FFC's) identity. Say so.
+    assert "charity name and a public contact email are both required" in b, b
     assert "placeholder identity" in b, b
+    assert "all four social links" not in b, b
+
+
+def test_content_applied_lists_the_fields_left_blank():
+    b = body(
+        {
+            "SERVED": "true",
+            "CONTENT_STATUS": "applied",
+            "CONTENT_BLANK_FIELDS": "phone, address, Candid/GuideStar profile",
+        }
+    )
+    assert "was applied to the React template" in b, b
+    assert "did not provide: **phone, address, Candid/GuideStar profile**" in b, b
+    assert "never filled with Free For Charity's values" in b, b
+    assert "src/lib/site.config.ts" in b, b
+
+
+def test_content_applied_with_nothing_blank_has_no_blank_note():
+    for blank in ("", " , "):
+        b = body({"SERVED": "true", "CONTENT_STATUS": "applied", "CONTENT_BLANK_FIELDS": blank})
+        assert "did not provide" not in b, b
 
 
 def test_content_failed_is_nonblocking_warning():

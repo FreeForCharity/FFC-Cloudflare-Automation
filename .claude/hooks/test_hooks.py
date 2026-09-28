@@ -305,8 +305,32 @@ RULES = [
          "git push --force origin $(cat b.txt | tr -d '\\n'):main", BLOCK),
         ("force-push main with a pipe inside backticks",
          "git push --force `git remote | head -1` main", BLOCK),
-        ("force-push main with an escaped pipe between arguments",
-         "git push --force origin \\| main", BLOCK),
+        # The escaped pipe carries a REFSPEC, not a bare `\|` argument. The
+        # first spelling of this row was `git push --force origin \| main`,
+        # which is bash-valid but **git-invalid**: `|` is not a local ref, so
+        # git aborts the whole push on `error: src refspec | does not match
+        # any` and `main` never moves -- measured against a local bare remote,
+        # twice, including after a fresh commit. A row labelled "real
+        # force-push" that no git will execute pins nothing, which is the same
+        # empty-vector class as the `git -c a=b` and `--config-env a=B` rows
+        # earlier in this file. Copilot on #1336, third instance.
+        #
+        # `feat|x` is a legal branch name (`git check-ref-format --branch`
+        # rc=0 -- `|` is absent from git's forbidden set), so this command is
+        # executable AND protected-targeting: measured, it prints
+        # `+ 822891d...3c8627e feat|x -> main (forced update)` and the remote's
+        # main really is overwritten. The control that makes that mean
+        # something is the same refspec WITHOUT --force, which git refuses
+        # (`! [rejected] ... (non-fast-forward)`) -- so the force flag is
+        # load-bearing here rather than decorative.
+        #
+        # Discrimination is unchanged by the repair: neutering the splitter's
+        # backslash escape on a copy of the whole hooks directory (anchor
+        # asserted present, mutant compiled before its exit code was read)
+        # flips this row BLOCK -> ALLOW, the permissive direction, and moves
+        # none of the three controls beside it.
+        ("force-push main with an escaped pipe inside the refspec",
+         "git push --force origin feat\\|x:main", BLOCK),
         # `|&` is bash's "pipe stdout and stderr", and `_pipe_stages` matches it
         # ahead of a bare `|` so the `&` is consumed with the bar rather than
         # left to start the next stage. The file had ZERO `|&` cases before

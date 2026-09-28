@@ -95,6 +95,7 @@ def _run_guard(
     base: str = "base",
     head: str = "HEAD",
     allowlist: pathlib.Path | None = None,
+    path_prefix: pathlib.Path | None = None,
 ) -> subprocess.CompletedProcess:
     # Inherit the real environment. A scrubbed env breaks `bash` on Windows
     # hosts (it resolves to the WSL shim, which needs SYSTEMROOT et al.) and
@@ -108,6 +109,14 @@ def _run_guard(
         # Default to a path that cannot exist so the fixture repos are scanned
         # with no exemptions regardless of the caller's working directory.
         env["BLOB_ALLOWLIST"] = str(repo / "no-allowlist-here.txt")
+    if path_prefix is not None:
+        # `env.get`, not `env["PATH"]`: a KeyError here would fail the module
+        # for a reason that has nothing to do with the guard, and this file's
+        # own header records how expensive a harness failure wearing the system
+        # under test's clothes is. An absent PATH is not worth a diagnosis --
+        # the subprocess would fail to find `bash` a moment later and say so.
+        existing = env.get("PATH", "")
+        env["PATH"] = str(path_prefix) + (os.pathsep + existing if existing else "")
     return subprocess.run(
         [_bash(), str(GUARD), base, head],
         cwd=repo,
@@ -203,6 +212,348 @@ def test_allowlist_does_not_exempt_other_paths(tmp_path):
 
     result = _run_guard(repo, allowlist=ALLOWLIST)
     assert result.returncode == 1, result.stdout + result.stderr
+
+
+def _grow_tracked_file(tmp_path, name: str, before: bytes, after: bytes):
+    """Commit `name` at `before` bytes on the base, then grow it to `after`."""
+    repo = _init_repo(tmp_path)
+    (repo / name).write_bytes(before)
+    _commit(repo, "baseline: the file exists and is under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / name).write_bytes(after)
+    _commit(repo, "docs: append to a file the repo already tracks")
+    return _run_guard(repo)
+
+
+def test_a_grown_tracked_text_file_is_not_diagnosed_as_a_committed_binary(tmp_path):
+    """AC3 of #1243: the two failures have different causes and different fixes.
+
+    Before this, both produced `This PR introduces one or more blobs over N
+    bytes` followed by instructions to delete a file and force-push. Every word
+    of that describes a binary swept in by `git add -A`. A reader whose actual
+    mistake was appending a table row to a 1 MB Markdown file was handed a
+    diagnosis about somebody else's mistake -- measured on #1242, where the
+    first reading of the failure was that something binary had been staged.
+    """
+    result = _grow_tracked_file(
+        tmp_path, "ledger.md", b"x" * 900_000, b"x" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+
+    # The headline must not claim something was introduced -- nothing was.
+    assert "already tracks" in result.stdout, out
+    assert "a file the repo already had is over it" in result.stdout, out
+
+    # The per-file line must classify it and name both sizes, the limit and the
+    # overage, so the reader can see how far over it is without measuring.
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "900000 bytes" in result.stdout, out
+    assert str(BIG) in result.stdout, out
+    assert "1048576" in result.stdout, out
+    assert f"over by {BIG - 1048576}" in result.stdout, out
+
+    # And the remedy that actually applies must be present. In this fixture
+    # nothing was introduced, so the branch rewrite must be disclaimed -- and
+    # the mixed-case warning must NOT fire, or the disclaimer would be hedged
+    # for a case that is not happening.
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" in result.stderr, out
+    assert "SHRINKING DOES NOT" in result.stderr, out
+    assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" not in result.stderr, out
+
+    # The two halves of the message must agree. A list header reading
+    # "blobs INTRODUCED in this PR's commits" sits two lines under a headline
+    # saying nothing new was committed, and a reader resolves that contradiction
+    # by believing the word they already expected -- which is the whole failure
+    # being fixed here, reintroduced by a heading.
+    assert "introduced" not in result.stdout.lower(), out
+    assert "large-blob-allowlist.txt" in result.stderr, out
+
+
+def test_a_text_blob_far_larger_than_the_sniff_window_is_still_read_as_text(tmp_path):
+    """The classification must not collapse on exactly the files it is for.
+
+    Every blob this guard reports is, by definition, over 1 MiB. A sniff that
+    only worked on small inputs would be green on every fixture a reviewer
+    thinks to write by hand and useless in production, so the size is the point
+    of this case rather than incidental to it.
+
+    It is also what keeps the `head -c <window>` shape out: piping a multi-MB
+    blob into `head` leaves `git` with SIGPIPE once the consumer closes, and
+    under `set -o pipefail` that is a failure for exactly these files.
+    Measured on ubuntu bash 5.2.21: `git cat-file blob $sha | head -c 8192 >
+    /dev/null` exits 141, while the same producer feeding `head -c 8192 | wc -c`
+    inside a command substitution exits 0 on five consecutive runs -- so the
+    hazard is real in one spelling and does not reproduce in the other. The
+    guard sidesteps the question by reading the whole stream through `tr`.
+    """
+    result = _grow_tracked_file(
+        tmp_path, "ledger.md", b"x" * 900_000, b"x" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert "text file" in result.stdout, out
+    assert "unreadable content" not in result.stdout, out
+
+
+def test_a_new_binary_keeps_the_binary_diagnosis(tmp_path):
+    """Opposite polarity: the original message must survive for its own case.
+
+    A classification that always said "a tracked text file grew" would pass the
+    test above and be useless. PR #910's actual shape must still read as what
+    it was.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "actionlint").write_bytes(b"\0" * BIG)
+    _commit(repo, "commit a tool binary")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "introduces one or more blobs" in result.stdout, out
+    assert "NEW binary file" in result.stdout, out
+    assert "not present on base" in result.stdout, out
+
+    # The text-file remedy must NOT fire here: it tells the reader not to delete
+    # anything, which is exactly the wrong advice for a swept-in binary.
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" not in result.stderr, out
+    assert "git push --force-with-lease" in result.stderr, out
+
+
+def test_a_grown_tracked_binary_is_distinguished_from_both(tmp_path):
+    """Third combination: tracked (so not "introduced") but binary (so not text).
+
+    Pinned because the two flags are independent and a single boolean would
+    conflate them -- the headline follows "was it already tracked", the remedy
+    paragraph follows "is it text".
+    """
+    result = _grow_tracked_file(
+        tmp_path, "vendor.bin", b"\0" * 900_000, b"\0" * BIG
+    )
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED binary file that GREW" in result.stdout, out
+    assert "already tracks" in result.stdout, out
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" not in result.stderr, out
+
+
+def test_a_right_aligned_wc_count_does_not_turn_text_into_binary(tmp_path):
+    """The size comparison must survive a `wc` that pads its count.
+
+    The sniff compares `wc -c` output against the size `cat-file --batch-check`
+    reported, and those two come from different tools. BSD-family `wc`
+    right-aligns, so the count can arrive as `"  1200000"` -- a string compare
+    would then read every text blob as binary and hand a Markdown file the
+    binary remedy, which is the exact defect this PR exists to remove, restored
+    by a detail of output formatting.
+
+    GNU coreutils 9.4 reading stdin does not pad (measured on this host), so the
+    only way to exercise it is to supply a `wc` that does. The shim calls the
+    real binary by absolute path -- resolved before it goes on PATH, or it would
+    recurse -- and right-aligns the result.
+    """
+    if sys.platform == "win32":
+        # The shim is a shebang script made executable with chmod; neither
+        # travels to a Windows filesystem. The behaviour under test is not
+        # platform-specific, so covering it on POSIX covers it.
+        return
+
+    real_wc = shutil.which("wc")
+    assert real_wc, "fixture needs a real `wc` to delegate to"
+
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline text file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it")
+
+    shim_dir = tmp_path / "bsd-wc"
+    shim_dir.mkdir()
+    shim = shim_dir / "wc"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'out=$("{real_wc}" "$@") || exit $?\n'
+        'printf "%10s\\n" "$out"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+
+    # Precondition: the shim really does pad, or this test proves nothing.
+    padded = subprocess.run(
+        [str(shim), "-c"],
+        input="abc",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    ).stdout
+    assert padded.startswith(" "), f"shim did not pad: {padded!r}"
+
+    result = _run_guard(repo, path_prefix=shim_dir)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "binary" not in result.stdout, out
+
+
+def test_a_grown_file_shrunk_again_is_still_caught_and_told_so(tmp_path):
+    """Grow-then-shrink is the grown-file twin of PR #910's add-then-delete.
+
+    The tip tree is back under the limit and `git diff base..HEAD` shows a small
+    file, so every diff-based view says the branch is fine. The oversized blob
+    is still reachable, and under merge_method=MERGE it lands in `main` — so the
+    guard must still fail.
+
+    The second half is what this case exists for. The remedy text used to end
+    "the branch rewrite below ... does not apply here", which is true only if
+    you allowlist the file. An author who instead shrinks it — the first option
+    the message offers — needs the rewrite, because a follow-up commit cannot
+    unreach a blob. They would have been told to do the one thing that cannot
+    clear the check, by the paragraph written to help them.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it past the limit")
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "shrink it back under the limit")
+
+    # Precondition: the tip really is small, which is why a diff-based check
+    # would pass and why the author would expect to be clear.
+    assert (repo / "ledger.md").stat().st_size == 900_000
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        "shrinking in a later commit must not clear the guard: the blob stays "
+        "reachable\n" + out
+    )
+    # The whole measured phrase, not the substring "bytes in this PR" on its
+    # own: the list header two lines up reads "Blobs over N bytes in this PR's
+    # commits", so a loose assertion is satisfied by a line that is not the one
+    # under test. Caught by mutation -- reverting this wording to "bytes here"
+    # left the loose form green.
+    assert (
+        f"900000 bytes on base -> {BIG} bytes in this PR (+{BIG - 900_000})"
+        in result.stdout
+    ), out
+    assert "bytes here" not in result.stdout, out
+    # And the reader must be told that the option they are most likely to pick
+    # needs the rewrite too.
+    assert "SHRINKING DOES NOT" in result.stderr, out
+    assert "rewritten history" in result.stderr, out
+
+
+def test_a_tracked_file_that_shrank_is_not_reported_as_having_grown(tmp_path):
+    """Tracked does not imply grown, and the report used to assume it did.
+
+    A file that is ALREADY over the limit on the base can be edited smaller and
+    still be over it. Before this, the guard told that author their file `GREW`,
+    with a delta rendered `(+-500000)`, under a headline reading "an existing
+    file grew" — to someone who had just removed half a megabyte.
+
+    Reachable in this repository, not only in principle: `main` carries blobs
+    over 1 MiB, and only the allowlisted ones are exempt. Any other oversized
+    file already on `main` that a PR edits downward lands exactly here.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "big.md").write_bytes(b"x" * 2_000_000)
+    _commit(repo, "baseline: already over the limit on the base ref")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "big.md").write_bytes(b"x" * 1_500_000)
+    _commit(repo, "the PR makes it smaller, but still over")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that SHRANK and is still over" in result.stdout, out
+    assert "2000000 bytes on base -> 1500000 bytes in this PR (-500000)" in result.stdout, out
+    # The two statements that were false for this author.
+    assert "GREW" not in result.stdout, out
+    assert "(+-" not in result.stdout, out
+
+
+def test_a_dot_path_is_still_recognised_as_tracked(tmp_path):
+    """A path under `.github/` must classify the same as any other.
+
+    The obvious way to ask "how big was this on the base" is
+    `git cat-file -s "<rev>:<path>"`, and on the Windows git-bash host that runs
+    this suite MSYS rewrites that argument when the path starts with a dot --
+    `origin/main:.github/x` reaches git as `origin\\main;.github\\x`. The lookup
+    would fail, the file would come back absent, and every `.github/...` file
+    would be reported as NEW: silently, and in the direction of the message this
+    guard was changed to stop producing.
+
+    Stated plainly: on ubuntu this case **cannot** fail, because MSYS is not
+    there to mangle anything -- reverting the lookup to the `cat-file` form
+    leaves it green in CI. It is here for the Windows run, which is the only
+    place the difference is observable, and it is the whole reason the dot-path
+    is in the fixture rather than a plain filename.
+    """
+    repo = _init_repo(tmp_path)
+    workflows = repo / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "big.yml").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline: a dot-path file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (workflows / "big.yml").write_bytes(b"x" * BIG)
+    _commit(repo, "grow it")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "TRACKED text file that GREW" in result.stdout, out
+    assert "NEW " not in result.stdout, out
+
+
+def test_classification_never_swallows_an_offender(tmp_path):
+    """Two offenders of different shapes must both be reported, and the
+    remedies must be true of both.
+
+    The classification only shapes the message; it must not be able to decide
+    that a file is fine. A branch that reports one offender and drops the other
+    is the false-clean this guard exists to prevent, one file at a time.
+
+    The stderr half is the more dangerous one, and it shipped wrong: the
+    grown-text paragraph said "there is no binary to delete" and "does not
+    apply to a tracked file" unconditionally, so in this exact fixture the
+    guard printed a `NEW binary file` entry and then told the reader, four
+    lines later, that there was no binary and the rewrite did not apply. A
+    reader who believed it would leave a 1.2 MB binary permanently reachable
+    from `main`, which is the whole failure this guard exists to prevent --
+    reached through its own remediation text.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "ledger.md").write_bytes(b"x" * 900_000)
+    _commit(repo, "baseline text file under the limit")
+    _git(repo, "branch", "-f", "base", "HEAD")
+
+    (repo / "ledger.md").write_bytes(b"x" * BIG)
+    (repo / "actionlint").write_bytes(b"\0" * BIG)
+    _commit(repo, "one of each")
+
+    result = _run_guard(repo)
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert "ledger.md" in result.stdout, out
+    assert "actionlint" in result.stdout, out
+    # Mixed shapes: the generic headline is the honest one, because something
+    # WAS introduced.
+    assert "introduces one or more blobs" in result.stdout, out
+
+    # Both remedies, and no sentence that contradicts the other offender.
+    assert "A TRACKED TEXT FILE IS OVER THE LIMIT" in result.stderr, out
+    assert "ALSO INTRODUCES A NEW OVERSIZED BLOB" in result.stderr, out
+    assert "applies to those in full" in result.stderr, out
+    # The two claims that were false here before this was pinned.
+    assert "no binary to delete" not in result.stderr, out
+    assert "nothing to delete: the limit" in result.stderr, out
 
 
 def test_unresolvable_ref_fails_loudly(tmp_path):

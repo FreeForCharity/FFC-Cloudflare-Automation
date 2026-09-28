@@ -75,9 +75,9 @@
     clean-looking pass over the wrong subtree), an absolute path over-reports loudly (42 phantom
     failures). The second is the safer error and still costs a session chasing them.
 
-    Not a ledger row: `docs/lessons-ledger.md` had 1,051 bytes of headroom under the 1 MiB
-    large-blob guard when this was found, and the row that would have recorded it is what pushed the
-    file 2,115 bytes over. Filed as its own issue instead.
+    Not a ledger row at the time — and **that ceiling is gone, so write the row**: `53f3685`
+    (2026-09-06) exempted the ledger from the guard, which is now 45% over the old 1 MiB limit and
+    green. Kept here as provenance, not migrated (#1243 AC4); the claim is **L302**.
 
 ## Verifying tests: CI is authoritative, local runs may be false-red
 

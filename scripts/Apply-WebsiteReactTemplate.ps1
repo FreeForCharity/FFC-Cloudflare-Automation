@@ -9,7 +9,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CharityName,
 
-    [Parameter(Mandatory = $true)]
+    # Blank = pending (see siteConfig.pending below), never the template's.
     [string]$FooterEmail,
 
     [string]$FooterPhone,
@@ -42,24 +42,36 @@ param(
     # sentence are legal claims, made only for a recognized 501(c)(3).
     [string]$IrsStatus,
 
-    # Optional. When set, a JSON summary { blankFields: [...] } is written here
-    # naming every identity field the charity did not provide and that was
-    # therefore left blank (never filled with the template's FFC value). 701's
-    # finalize comment lists them for a human to fill in.
+    # Optional. When set, a JSON summary is written here:
+    #   { pendingFields: [...], pendingRendered: true|false }
+    # pendingFields names every footer-standard field the charity did not
+    # provide (siteConfig `PendingField` vocabulary); pendingRendered says
+    # whether the template renders them as visible placeholders. 701 records
+    # both in ffc-content.json, its completion comment and a call-to-action
+    # issue on the new repo.
     [string]$SummaryPath
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Identity fields left blank because the charity did not provide them. A blank
-# is the honest state: the template's values are Free For Charity's own (EIN,
-# phone, addresses, GuideStar profile, social links, staff), and leaving any of
-# them on a charity's site presents FFC's identity as the charity's.
-$script:BlankFields = New-Object System.Collections.Generic.List[string]
-function Add-BlankField {
-    param([Parameter(Mandatory = $true)][string]$Name)
-    if (-not $script:BlankFields.Contains($Name)) { $script:BlankFields.Add($Name) }
+# Footer-standard fields the charity did not provide ("pending"). Each one is
+# EMPTIED -- never left at the template's value, which is Free For Charity's
+# own (EIN, phone, offices, GuideStar profile, social links, staff) -- AND
+# listed in siteConfig.pending, which the templates render as a visible
+# "Awaiting information from the charity" placeholder: a call to action, not a
+# silent gap in the footer standard. An empty value NOT listed in `pending`
+# means "the charity has none", which 701 can never know, so every field it
+# could not fill is listed. Names are the templates' `PendingField` union.
+$script:PendingFields = New-Object System.Collections.Generic.List[string]
+function Add-PendingField {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('email', 'phone', 'address', 'ein', 'guidestar', 'social', 'team', 'donationUrl', 'volunteerUrl')]
+        [string]$Name
+    )
+    if (-not $script:PendingFields.Contains($Name)) { $script:PendingFields.Add($Name) }
 }
+$script:PendingRendered = $false
 
 function Assert-FileExists {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -640,7 +652,7 @@ function Update-SiteConfig {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigFile,
         [Parameter(Mandatory = $true)][string]$CharityName,
-        [Parameter(Mandatory = $true)][string]$Email,
+        [string]$Email,
         [string]$Phone,
         [string]$Address,
         [string]$Ein,
@@ -655,8 +667,9 @@ function Update-SiteConfig {
 
     $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
 
+    # Not a footer-standard pending field: a generic sentence naming the
+    # charity is honest, and every page needs a mission line.
     $missionText = if ([string]::IsNullOrWhiteSpace($Mission)) {
-        Add-BlankField 'mission'
         "$CharityName is a nonprofit organization."
     }
     else { ($Mission -replace "`r`n|`r|`n", ' ').Trim() }
@@ -695,35 +708,41 @@ function Update-SiteConfig {
     # For Charity" parentOrg (Single Page template) is FFC's own relationship.
     # FFC attribution stays via the permanent supportedBy key.
     $text = Remove-SiteConfigValue -Source $text -Key 'parentOrg'
-    $text = Set-SiteConfigValue -Source $text -Key 'contactEmail' -ValueTs (ConvertTo-TsString $Email)
+    # Every field below that the charity did not provide is EMPTIED (never the
+    # template's FFC value) and listed as pending; see Add-PendingField.
+    $emailValue = if ([string]::IsNullOrWhiteSpace($Email)) {
+        Write-Warning 'No contact email supplied; siteConfig.contactEmail is left empty and pending (never the template address).'
+        Add-PendingField 'email'
+        ''
+    }
+    else { $Email.Trim() }
+    $text = Set-SiteConfigValue -Source $text -Key 'contactEmail' -ValueTs (ConvertTo-TsString $emailValue)
 
     foreach ($pair in @(@('donationUrl', $DonationUrl), @('volunteerUrl', $VolunteerUrl))) {
         $url = [string]$pair[1]
-        # Only https URLs; anything else keeps the template's mailto fallback.
+        # Only https URLs. Anything else is pending; until it is filled the
+        # template's fallback (a mailto: to the contact email) stays usable.
         $url = if ($url -match '^https://\S+$') { $url.Trim() } else { '' }
+        if (-not $url) { Add-PendingField $pair[0] }
         $text = Set-SiteConfigValue -Source $text -Key $pair[0] -ValueTs (ConvertTo-TsString $url) -Optional
     }
 
-    # No EIN: blank, never the template's. Keeping it would publish FFC's tax
-    # ID (46-2471893) as the charity's -- a false legal claim. The shared
-    # schema and the templates' own tests still want a non-empty EIN, so the
-    # site's CI flags the blank until a human fills it in; that is the right
-    # failure, and the content that IS known still lands.
+    # No EIN: empty and pending. Keeping the template's would publish FFC's tax
+    # ID (46-2471893) as the charity's -- a false legal claim.
     $einValue = if ([string]::IsNullOrWhiteSpace($Ein)) {
-        Write-Warning 'No EIN supplied; siteConfig.ein is left blank (never the template EIN).'
-        Add-BlankField 'EIN'
+        Write-Warning 'No EIN supplied; siteConfig.ein is left empty and pending (never the template EIN).'
+        Add-PendingField 'ein'
         ''
     }
     else { $Ein.Trim() }
     $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $einValue)
 
-    # An empty phone is the template's documented "no phone" state (no block).
     $telDigits = Get-TelDigits -Phone $Phone
     $phoneTs = if ($telDigits) {
         '{ display: ' + (ConvertTo-TsString $Phone) + ', tel: ' + (ConvertTo-TsString $telDigits) + ' }'
     }
     else {
-        Add-BlankField 'phone'
+        Add-PendingField 'phone'
         "{ display: '', tel: '' }"
     }
     $text = Set-SiteConfigValue -Source $text -Key 'phone' -ValueTs $phoneTs
@@ -742,7 +761,7 @@ function Update-SiteConfig {
     }
     else {
         # Never the template's Raleigh / State College offices.
-        Add-BlankField 'address'
+        Add-PendingField 'address'
         '[]'
     }
     $text = Set-SiteConfigValue -Source $text -Key 'addresses' -ValueTs $addressesTs
@@ -758,14 +777,10 @@ function Update-SiteConfig {
     #                                    org, so this is the charity's own
     #                                    profile, and it keeps the site's CI
     #                                    (which wants https URLs) green.
-    #  - otherwise                    -> both blank. A pre-501(c)(3) org has no
-    #                                    Candid profile to link to. The shared
-    #                                    schema (minLength 1) and the Footer-Only
-    #                                    footer (no empty guard) do not accept a
-    #                                    blank yet -- a template gap tracked on
-    #                                    both template repos -- so until that
-    #                                    lands the site's CI flags it rather than
-    #                                    this script inventing a link.
+    #  - otherwise                    -> both empty, and pending. A
+    #                                    pre-501(c)(3) org has no Candid profile
+    #                                    to link to, and a URL derived from its
+    #                                    EIN would be a dead link behind a seal.
     $candidByEin = if ($recognized -and -not [string]::IsNullOrWhiteSpace($Ein)) { "https://www.guidestar.org/profile/$($Ein.Trim())" } else { '' }
     $profileUrl = if ($GuideStarProfileUrl -match '^https://\S+$') { $GuideStarProfileUrl.Trim() } else { $candidByEin }
     $directUrl = if ($GuideStarDirectProfileUrl -match '^https://\S+$') { $GuideStarDirectProfileUrl.Trim() } else { $profileUrl }
@@ -774,8 +789,8 @@ function Update-SiteConfig {
         $profileUrl = $directUrl
     }
     if (-not $profileUrl) {
-        Write-Warning 'No Candid / GuideStar profile for this charity; siteConfig.guidestar is left blank (never the template profile).'
-        Add-BlankField 'Candid/GuideStar profile'
+        Write-Warning 'No Candid / GuideStar profile for this charity; siteConfig.guidestar is left empty and pending (never the template profile).'
+        Add-PendingField 'guidestar'
     }
     $guidestarTs = "{`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
     $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
@@ -789,7 +804,7 @@ function Update-SiteConfig {
                 }) -join "`n") + "`n  ]"
     }
     else {
-        Add-BlankField 'social links'
+        Add-PendingField 'social'
         '[]'
     }
     $text = Set-SiteConfigValue -Source $text -Key 'social' -ValueTs $socialTs
@@ -799,6 +814,67 @@ function Update-SiteConfig {
     $text = Set-SiteConfigValue -Source $text -Key 'twitterHandle' -ValueTs (ConvertTo-TsString ($(if ($handle) { "@$handle" } else { '' })))
 
     Write-LfFile -Path $ConfigFile -Text $text
+}
+
+function Test-SiteConfigDeclaresPending {
+    # True when the repo's `SiteConfig` type declares the optional `pending`
+    # key (templates from FFC-IN-Footer_Only_Template#169 /
+    # FFC-IN-FFC_Single_Page_Template#482 on). Writing the key into a template
+    # whose type lacks it would fail the TypeScript build.
+    param([Parameter(Mandatory = $true)][string]$Source)
+    $m = [regex]::Match($Source, 'export type SiteConfig\s*=\s*\{')
+    if (-not $m.Success) { return $false }
+    $start = $m.Index + $m.Length
+    $end = Get-TsScanEnd -Source $Source -Start $start -StopChars @('}')
+    $typeBody = $Source.Substring($start, $end - $start)
+    # Only top-level members: strip nested { ... } blocks and comments first.
+    $flat = [regex]::Replace($typeBody, '(?s)/\*.*?\*/|//[^\n]*', '')
+    while ($flat -match '\{[^{}]*\}') { $flat = [regex]::Replace($flat, '\{[^{}]*\}', '') }
+    return [regex]::IsMatch($flat, '(?m)^\s*pending\??\s*:')
+}
+
+function Update-SiteConfigPending {
+    # Writes siteConfig.pending (or removes it when nothing is pending, e.g. a
+    # re-run after the charity supplied everything). Returns whether the
+    # template renders the placeholders.
+    param([Parameter(Mandatory = $true)][string]$ConfigFile, [string[]]$Pending = @())
+
+    $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
+    if (-not (Test-SiteConfigDeclaresPending -Source $text)) {
+        if ($Pending.Count -gt 0) {
+            Write-Warning ("This template's SiteConfig has no 'pending' key yet (FFC-IN-Footer_Only_Template#169 / FFC-IN-FFC_Single_Page_Template#482), so the footer cannot show an 'awaiting information' placeholder. The fields are still emptied (never FFC's values) and recorded for 701: {0}." -f ($Pending -join ', '))
+        }
+        return $false
+    }
+
+    $props = Get-SiteConfigProperties -Source $text
+    $pendingComment = "  // Footer-standard fields still awaiting the charity; each renders a visible`n  // 'awaiting information' placeholder until it is filled in.`n"
+    if ($Pending.Count -eq 0) {
+        $text = Remove-SiteConfigValue -Source $text -Key 'pending'
+        $text = $text.Replace($pendingComment, '')
+    }
+    else {
+        $valueTs = '[' + (($Pending | ForEach-Object { ConvertTo-TsString $_ }) -join ', ') + ']'
+        if ($props.ContainsKey('pending')) {
+            $text = Set-SiteConfigValue -Source $text -Key 'pending' -ValueTs $valueTs
+        }
+        else {
+            # Append as the last property of the literal.
+            $last = $props.Values | Sort-Object End -Descending | Select-Object -First 1
+            if ($last -and $text[$last.End] -ne ',') {
+                $text = $text.Substring(0, $last.End) + ',' + $text.Substring($last.End)
+            }
+            $m = [regex]::Match($text, 'export const siteConfig\s*(?::\s*SiteConfig)?\s*=\s*\{')
+            $bodyEnd = Get-TsScanEnd -Source $text -Start ($m.Index + $m.Length) -StopChars @('}')
+            $lineStart = $text.LastIndexOf("`n", $bodyEnd - 1) + 1
+            $at = if ([string]::IsNullOrWhiteSpace($text.Substring($lineStart, $bodyEnd - $lineStart))) { $lineStart } else { $bodyEnd }
+            $line = $pendingComment + "  pending: $valueTs,`n"
+            if ($at -eq $bodyEnd) { $line = "`n" + $line }
+            $text = $text.Substring(0, $at) + $line + $text.Substring($at)
+        }
+    }
+    Write-LfFile -Path $ConfigFile -Text $text
+    return $true
 }
 
 function Update-SecurityTxtContact {
@@ -836,14 +912,12 @@ function Update-TeamData {
         $m = Parse-LeadershipLine -Line $line
         if ($null -ne $m) { $members += $m }
     }
-    # No usable lines: an EMPTY team, never the template's sample members --
-    # those are FFC's own people, and publishing them as the charity's
-    # leadership is a false claim. Both templates' team sections render nothing
-    # for an empty roster; the Footer-Only template's own tests still want at
-    # least one member, so the site's CI flags the gap until a human adds them.
+    # No usable lines: an EMPTY team, pending -- never the template's sample
+    # members, who are FFC's own people; publishing them as the charity's
+    # leadership is a false claim.
     if ($members.Count -eq 0) {
-        Write-Warning 'No usable leadership lines (each needs a name); the team is left empty (never the template team).'
-        Add-BlankField 'leadership'
+        Write-Warning 'No usable leadership lines (each needs a name); the team is left empty and pending (never the template team).'
+        Add-PendingField 'team'
     }
 
     # One card per person. Small boards often give one person two offices
@@ -971,17 +1045,30 @@ if (Test-Path -LiteralPath $siteConfigFile) {
         -VolunteerUrl $VolunteerUrl `
         -IrsStatus $IrsStatus
 
-    Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail
+    if (-not [string]::IsNullOrWhiteSpace($FooterEmail)) {
+        Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail.Trim()
+    }
+    else {
+        # security.txt must name a reachable address. The template's is FFC's
+        # (which hosts and maintains the site), so it is left until the
+        # charity's arrives; the templates' drift check flags the mismatch.
+        Write-Warning 'No contact email; security.txt Contact is left as the template ships it until the email is filled in.'
+    }
 
     Update-TeamData -RepoRoot $repoRoot -LeadershipLines $LeadershipLines
 
+    $script:PendingRendered = Update-SiteConfigPending -ConfigFile $siteConfigFile -Pending @($script:PendingFields)
+
     Invoke-RepoPrettier -RepoRoot $repoRoot -Paths @('src/lib/site.config.ts', 'src/data/team.ts', 'src/data/team')
 
-    if ($script:BlankFields.Count -gt 0) {
-        Write-Warning ("Not provided, left blank for a human to fill in: {0}." -f ($script:BlankFields -join ', '))
+    if ($script:PendingFields.Count -gt 0) {
+        Write-Warning ("Awaiting information from the charity (emptied, never FFC's values): {0}." -f ($script:PendingFields -join ', '))
     }
     if ($SummaryPath) {
-        $summary = [ordered]@{ blankFields = @($script:BlankFields) }
+        $summary = [ordered]@{
+            pendingFields   = @($script:PendingFields)
+            pendingRendered = [bool]$script:PendingRendered
+        }
         Write-LfFile -Path $SummaryPath -Text ($summary | ConvertTo-Json -Depth 3)
     }
 
@@ -995,6 +1082,7 @@ if (Test-Path -LiteralPath $siteConfigFile) {
 # EIN, social link or staff on the charity's site. Refuse instead (701 reports
 # content_status=failed) rather than publish FFC's identity as the charity's.
 $legacyMissing = @()
+if ([string]::IsNullOrWhiteSpace($FooterEmail)) { $legacyMissing += 'email' }
 if (-not (Get-TelDigits -Phone $FooterPhone)) { $legacyMissing += 'phone' }
 if ([string]::IsNullOrWhiteSpace($FooterAddress)) { $legacyMissing += 'address' }
 if ([string]::IsNullOrWhiteSpace($FooterEin)) { $legacyMissing += 'EIN' }

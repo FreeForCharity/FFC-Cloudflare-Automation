@@ -427,97 +427,169 @@ FFC_IDENTITY = (
 )
 
 
-def test_a_sparse_charity_gets_its_own_details_and_none_of_ffcs():
+# The pending convention (FFC-EX-iwilf.org#6; template issues
+# FFC-IN-Footer_Only_Template#169 / FFC-IN-FFC_Single_Page_Template#482): a
+# template whose SiteConfig declares `pending` renders each listed field as a
+# visible "Awaiting information from the charity" placeholder.
+SITE_CONFIG_WITH_PENDING = SITE_CONFIG.replace(
+    "export type SiteConfig = {\n  name: string\n",
+    "export type PendingField =\n  | 'email'\n  | 'phone'\n  | 'address'\n  | 'ein'\n  | 'guidestar'\n"
+    "  | 'social'\n  | 'team'\n  | 'donationUrl'\n  | 'volunteerUrl'\n\n"
+    "export const PENDING_TEXT = 'Awaiting information from the charity'\n\n"
+    "export type SiteConfig = {\n  name: string\n  pending?: readonly PendingField[]\n",
+)
+assert SITE_CONFIG_WITH_PENDING != SITE_CONFIG
+
+# iwilf's missing fields, in the order the script checks them.
+SPARSE_PENDING = ["donationUrl", "volunteerUrl", "phone", "address", "guidestar"]
+
+
+def apply_with_summary(args: dict, site_config: str = SITE_CONFIG):
     td = pathlib.Path(tempfile.mkdtemp())
-    try:
-        repo = make_repo(td)
-        summary = td / "summary.json"
-        proc = run_apply(repo, {**SPARSE_ARGS, "SummaryPath": str(summary)})
-        assert proc.returncode == 0, proc.stdout + proc.stderr
-        cfg = read(repo, "src/lib/site.config.ts")
+    repo = make_repo(td, site_config)
+    summary = td / "summary.json"
+    proc = run_apply(repo, {**args, "SummaryPath": str(summary)})
+    data = json.loads(summary.read_text(encoding="utf-8")) if summary.exists() else None
+    return td, repo, proc, data
 
-        # What the charity gave is on the site.
-        assert "name: 'Interpreters Legacy Test Foundation'," in cfg, cfg
-        assert "contactEmail: 'legacy@iwilf.example'," in cfg, cfg
-        assert "ein: '42-0000124'," in cfg, cfg
-        assert "Preserving and honoring the legacy" in cfg, cfg
-        assert (
-            "social: [\n    { label: 'LinkedIn', href: 'https://www.linkedin.com/company/iwilf-test/' },\n  ],"
-            in cfg
-        ), cfg
 
-        # What it did not give is blank, never FFC's.
-        assert "phone: { display: '', tel: '' }," in cfg, cfg
-        assert "addresses: []," in cfg, cfg
-        assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, cfg
-        assert "twitterHandle: ''," in cfg, cfg
-        assert "taxStatusLabel: ''," in cfg, cfg
-        assert "donationUrl: ''," in cfg and "volunteerUrl: ''," in cfg, cfg
-        config_body = cfg.split("export const siteConfig")[1].split("supportedBy:")[0]
+def assert_no_ffc_identity(repo: pathlib.Path):
+    cfg = read(repo, "src/lib/site.config.ts")
+    config_body = cfg.split("export const siteConfig")[1].split("supportedBy:")[0]
+    for ffc in FFC_IDENTITY:
+        assert ffc not in config_body, (ffc, cfg)
+    # FFC attribution stays, and is the only FFC reference.
+    assert "supportedBy: {\n    name: 'Free For Charity'," in cfg, cfg
+    team_files = [read(repo, "src/data/team.ts")] + [
+        p.read_text(encoding="utf-8") for p in (repo / "src" / "data" / "team").glob("*.json")
+    ]
+    for text in team_files:
         for ffc in FFC_IDENTITY:
-            assert ffc not in config_body, (ffc, cfg)
-        # FFC attribution stays, and is the only FFC reference.
-        assert "supportedBy: {\n    name: 'Free For Charity'," in cfg, cfg
-
-        # The team is the charity's three leaders, none of FFC's staff.
-        members = sorted(
-            json.loads(p.read_text(encoding="utf-8"))["name"]
-            for p in (repo / "src" / "data" / "team").glob("*.json")
-        )
-        assert members == ["Adnan Example", "Ali Example", "Samer Example"], members
-        team_files = [read(repo, "src/data/team.ts")] + [
-            p.read_text(encoding="utf-8") for p in (repo / "src" / "data" / "team").glob("*.json")
-        ]
-        for text in team_files:
-            for ffc in FFC_IDENTITY:
-                assert ffc not in text, (ffc, text)
-
-        for rel in ("public/security.txt", "public/.well-known/security.txt"):
-            body = read(repo, rel)
-            assert body.startswith("Contact: mailto:legacy@iwilf.example\n"), body
-
-        # The blanks are reported for 701's completion comment.
-        reported = json.loads(summary.read_text(encoding="utf-8"))["blankFields"]
-        assert reported == ["phone", "address", "Candid/GuideStar profile"], reported
-    finally:
-        shutil.rmtree(td)
+            assert ffc not in text, (ffc, text)
 
 
-def test_a_complete_charity_reports_no_blank_fields():
-    td = pathlib.Path(tempfile.mkdtemp())
+def test_a_sparse_charity_gets_its_own_details_and_none_of_ffcs():
+    for site_config, rendered in ((SITE_CONFIG, False), (SITE_CONFIG_WITH_PENDING, True)):
+        td, repo, proc, summary = apply_with_summary(SPARSE_ARGS, site_config)
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+
+            # What the charity gave is on the site.
+            assert "name: 'Interpreters Legacy Test Foundation'," in cfg, cfg
+            assert "contactEmail: 'legacy@iwilf.example'," in cfg, cfg
+            assert "ein: '42-0000124'," in cfg, cfg
+            assert "Preserving and honoring the legacy" in cfg, cfg
+            assert (
+                "social: [\n    { label: 'LinkedIn', href: 'https://www.linkedin.com/company/iwilf-test/' },\n  ],"
+                in cfg
+            ), cfg
+
+            # What it did not give is emptied, never FFC's.
+            assert "phone: { display: '', tel: '' }," in cfg, cfg
+            assert "addresses: []," in cfg, cfg
+            assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, cfg
+            assert "twitterHandle: ''," in cfg, cfg
+            assert "taxStatusLabel: ''," in cfg, cfg  # a legal claim, never pending
+            assert "donationUrl: ''," in cfg and "volunteerUrl: ''," in cfg, cfg
+            assert_no_ffc_identity(repo)
+
+            # The team is the charity's three leaders, none of FFC's staff.
+            members = sorted(
+                json.loads(p.read_text(encoding="utf-8"))["name"]
+                for p in (repo / "src" / "data" / "team").glob("*.json")
+            )
+            assert members == ["Adnan Example", "Ali Example", "Samer Example"], members
+
+            for rel in ("public/security.txt", "public/.well-known/security.txt"):
+                body = read(repo, rel)
+                assert body.startswith("Contact: mailto:legacy@iwilf.example\n"), body
+
+            # Pending is exactly the missing fields, reported for 701 either way...
+            assert summary == {"pendingFields": SPARSE_PENDING, "pendingRendered": rendered}, summary
+            # ...and written into siteConfig only when the template renders it.
+            body = cfg.split("export const siteConfig")[1]
+            if rendered:
+                assert (
+                    "  pending: ['donationUrl', 'volunteerUrl', 'phone', 'address', 'guidestar'],\n}"
+                    in body
+                ), cfg
+            else:
+                assert "pending" not in body, cfg
+                assert "has no 'pending' key yet" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
+        finally:
+            shutil.rmtree(td)
+
+
+def test_a_complete_charity_has_nothing_pending():
+    args = {**FULL_ARGS, "VolunteerUrl": "https://helpinghands.example/volunteer"}
+    td, repo, proc, summary = apply_with_summary(args, SITE_CONFIG_WITH_PENDING)
     try:
-        repo = make_repo(td)
-        summary = td / "summary.json"
-        proc = run_apply(repo, {**FULL_ARGS, "SummaryPath": str(summary)})
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert json.loads(summary.read_text(encoding="utf-8"))["blankFields"] == []
+        assert summary == {"pendingFields": [], "pendingRendered": True}, summary
+        assert "pending" not in read(repo, "src/lib/site.config.ts").split("export const siteConfig")[1]
     finally:
         shutil.rmtree(td)
 
 
-def test_every_missing_field_is_blank_and_reported():
+def test_every_missing_field_is_emptied_and_pending():
     args = {
         **SPARSE_ARGS,
+        "FooterEmail": "",
         "FooterEin": "",
         "FooterSocial": [],
         "LeadershipLines": [],
         "Mission": "",
     }
-    td = pathlib.Path(tempfile.mkdtemp())
+    td, repo, proc, summary = apply_with_summary(args, SITE_CONFIG_WITH_PENDING)
     try:
-        repo = make_repo(td)
-        summary = td / "summary.json"
-        proc = run_apply(repo, {**args, "SummaryPath": str(summary)})
         assert proc.returncode == 0, proc.stdout + proc.stderr
         cfg = read(repo, "src/lib/site.config.ts")
-        assert "social: []," in cfg and "ein: ''," in cfg, cfg
-        config_body = cfg.split("export const siteConfig")[1].split("supportedBy:")[0]
-        for ffc in FFC_IDENTITY:
-            assert ffc not in config_body, (ffc, cfg)
-        reported = json.loads(summary.read_text(encoding="utf-8"))["blankFields"]
-        assert sorted(reported) == sorted(
-            ["mission", "EIN", "phone", "address", "Candid/GuideStar profile", "social links", "leadership"]
-        ), reported
+        assert "contactEmail: ''," in cfg and "social: []," in cfg and "ein: ''," in cfg, cfg
+        assert_no_ffc_identity(repo)
+        assert sorted(summary["pendingFields"]) == sorted(
+            ["email", "donationUrl", "volunteerUrl", "ein", "phone", "address", "guidestar", "social", "team"]
+        ), summary
+        # The team is written after siteConfig; `pending` still names it.
+        assert "'team']," in cfg, cfg
+        # No charity email: security.txt keeps the template's reachable
+        # address rather than an empty Contact line.
+        assert read(repo, "public/security.txt").startswith("Contact: mailto:clarkemoyer@"), cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_pending_is_updated_and_then_removed_by_later_runs():
+    td, repo, proc, _ = apply_with_summary(SPARSE_ARGS, SITE_CONFIG_WITH_PENDING)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        # The charity sends its phone: the list shrinks in place.
+        again = run_apply(repo, {**SPARSE_ARGS, "FooterPhone": "(555) 010-0999"})
+        assert again.returncode == 0, again.stdout + again.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert cfg.count("pending:") == 1, cfg
+        assert "pending: ['donationUrl', 'volunteerUrl', 'address', 'guidestar']," in cfg, cfg
+        # Everything arrives: the key and its comment go.
+        done = run_apply(repo, {**FULL_ARGS, "VolunteerUrl": "https://helpinghands.example/volunteer"})
+        assert done.returncode == 0, done.stdout + done.stderr
+        body = read(repo, "src/lib/site.config.ts").split("export const siteConfig")[1]
+        assert "pending" not in body, body
+        assert "awaiting information" not in body, body
+    finally:
+        shutil.rmtree(td)
+
+
+def test_pending_support_is_read_from_the_type_not_a_nested_key():
+    # A `pending` member of some nested object type is not SiteConfig.pending.
+    nested = SITE_CONFIG.replace(
+        "  parentOrg?: { name: string; url: string; hubUrl: string }\n",
+        "  parentOrg?: { name: string; url: string; hubUrl: string; pending?: boolean }\n",
+    )
+    assert nested != SITE_CONFIG
+    td, repo, proc, summary = apply_with_summary(SPARSE_ARGS, nested)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert summary["pendingRendered"] is False, summary
     finally:
         shutil.rmtree(td)
 

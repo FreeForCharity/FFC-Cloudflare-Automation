@@ -334,13 +334,18 @@ Provisions a charity website end-to-end after a website request issue is assigne
    - Clones the new repo.
    - Writes `ffc-content.json` (audit/traceability record).
    - Runs `scripts/Apply-WebsiteReactTemplate.ps1` (best-effort) to patch the React template
-     whenever the charity name and a public contact email are provided:
+     whenever the charity name is provided:
      - Footer content (`src/lib/site.config.ts`)
      - Leadership/team section via JSON (`src/data/team/*.json` + `src/data/team.ts`)
-     - Any identity field the charity did not give (phone, address, EIN, Candid/GuideStar profile,
-       social links, leadership) is written **blank** — never left at the template's value, which is
-       Free For Charity's own — and the completion comment lists those fields for a human to fill
-       in. A recognized 501(c)(3) with an EIN but no Candid URLs gets its own profile-by-EIN link.
+     - Any footer-standard field the charity did not give (email, phone, address, EIN,
+       Candid/GuideStar profile, social links, team, donation/volunteer URL) is **emptied** — never
+       left at the template's value, which is Free For Charity's own — and listed in
+       `siteConfig.pending`, which renders a visible "Awaiting information from the charity"
+       placeholder (templates that declare `pending`; older templates get a warning and the fields
+       are only emptied). The list is recorded in `ffc-content.json` (`pendingFields`) and the
+       completion comment, and — with a technical POC username, on a non-dry run — a "Website
+       details needed from <charity>" issue on the new repo asks the POC for them. A recognized
+       501(c)(3) with an EIN but no Candid URLs gets its own profile-by-EIN link.
    - Commits + pushes to the new repo’s `main` branch.
 
 7. **Comment completion (issue mode only)** with a marker for idempotency.

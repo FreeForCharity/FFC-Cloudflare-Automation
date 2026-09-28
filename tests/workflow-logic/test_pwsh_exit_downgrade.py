@@ -518,6 +518,69 @@ do not exit here
     )
 
 
+def test_a_content_line_starting_with_the_delimiter_is_not_the_terminator():
+    """The reported case (Copilot, medium). A prefix match closed the literal on
+    `"@notaterminator` and handed the rest back to the code view -- a silent false
+    negative, the same direction as the defect the here-string work fixed.
+
+    Discriminates: with `line.startswith(token)` this returns `[]`."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+"@notaterminator -- still inside the literal
+do not exit here
+"@
+  Write-Warning $msg
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "a line beginning `\"@` followed by an identifier character is content; "
+        f"closing there lets the literal be read as code. got {_kinds(body)!r}"
+    )
+
+
+def test_a_terminator_followed_by_a_pipeline_still_closes():
+    """The case the finding's OWN proposed rule would have broken, which is why
+    the delimiter is not required to be alone on its line. `"@ | Out-File …` is
+    legal, and refusing to close there would run the literal to end-of-body, hide
+    the capture, and report `unterminated-here-string` against correct code -- a
+    false POSITIVE, the worse direction (round 3).
+
+    Discriminates: requiring the delimiter alone on the line makes this report
+    `unterminated-here-string` instead of the real finding."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+some prose
+"@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+  Write-Warning "tolerated $code"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "the here-string closes on `\"@ | …`; the body after it is real code. "
+        f"got {_kinds(body)!r}"
+    )
+
+
+def test_the_here_string_terminator_rule_is_the_middle_one():
+    """Pins the rule directly, since the two rejected alternatives fail in
+    OPPOSITE directions and a verdict-only test would not say which is in force.
+
+    NOT measured against a real PowerShell parser -- there is no host on this
+    sandbox's PATH, and the guard's docstring says so rather than implying
+    otherwise."""
+    for line in ('"@', '"@   ', '"@ | Out-File x', '"@;', '"@)', '"@ -replace "a","b"'):
+        assert guard._closes_here_string(line, '"'), f"{line!r} must close"
+    for line in ('"@notaterminator', '"@2ndline', '"@_x', '  "@'):
+        assert not guard._closes_here_string(line, '"'), f"{line!r} must NOT close"
+    assert guard._closes_here_string("'@", "'"), "single-quoted form closes on '@"
+    assert not guard._closes_here_string('"@', "'"), "the quote kinds must not cross"
+
+
 def test_an_unterminated_here_string_is_reported_not_swallowed():
     """Fail closed. Blanking to end-of-body would hide the `$LASTEXITCODE`
     capture and make `scan_body` return `[]` -- trading one silent pass for

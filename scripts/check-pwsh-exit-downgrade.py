@@ -262,6 +262,46 @@ def _scan_line(line: str) -> tuple[str, str, str | None]:
     return "".join(code), "".join(visible), here_open
 
 
+def _closes_here_string(line: str, quote: str) -> bool:
+    """Does `line` close a here-string opened with `quote`?
+
+    Three candidate rules, and the middle one is chosen deliberately:
+
+      * `line.startswith(quote + "@")` -- too loose. A content line may begin
+        with those two characters (`"@notaterminator`), and closing there hands
+        the rest of the literal back to the code view: a false NEGATIVE, silent
+        (Copilot, #1347).
+      * the delimiter ALONE on the line, bar trailing whitespace -- too tight,
+        and it breaks a legal idiom this repo could easily write:
+
+            $x = @"
+            text
+            "@ | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+        Refusing to close there runs the literal to end-of-body, hides the
+        `$LASTEXITCODE` capture, and reports `unterminated-here-string` against
+        correct code -- a false POSITIVE, which round 3 of this PR argued is the
+        worse direction, because it lands on whoever wrote the idiom properly and
+        teaches them to stop believing the guard.
+      * **chosen:** the delimiter at column 0, followed by end-of-line or by a
+        character that cannot continue an identifier. So `"@`, `"@ | …`, `"@;`,
+        `"@)` and `"@ -replace …` all close, and `"@notaterminator` does not.
+
+    Stated rather than implied: there is **no PowerShell host on this sandbox's
+    PATH**, so this rule is derived from the language grammar (a here-string ends
+    at a newline followed by the delimiter) plus the false-positive/false-negative
+    asymmetry above -- it is NOT measured against a real parser. CI has a host;
+    if the two ever disagree, the divergence is confined to a line beginning
+    `"@` immediately followed by an identifier character, which is a PowerShell
+    syntax error under either reading.
+    """
+    token = quote + "@"
+    if not line.startswith(token):
+        return False
+    rest = line[len(token) :]
+    return rest == "" or not (rest[0].isalnum() or rest[0] == "_")
+
+
 def _scan_lines(lines: list[str]) -> tuple[list[str], list[str], int | None]:
     """`_scan_line` over a whole body, carrying here-string state across lines.
 
@@ -283,7 +323,7 @@ def _scan_lines(lines: list[str]) -> tuple[list[str], list[str], int | None]:
     for index, line in enumerate(lines):
         if here is not None:
             # Inside a here-string: content and terminator are both non-code.
-            if line.startswith(here + "@"):
+            if _closes_here_string(line, here):
                 here = None
                 opened_at = None
             code_lines.append(" " * len(line))

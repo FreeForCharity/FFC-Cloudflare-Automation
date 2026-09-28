@@ -942,7 +942,10 @@ gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/jobs/<job_id>/logs
 grep -E '^\S+Z ##\[error\]' log.txt
 
 # BEST for "did this step pass" — ask the jobs API, which has no prose in it at all
-gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/jobs   --jq '.jobs[] | "\(.name) \(.conclusion)", (.steps[] | select(.conclusion=="failure") | "   FAILED \(.number): \(.name)")'
+# `.steps[]?` (not `.steps[]`): a job that has not started yet carries `steps: null`,
+# and the bare iterator dies on it with `jq: error … Cannot iterate over null`, rc=5,
+# AFTER printing some job lines — a partial read that looks like a completed one.
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/jobs   --jq '.jobs[] | "\(.name) \(.conclusion)", (.steps[]? | select(.conclusion=="failure") | "   FAILED \(.number): \(.name)")'
 ```
 
 The discriminator is the **channel**, not the text: script source is `::error::` inside a `Run`

@@ -1594,14 +1594,39 @@ export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
 /**
  * Whether this asset is a candidate for downsampling at all.
  *
- * Size is part of the predicate, as it is for images: a PDF already under
- * budget is left byte-identical to what the charity uploaded. These are the
- * charity's own publications, so the bar for touching one is that it cannot
- * otherwise be published.
+ * Two modes, and the difference is the same one `shouldReencodeImage`
+ * documents:
+ *
+ * BUDGET GATE (`shrinkAll` false, the default). Size is part of the
+ * predicate: a PDF already under `maxBytes` is left byte-identical to what
+ * the charity uploaded. These are the charity's own publications, so the bar
+ * for touching one is that it cannot otherwise be published.
+ *
+ * WHOLE TREE (`shrinkAll` true). Every PDF is a candidate whatever its size,
+ * because a per-file budget cannot answer a TOTAL-size limit -- and on a real
+ * migration it did not. Measured on newheightseducation.org's apex export:
+ * 24 PDFs, 142.1 MB, `max-pdf-mb` at its 90 MB default, LARGEST FILE 13.1 MB.
+ * Zero of the 24 were over budget, so the budget gate examined none of them,
+ * while the tree as a whole was 1169.6 MB against GitHub Pages' 1024 MB
+ * ceiling. Running every one through the ladder -- which returns at `/ebook`
+ * for all 24, since its largest output is 3.5 MB against the 90 MB budget, so
+ * `/screen` is never reached on this corpus -- took the set to 33.3 MB, a
+ * 108.8 MB saving, with page counts preserved on all 24 (checked with
+ * Ghostscript's own `pdfpagecount`) and page-one renders at 100 dpi differing
+ * by 0.00%-3.28% (mean 0.40%) from the originals.
+ *
+ * `worthShrinking` still has the last word in both modes, which is what makes
+ * whole-tree safe to switch on blindly: of those 24, two came back LARGER
+ * (61,925 -> 62,502 bytes, +0.9%; 55,319 -> 56,895, +2.8%) and are declined
+ * rather than kept. The sign is the point: a growth is a POSITIVE percentage
+ * here, and an earlier draft of this comment wrote them as -1% and -3%, which
+ * reads as a saving and says the opposite of what the guard is for.
  */
-export function shouldShrinkPdf(absUrl, bytes, maxBytes) {
+export function shouldShrinkPdf(absUrl, bytes, maxBytes, shrinkAll = false) {
   if (typeof absUrl !== 'string' || !/\.pdf(\?|$)/i.test(absUrl)) return false;
-  if (!Number.isFinite(bytes) || !Number.isFinite(maxBytes)) return false;
+  if (!Number.isFinite(bytes)) return false;
+  if (shrinkAll) return bytes > 0;
+  if (!Number.isFinite(maxBytes)) return false;
   return bytes > maxBytes;
 }
 
@@ -1723,12 +1748,47 @@ export function keepReencoded(originalBytes, encodedBytes, maxBytes, renamed) {
 /**
  * Whether this asset is a candidate for re-encoding at all.
  *
- * Size is part of the predicate, not a separate check: an image already under
- * budget is left byte-identical to what the charity uploaded. Only the ones
- * that would be a problem for a visitor are touched.
+ * Two modes, and they answer different questions -- see the body for the
+ * measurement that separates them.
+ *
+ * BUDGET GATE (default). Size is part of the predicate, not a separate check:
+ * an image already under budget is left byte-identical to what the charity
+ * uploaded. Only the ones that would be a problem for a visitor on their own
+ * are touched.
+ *
+ * WHOLE TREE (`recodeAll`, from `--recode-all-images`). Every recodable image
+ * is offered to the encoder regardless of its size, because a site can exceed
+ * a host's TOTAL limit without any single file exceeding the per-file one. An
+ * under-budget image is then no longer guaranteed byte-identical -- though
+ * `keepReencoded`'s 25% floor still decides each file on merit, so one that
+ * does not earn its rename keeps its original bytes.
+ *
+ * Neither mode widens WHAT may be re-encoded: `RECODABLE` still excludes GIF
+ * (an animation would be lost) and SVG (not raster).
  */
-export function shouldReencodeImage(absUrl, bytes, maxBytes) {
+export function shouldReencodeImage(absUrl, bytes, maxBytes, recodeAll = false) {
   if (!RECODABLE.test(absUrl)) return false;
+  // `recodeAll` asks a different question from the budget gate, and the
+  // difference is the whole point of the flag.
+  //
+  // `bytes > maxBytes` answers "does THIS image blow the per-file budget?".
+  // It is the right guard for the template's performance budget and it works:
+  // on newheightseducation.org it correctly caught and fixed all 34 offenders.
+  //
+  // It cannot answer "is the SITE too heavy?", and GitHub Pages refuses a site
+  // over 1024 MB, not a file over 400 KB. Measured on that same site: of 3,888
+  // captured JPEGs totalling 175.8 MB, **zero** exceed 400 KB -- mean size
+  // 46 KB -- so the budget gate examines 0% of those bytes while they are
+  // 42.7% of the asset tree. The three-host capture came to 1169.6 MB and was
+  // refused.
+  //
+  // Re-encoding all of them at the ladder's first rung (q85, original
+  // dimensions -- `encodeWebp` returns there because a 46 KB image is already
+  // under any budget) yields 67.7 MB, a 61.5% saving, measured with sharp at
+  // the exact settings this file uses. `keepReencoded`'s existing 25% floor
+  // still decides each file on merit: 268 of 280 sampled clear it, and the
+  // dozen that do not keep their original bytes.
+  if (recodeAll) return Number.isFinite(bytes) && bytes > 0;
   return Number.isFinite(bytes) && Number.isFinite(maxBytes) && bytes > maxBytes;
 }
 
@@ -2522,6 +2582,63 @@ function selfTest() {
     shouldReencodeImage('https://x.org/a/icon.svg', 900_000, 400 * 1024),
     false,
   );
+
+  // --- Whole-tree re-encoding (--recode-all-images) -------------------------
+  // The budget gate answers "does THIS file blow the per-file budget?". A host
+  // total-size limit asks a different question, and on
+  // newheightseducation.org the two diverge completely: of 3,888 captured
+  // JPEGs totalling 175.8 MB, ZERO exceed 400 KB (mean 46 KB), so the budget
+  // gate examines 0% of 42.7% of the asset tree while the three-host capture
+  // is refused at 1169.6 MB against Pages' 1024 MB ceiling.
+  eq(
+    'an under-budget JPEG IS a candidate once whole-tree re-encoding is on',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, 400 * 1024, true),
+    true,
+  );
+  eq(
+    'the same JPEG is NOT a candidate under the budget gate alone',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, 400 * 1024),
+    false,
+  );
+  // Whole-tree mode widens WHICH files are offered to the encoder; it does not
+  // widen what may be re-encoded at all. A GIF would lose its animation and an
+  // SVG is not raster, so both stay out regardless.
+  eq(
+    'whole-tree mode still never re-encodes a GIF',
+    shouldReencodeImage('https://x.org/a/spinner.gif', 46 * 1024, 400 * 1024, true),
+    false,
+  );
+  eq(
+    'whole-tree mode still never re-encodes an SVG',
+    shouldReencodeImage('https://x.org/a/icon.svg', 46 * 1024, 400 * 1024, true),
+    false,
+  );
+  // An over-budget file is a candidate either way -- turning the flag on must
+  // not LOSE the guarantee the budget gate already provides.
+  eq(
+    'whole-tree mode still catches an over-budget file',
+    shouldReencodeImage('https://x.org/a/flyer.png', 900_000, 400 * 1024, true),
+    true,
+  );
+  // A zero-byte or unmeasured file has nothing to encode, and handing it to
+  // sharp would raise rather than shrink anything.
+  eq(
+    'a zero-byte image is not a candidate even in whole-tree mode',
+    shouldReencodeImage('https://x.org/a/empty.jpg', 0, 400 * 1024, true),
+    false,
+  );
+  eq(
+    'an unmeasured image is not a candidate even in whole-tree mode',
+    shouldReencodeImage('https://x.org/a/photo.jpg', NaN, 400 * 1024, true),
+    false,
+  );
+  // maxBytes is irrelevant in whole-tree mode, so an absent one must not make
+  // the predicate fail closed the way it does for the budget gate.
+  eq(
+    'whole-tree mode does not need a budget to be supplied',
+    shouldReencodeImage('https://x.org/a/photo.jpg', 46 * 1024, NaN, true),
+    true,
+  );
   // This case used to assert `false`, on the reasoning that WebP is already the
   // destination format. That is true about the CONTAINER and says nothing
   // about the bytes, and it is what let a 4,251 KB WebP ship untouched from
@@ -2649,6 +2766,55 @@ function selfTest() {
     false,
   );
   eq('shouldShrinkPdf refuses a NaN size', shouldShrinkPdf('https://x.org/a.pdf', NaN, 90), false);
+  // --- whole-tree mode (`--shrink-all-pdfs`) ---
+  // The case the budget gate structurally cannot reach: every PDF under
+  // budget, the TREE over its host's total-size limit. Measured on
+  // newheightseducation.org — 24 PDFs, 142.1 MB, largest 13.1 MB, budget
+  // 90 MB, so the gate examined zero of them.
+  eq(
+    'shouldShrinkPdf whole-tree takes an UNDER-budget PDF',
+    shouldShrinkPdf('https://x.org/u/media-pack-2024.pdf', 13 * 1048576, 90 * 1048576, true),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf budget gate leaves that same PDF alone',
+    shouldShrinkPdf('https://x.org/u/media-pack-2024.pdf', 13 * 1048576, 90 * 1048576, false),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree still refuses a non-PDF however large',
+    shouldShrinkPdf('https://x.org/u/video.mp4', 400 * 1048576, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree refuses a zero-byte file rather than shelling out',
+    shouldShrinkPdf('https://x.org/u/empty.pdf', 0, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree refuses a NaN size',
+    shouldShrinkPdf('https://x.org/u/a.pdf', NaN, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree does not need a budget at all',
+    shouldShrinkPdf('https://x.org/u/a.pdf', 1024, NaN, true),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf defaults to the budget gate when the flag is omitted',
+    shouldShrinkPdf('https://x.org/u/a.pdf', 13 * 1048576, 90 * 1048576),
+    false,
+  );
+  // whole-tree does not disable worthShrinking, and that is what makes it
+  // safe to switch on blindly: two of the 24 measured files came back LARGER.
+  // The real pair, not a made-up one: video-production-and-new-media-release-
+  // form.pdf under `--shrink-all-pdfs`, which /ebook grows by 0.9%.
+  eq(
+    'worthShrinking still refuses a whole-tree result that grew',
+    worthShrinking(61925, 62502),
+    false,
+  );
   // The ladder's top rung MEASURED larger than its input on a scan-shaped
   // fixture (/prepress, 176%). This is the guard that makes that harmless.
   eq('worthShrinking keeps a strictly smaller result', worthShrinking(167, 74), true);
@@ -4233,6 +4399,11 @@ const includePosts = flag('include-posts');
 // captured bytes verbatim, which is the right choice only when the originals
 // are themselves the deliverable.
 const optimizeImages = !flag('no-optimize-images');
+// Off by default, because it renames thousands of files and a migration that
+// already fits should not pay that churn. Turn it on when the tree is over a
+// host's total-size limit: the per-file budget above cannot help there, since
+// a site can be far too heavy without any single file being too big.
+const recodeAllImages = flag('recode-all-images');
 const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 // On by default for the same reason images are: an oversized PDF is a cost the
 // visitor pays, and past 100 MB the receiving repo cannot accept it at all.
@@ -4240,6 +4411,13 @@ const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 // choice only when the originals are themselves the deliverable AND something
 // downstream is hosting them off the repo.
 const optimizePdfs = !flag('no-optimize-pdfs');
+// Off by default, for the same reason `--recode-all-images` is: a migration
+// that already fits should not re-encode the charity's own publications. Turn
+// it on when the tree is over a host's TOTAL-size limit, which the per-file
+// budget above cannot reach -- on newheightseducation.org every one of the 24
+// PDFs was under budget while together they were 142.1 MB of a 1169.6 MB tree
+// against a 1024 MB ceiling.
+const shrinkAllPdfs = flag('shrink-all-pdfs');
 const maxPdfBytes = parsedOptions['max-pdf-mb'] * 1024 * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
@@ -4255,7 +4433,8 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
     'Usage:\n' +
       '  --domain <domain> --inspect [--json-out <file>]\n' +
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
-      '      [--no-optimize-images] [--max-image-kb 400]\n' +
+      '      [--no-optimize-images] [--recode-all-images] [--max-image-kb 400]\n' +
+      '      [--no-optimize-pdfs] [--shrink-all-pdfs] [--max-pdf-mb 90]\n' +
       '  --self-test',
   );
   process.exit(2);
@@ -5056,7 +5235,7 @@ async function capture() {
     // pass: `localizeAsset` returns the local name, and every reference — in
     // markup, in srcset, in CSS — is rewritten from that return value, so a
     // renamed file cannot leave a stale reference behind.
-    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes)) {
+    if (optimizeImages && shouldReencodeImage(absUrl, buf.length, maxImageBytes, recodeAllImages)) {
       // Overwriting a real .webp the site already ships would lose a file, so
       // a taken name is DISAMBIGUATED rather than surrendered to. Only when
       // even the disambiguated name is taken is the original kept -- and that
@@ -5113,7 +5292,7 @@ async function capture() {
     // an otherwise complete and gate-passing conversion was rejected outright
     // by the pre-receive hook -- after the 40-minute crawl and after the human
     // approval it had already spent.
-    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes)) {
+    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes, shrinkAllPdfs)) {
       const shrunk = await shrinkPdfBuffer(buf, maxPdfBytes);
       if (shrunk && worthShrinking(buf.length, shrunk.buffer.length)) {
         pdfShrink.shrunk += 1;
@@ -5126,10 +5305,18 @@ async function capture() {
         // be a claim the operator cannot check: "downsampling would not have
         // been smaller" about a file nothing tried to downsample.
         pdfShrink.skippedNoEncoder += 1;
-        pdfShrink.stillOverBudget.push(name);
+        if (buf.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
       } else {
         pdfShrink.declined += 1;
-        pdfShrink.stillOverBudget.push(name);
+        // Guarded on the SHIPPED size rather than pushed unconditionally.
+        // Under the budget gate the two are the same thing, because nothing
+        // under budget reaches this branch at all; under `--shrink-all-pdfs`
+        // they are not, and the unconditional push named every declined file
+        // as one "a git push will REJECT" -- of 24 PDFs on
+        // newheightseducation.org, two decline and NEITHER is over budget.
+        // A size warning that fires on files that are not oversized is the
+        // kind an operator learns to scroll past.
+        if (buf.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
       }
     }
 
@@ -5434,7 +5621,7 @@ async function capture() {
   if (pdfShrink.shrunk) {
     const mb = (n) => (n / 1048576).toFixed(1);
     console.error(
-      `[capture] downsampled ${pdfShrink.shrunk} oversized PDF(s):` +
+      `[capture] downsampled ${pdfShrink.shrunk} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s):` +
         ` ${mb(pdfShrink.bytesBefore)} MB -> ${mb(pdfShrink.bytesAfter)} MB` +
         ` (${(100 - (pdfShrink.bytesAfter / pdfShrink.bytesBefore) * 100).toFixed(1)}% smaller).` +
         ' Each kept its own name, so no reference needed rewriting.',
@@ -5442,12 +5629,12 @@ async function capture() {
   }
   if (pdfShrink.declined)
     console.error(
-      `[capture] ${pdfShrink.declined} oversized PDF(s) shipped as captured —` +
+      `[capture] ${pdfShrink.declined} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s) shipped as captured —` +
         ' downsampling them produced nothing smaller.',
     );
   if (pdfShrink.skippedNoEncoder)
     console.error(
-      `[capture] ${pdfShrink.skippedNoEncoder} oversized PDF(s) shipped as captured because` +
+      `[capture] ${pdfShrink.skippedNoEncoder} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s) shipped as captured because` +
         ' ghostscript was not available. This is NOT a judgement that they were already' +
         ' optimal: nothing tried. Install ghostscript before the capture step.',
     );
@@ -5545,6 +5732,7 @@ async function capture() {
     },
     imageOptimization: {
       enabledPdfs: optimizePdfs,
+      shrinkAllPdfs,
       maxPdfMb: Math.round(maxPdfBytes / 1048576),
       pdfsShrunk: pdfShrink.shrunk,
       pdfsDeclined: pdfShrink.declined,
@@ -5553,6 +5741,7 @@ async function capture() {
       pdfBytesBefore: pdfShrink.bytesBefore,
       pdfBytesAfter: pdfShrink.bytesAfter,
       enabled: optimizeImages,
+      recodeAll: recodeAllImages,
       encoderAvailable: imageRecode.available,
       maxImageKb: Math.round(maxImageBytes / 1024),
       recoded: imageRecode.recoded,

@@ -82,7 +82,9 @@ const PROBE_KINDS = {
 
 // The monitored probe targets. `read-all-*` only, by design (see header).
 const PROBES = [
-  { secret: 'read-all-cbm-github-pat', kind: 'github-pat' },
+  // `read-all-cbm-github-pat` was retired by #848 (dead since 2026-07-29): its two consumers,
+  // 502 and 735, moved to the live read PAT below plus `wr-all-cbm-datasync-github-pat` for
+  // their writes. That writer is expiry-monitored only, like every `wr-all-*` secret.
   { secret: 'read-all-cbm-ffc-copilot-mcp-github-pat', kind: 'github-pat' },
   { secret: 'read-all-ffc-cloudflare-api-token-zone-and-dns', kind: 'cloudflare-token' },
   { secret: 'read-all-cm-cloudflare-api-token-zone-and-dns', kind: 'cloudflare-token' },

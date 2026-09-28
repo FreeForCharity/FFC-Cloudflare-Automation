@@ -296,12 +296,15 @@ def _repo_full_name(item):
 def search_agentic_items(org, token):
     """Every OPEN issue AND pull request in ``org`` carrying the agentic-os label.
 
-    Deliberately one search with no ``is:issue`` filter: the search endpoint
-    returns both kinds, a PR is distinguishable by its ``pull_request`` key, and
-    that single call therefore yields the backlog *and* the set of repositories
-    worth sweeping for in-flight PRs. Matching AGENTS.md's pickup query
-    (``org:FreeForCharity label:agentic-os is:open``) is the point — this is the
-    query the public page claims to be showing.
+    Two searches, one per kind (``is:issue``, then ``is:pull-request``), each
+    paginated and completeness-checked on its own. This was one search with no
+    kind qualifier until GitHub started rejecting that with a 422 ("Query must
+    include 'is:issue' or 'is:pull-request'"), observed 2026-09-28 in the first
+    502 run after #848 restored its credential. The combined result is still the
+    backlog *and* the set of repositories worth sweeping for in-flight PRs (a PR
+    is distinguishable by its ``pull_request`` key), and each query is still
+    AGENTS.md's pickup query (``org:FreeForCharity label:agentic-os is:open``)
+    plus the kind — the query the public page claims to be showing.
 
     Using search rather than a hardcoded repo list is what keeps #925 fixed: a
     list would have to be edited the first time an agent files an issue in a new
@@ -310,7 +313,18 @@ def search_agentic_items(org, token):
     Aborts on ``incomplete_results``, and separately on any shortfall against
     the reported ``total_count`` — see ``_assert_search_complete`` for why one
     flag is not enough."""
-    query = f"org:{org} label:{LABEL} is:open"
+    items = []
+    for kind in SEARCH_KINDS:
+        items.extend(_search_all(f"org:{org} label:{LABEL} is:open {kind}", token))
+    return items
+
+
+# GitHub's search/issues requires exactly one of these since 2026-09 (see above).
+SEARCH_KINDS = ("is:issue", "is:pull-request")
+
+
+def _search_all(query, token):
+    """One search query, every page, or abort — never a silent partial set."""
     url = _build_url("search/issues", {"q": query, "per_page": "100"})
     items = []
     total_count = None

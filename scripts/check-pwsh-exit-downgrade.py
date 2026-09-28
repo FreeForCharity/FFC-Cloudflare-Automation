@@ -322,12 +322,35 @@ def _scan_lines(lines: list[str]) -> tuple[list[str], list[str], int | None]:
 
     for index, line in enumerate(lines):
         if here is not None:
-            # Inside a here-string: content and terminator are both non-code.
-            if _closes_here_string(line, here):
-                here = None
-                opened_at = None
-            code_lines.append(" " * len(line))
-            visible_lines.append(line)
+            if not _closes_here_string(line, here):
+                # Content: the whole line is literal text, never code.
+                code_lines.append(" " * len(line))
+                visible_lines.append(line)
+                continue
+
+            # The TERMINATOR line. Only the delimiter is literal; anything after
+            # it is real code and is scanned. Blanking the whole line -- which
+            # this did at first -- hid it, and that was not a cosmetic gap: on
+            #
+            #     $msg = @"
+            #     prose
+            #     "@ ; exit 0
+            #
+            # `_last_statement` named `$msg = @"` and the guard reported
+            # `no-terminal-exit` against a body that ends in `exit 0`. A false
+            # POSITIVE -- the direction `_closes_here_string` above cites to
+            # justify closing on `"@ | …` in the first place, so accepting such a
+            # terminator and then discarding its tail was self-contradictory
+            # (Copilot, #1347).
+            token = here + "@"
+            tail_code, tail_visible, tail_opens = _scan_line(line[len(token) :])
+            pad = " " * len(token)
+            code_lines.append(pad + tail_code)
+            visible_lines.append(pad + tail_visible)
+            # The tail may open a FURTHER here-string (`"@ + @"`), so state is
+            # taken from the tail's own scan rather than simply cleared.
+            here = tail_opens
+            opened_at = index + 1 if tail_opens is not None else None
             continue
         code, visible, opens = _scan_line(line)
         code_lines.append(code)

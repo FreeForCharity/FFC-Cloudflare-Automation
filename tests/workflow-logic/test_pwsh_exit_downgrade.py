@@ -581,6 +581,79 @@ def test_the_here_string_terminator_rule_is_the_middle_one():
     assert not guard._closes_here_string('"@', "'"), "the quote kinds must not cross"
 
 
+def test_the_terminator_tail_is_scanned_not_blanked():
+    """Follow-through on the rule above: having ACCEPTED `"@ | …` as a
+    terminator, the code after the delimiter has to be scanned. Blanking the
+    whole terminator line hid it, and `_last_statement` then named the opener:
+
+        pre-fix:  line 4 `$msg = @"`  -> [no-terminal-exit]   <- false POSITIVE
+        fixed:    line 6 `; exit 0`   -> [conditional-terminal-exit]
+
+    The false-positive direction is the one `_closes_here_string` cites to
+    justify closing there at all, so accepting the terminator and discarding its
+    tail was self-contradictory (Copilot, #1347).
+
+    On the expected kind: `conditional-terminal-exit` is what this guard already
+    returns for a `;`-separated terminal exit on an ORDINARY line -- measured on
+    a body with no here-string in it, identical before and after this change. So
+    the tail is now classified consistently with the rest of the scanner rather
+    than specially; `EXIT_STATEMENT_RE` anchoring `^exit` is a pre-existing
+    strictness, fail-closed, and not this round's to change."""
+    body = '''
+& pwsh -NoProfile -File .\\x.ps1
+$code = $LASTEXITCODE
+if ($code -ne 0) { Write-Warning "tolerated $code" }
+$msg = @"
+prose
+"@ ; exit 0
+'''
+    findings = guard.scan_body(body)
+    assert [f.kind for f in findings] == [guard.CONDITIONAL_EXIT], (
+        f"the tail's `exit 0` must be visible to the scanner; got {findings!r}"
+    )
+    assert findings[0].line != 5, (
+        "line 5 is the here-string OPENER -- naming it means the terminator line "
+        "was blanked and the tail never read"
+    )
+
+    # PIN, not a discriminator: identical verdict pre- and post-fix (blanked then,
+    # string-blanked now). Kept because it proves the tail is scanned AS CODE,
+    # with literals handled -- an `exit` inside the tail's own string is data.
+    quoted = '''
+& pwsh -NoProfile -File .\\x.ps1
+$code = $LASTEXITCODE
+if ($code -ne 0) { Write-Warning "tolerated $code" }
+$msg = @"
+prose
+"@ | Out-File "do not exit here.txt"
+'''
+    assert _kinds(quoted) == [guard.NO_EXIT], (
+        f"`exit` inside the tail's string literal is not a terminator; got {_kinds(quoted)!r}"
+    )
+
+
+def test_a_terminator_tail_can_open_another_here_string():
+    """`"@ + @"` -- the terminator line is itself a here-string opener, so state
+    is taken from the tail's own scan rather than simply cleared. Otherwise the
+    second literal's text would be read as code, which is the original defect
+    again one line further on."""
+    body = '''
+& pwsh -NoProfile -File .\\x.ps1
+$code = $LASTEXITCODE
+if ($code -ne 0) { Write-Warning "tolerated $code" }
+$a = @"
+one
+"@ + @"
+two -- exit is prose here
+"@
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "the second here-string's text is data; if it were read as code its "
+        f"`exit` would suppress the finding. got {_kinds(body)!r}"
+    )
+
+
 def test_an_unterminated_here_string_is_reported_not_swallowed():
     """Fail closed. Blanking to end-of-body would hide the `$LASTEXITCODE`
     capture and make `scan_body` return `[]` -- trading one silent pass for

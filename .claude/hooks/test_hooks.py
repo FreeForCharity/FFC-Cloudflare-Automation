@@ -575,6 +575,59 @@ RULES = [
          "bash -c $'gh api /markdown'", BLOCK),
         ("sh -c ANSI-C quoted endpoint",
          "sh -c $'gh api /markdown'", BLOCK),
+        # A shell is usually not spelled `bash` on this host. The first
+        # wrapper scanner matched a bare name only, so every path-qualified
+        # spelling walked past it -- reported on #1313, and `/bin/bash -c` is
+        # confirmed by the `gh` shim to reach gh with `/markdown`.
+        ("absolute path shell",
+         '/bin/bash -c "gh api /markdown"', BLOCK),
+        ("quoted absolute Windows path shell",
+         '"/c/Program Files/Git/bin/bash.exe" -c "gh api /markdown"', BLOCK),
+        ("Windows path shell with an escaped space",
+         r'/c/Program\ Files/Git/bin/bash.exe -c "gh api /markdown"', BLOCK),
+        ("bare bash.exe",
+         'bash.exe -c "gh api /markdown"', BLOCK),
+        # ...and the over-block direction, which the same review raised as a
+        # caution. A shell name inside a quoted ARGUMENT is prose carried as
+        # data, not an invocation.
+        #
+        # The next two are the ones that pin the COMMAND-POSITION anchor, and
+        # they exist because mutation review caught the first version of this
+        # block claiming more than it showed. Dropping the anchor left the
+        # simpler rows below green: their inner payload is quoted with a
+        # MISMATCHED pair (`"..."` inside `'...'`), so the unwrap declines and
+        # the payload stays blanked whatever the anchor does. They were
+        # protected by an accident, not by the design they were cited for.
+        # Here the inner pair matches, so the unwrap succeeds and only the
+        # anchor stands between prose and a false block.
+        # The TRAILING text after the inner payload is load-bearing and is the
+        # detail two rounds of reasoning got wrong: without it the outer span's
+        # closing quote is glued onto the payload by `_skip_word`, the unwrap
+        # sees a mismatched pair and declines, and the row goes green whatever
+        # the anchor does. With it the inner pair is clean, the unwrap
+        # succeeds, and only the anchor stands between prose and a false block.
+        # Chosen by running candidates against the mutants rather than by
+        # reading the code.
+        ("a matched-quote payload inside a field value allowed",
+         'gh api repos/o/r/issues -f body="bash -c \'gh api /markdown\' and more"',
+         ALLOW),
+        # Same shape with a separator inside the quoted span: separators are
+        # read off the blanked copy, so a `;` or `|` in DATA must not start a
+        # command. This row kills the raw-separator mutant; the one above does
+        # not, so both are needed.
+        ("a quoted separator does not start a command",
+         'gh api repos/o/r/issues -f body="a; bash -c \'gh api /markdown\' b"',
+         ALLOW),
+        ("a quoted pipe does not start a command",
+         'gh api repos/o/r/issues -f body="a | bash -c \'gh api /markdown\' b"',
+         ALLOW),
+        ("a shell name inside a quoted field value allowed",
+         "gh api repos/o/r/issues -f body='bash -c \"gh api /markdown\"'", ALLOW),
+        ("a shell name inside a double-quoted field value allowed",
+         'gh api repos/o/r/issues -f body="run bash -c to reproduce /markdown"',
+         ALLOW),
+        ("advice about the wrapper echoed allowed",
+         "echo 'never run bash -c \"gh api /markdown\"'", ALLOW),
         # REGRESSION PINS, not discriminators -- said plainly because a green
         # row that proves nothing is how a table stops meaning anything. Both
         # survive every mutation tried against the payload scanner, including

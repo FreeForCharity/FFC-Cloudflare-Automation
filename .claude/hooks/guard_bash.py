@@ -318,7 +318,57 @@ def _skip_word(text, i):
     return i
 
 
-SHELL_WORD_RE = re.compile(r"(?<![\w./-])(?:bash|sh|dash|zsh|ksh)(?:\.exe)?(?=[ \t])")
+SHELL_BASENAMES = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
+
+
+def _is_shell_word(word):
+    """True when `word` names a shell, however the invocation spells it.
+
+    A bare `bash` was the first version and it missed every path-qualified
+    spelling, which on this host is the NORMAL one: `"/c/Program Files/Git/bin/
+    bash.exe" -c ...`. Reported on #1313. So the quotes come off, the basename
+    is taken after either separator, and a `.exe` suffix is dropped before the
+    name is compared.
+
+    An escaped space needs no handling of its own: the split already breaks on
+    the backslash, so `/c/Program\ Files/.../bash.exe` yields `bash.exe` either
+    way. The first version unescaped it first, and mutation review showed the
+    line was dead -- removing it reddened nothing.
+    """
+    if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
+        word = word[1:-1]
+    base = re.split(r"[/\\]", word)[-1].lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    return base in SHELL_BASENAMES
+
+
+def _command_starts(text):
+    """Index of the first word of every command in `text`.
+
+    Separators are read off the BLANKED copy, so a `;` or `|` inside quotes is
+    not a separator -- and, the property that matters here, a shell name inside
+    a quoted ARGUMENT is never a command start. `-f body='bash -c "gh api
+    /markdown"'` is prose about a shell carried as data, and must stay allowed;
+    the reviewer raised it as a caution on #1313 and it is the same
+    false-positive class this branch exists to remove.
+
+    The word itself is read off the ORIGINAL text, because `_strip_quoted`
+    blanks a quoted command NAME too -- scanning the blanked copy for the word
+    would skip `"/c/Program Files/Git/bin/bash.exe"` entirely and then mistake
+    its `-c` for the command.
+    """
+    bare = _strip_quoted(text)
+    at_start = True
+    for i, ch in enumerate(text):
+        if bare[i] in ";|&\n(":
+            at_start = True
+            continue
+        if ch in " \t":
+            continue
+        if at_start:
+            yield i
+            at_start = False
 
 
 def _shell_c_payloads(cmd, depth=3):
@@ -350,8 +400,10 @@ def _shell_c_payloads(cmd, depth=3):
     """
     if depth <= 0:
         return
-    for m in SHELL_WORD_RE.finditer(cmd):
-        i = m.end()
+    for start in _command_starts(cmd):
+        i = _skip_word(cmd, start)
+        if not _is_shell_word(cmd[start:i]):
+            continue
         saw_c = False
         while i < len(cmd):
             while i < len(cmd) and cmd[i] in " \t":

@@ -165,6 +165,18 @@ export function selectTargets(files, { jpegs, pdfs }) {
  * trying at all, versus skip this one file -- and ENOENT is what separates
  * them.
  */
+/**
+ * Is ghostscript on this host?
+ *
+ * Exported and shared with the self-test rather than written twice. The
+ * duplicate spelling is what let #1411 ship a test that silently required a
+ * binary: the production path asks this question, the test assumed the
+ * answer, and the two could not be compared because they were different code.
+ */
+export async function haveGhostscript() {
+  return new Promise((res) => execFile('gs', ['--version'], (err) => res(!err)));
+}
+
 export async function shrinkPdf(buf, state) {
   if (state.gsMissing) return { ok: false };
   const dir = mkdtempSync(join(tmpdir(), 'ffc-optpdf-'));
@@ -260,9 +272,9 @@ async function main() {
       /* reported by the preflight below, with the others */
     }
   }
-  let haveGhostscript = true;
+  let haveGs = true;
   if (doPdfs) {
-    haveGhostscript = await new Promise((res) => execFile('gs', ['--version'], (err) => res(!err)));
+    haveGs = await haveGhostscript();
   }
   // Fail before touching a single file, so a run that cannot do what was
   // asked stops here rather than producing a half-optimized tree.
@@ -270,7 +282,7 @@ async function main() {
     jpegs: doJpegs,
     pdfs: doPdfs,
     haveSharp: Boolean(sharp),
-    haveGhostscript,
+    haveGhostscript: haveGs,
   });
   if (missing.length) {
     for (const m of missing) console.error(`::error::${m}`);
@@ -451,7 +463,18 @@ async function selfTest() {
     { ok: false },
   );
   {
-    // gs on a real (tiny) PDF: ok:true, and the caller then decides on size.
+    // gs on a real (tiny) PDF. WHICH assertion applies depends on whether this
+    // host has ghostscript, and branching on that is the fix rather than a
+    // dodge.
+    //
+    // Written as an unconditional `ok === true`, this passed everywhere a
+    // person runs it -- gs is on most workstations -- and failed on a bare
+    // runner. 706's `resolve` job runs this gate BEFORE the `convert` job
+    // installs ghostscript, and `Validate Repository` does not run this
+    // self-test at all, so #1411 merged green and then turned 706 red at the
+    // next dispatch (run 36417508156), blocking the migration it was written
+    // to unblock. The companion fix is in 722: the same self-tests now run
+    // there, so the next host-dependent assertion is caught on its own PR.
     const tiny = Buffer.from(
       '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
         '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -459,13 +482,22 @@ async function selfTest() {
         'trailer<</Root 1 0 R>>\n',
       'latin1',
     );
-    const res = await shrinkPdf(tiny, {});
-    eq('shrinkPdf on a parseable PDF reports ok:true', res.ok, true);
-    eq('...and carries a buffer', Buffer.isBuffer(res.buffer), true);
-  }
-  {
-    const res = await shrinkPdf(Buffer.from('definitely not a pdf'), {});
-    eq('shrinkPdf on bytes ghostscript cannot parse reports ok:false', res.ok, false);
+    if (await haveGhostscript()) {
+      const res = await shrinkPdf(tiny, {});
+      eq('shrinkPdf on a parseable PDF reports ok:true', res.ok, true);
+      eq('...and carries a buffer', Buffer.isBuffer(res.buffer), true);
+      const junk = await shrinkPdf(Buffer.from('definitely not a pdf'), {});
+      eq('shrinkPdf on bytes ghostscript cannot parse reports ok:false', junk.ok, false);
+    } else {
+      // NOT a skip. A host without ghostscript must still get a well-formed
+      // refusal -- not a throw, not a hang -- and must latch `gsMissing` so a
+      // 24-PDF run spawns one doomed process instead of 24.
+      const state = {};
+      const res = await shrinkPdf(tiny, state);
+      eq('without ghostscript shrinkPdf refuses cleanly', res.ok, false);
+      eq('...carrying no buffer', res.buffer, undefined);
+      eq('...and latches gsMissing so the run stops retrying', state.gsMissing, true);
+    }
   }
 
   // --- preflight: a requested pass that cannot run is an ERROR -----------

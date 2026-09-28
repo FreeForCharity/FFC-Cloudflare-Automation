@@ -27,7 +27,9 @@ makes it fail (no `pr create`).
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,7 +39,9 @@ from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 TOKEN = "TESTTOKEN"
-CLONE_URL = f"https://x-access-token:{TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git"
+# The step clones the PLAIN URL and authenticates with a `git -c` extraheader, so
+# the token never appears in the URL or in target/.git/config (Copilot on #1420).
+CLONE_URL = "https://github.com/FreeForCharity/FFC-IN-ffcadmin.org.git"
 SYNC_BRANCH = "chore/ga-data-sync"
 
 # Files the deliver step writes into the target repo.
@@ -116,7 +120,13 @@ SOURCE_CATALOG = '{"catalog":"fresh"}\n'
 SOURCE_STATUS = '{"agentic_os":"status","generated":"today"}\n'
 
 
-def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | None = None):
+def run_deliver(
+    *,
+    sync_branch: bool,
+    sync_matches_source: bool,
+    gh_env: dict | None = None,
+    pre_path: pathlib.Path | None = None,
+):
     """Execute the deliver step against a local bare origin. Returns
     (proc, gh_log, origin_path, tmp_root) — tmp_root kept alive by the caller."""
     script = step_run("502-google-analytics-report.yml", "deliver", "daily data-sync PR")
@@ -151,10 +161,8 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
     # over HOME and the insteadOf redirect below would silently not apply,
     # sending the clone at the real network URL (#943).
     # Two distinct tokens, as the job now exports (#848): GH_TOKEN is the READ PAT,
-    # GH_WRITE_TOKEN the 2-repo writer. Only the writer's URL is redirected to the
-    # local origin, so a step that clones/pushes on the read PAT goes to the real
-    # network URL and fails -- every test below doubles as "the write uses the
-    # write PAT".
+    # GH_WRITE_TOKEN the 2-repo writer. Which one the git calls authenticate with
+    # is proven by test_git_authenticates_with_the_write_pat_and_never_persists_it.
     env = child_env(
         HARNESS_DIR,
         HOME=str(home),
@@ -166,6 +174,8 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
     )
     if gh_env:
         env.update(gh_env)
+    if pre_path is not None:
+        env["PATH"] = str(pre_path) + os.pathsep + env["PATH"]
 
     proc = subprocess.run(
         ["bash", "-c", script],
@@ -193,6 +203,56 @@ def _origin_head(origin: pathlib.Path, branch: str) -> str | None:
         ),
     )
     return r.stdout.strip() or None
+
+
+# --- Credential handling (#848, Copilot on #1420) -----------------------------
+def test_git_authenticates_with_the_write_pat_and_never_persists_it():
+    """The writer PAT goes in a `git -c` extraheader, never a URL. Proven from the
+    argv git actually received (GIT_TRACE does not record `-c` values, so a PATH
+    wrapper logs them): every clone/fetch/push must carry a header that decodes to
+    the WRITE token and none may carry the READ one; and the token must appear in
+    no config file the clone leaves behind and in none of the step's output."""
+    import base64
+
+    real_git = shutil.which("git")
+    assert real_git, "git not on PATH"
+    wrap_dir = tempfile.TemporaryDirectory()
+    with wrap_dir:
+        bin_dir = pathlib.Path(wrap_dir.name)
+        argv_log = bin_dir / "git-argv.log"
+        argv_log.write_text("", encoding="utf-8")
+        wrapper = bin_dir / "git"
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "ARGV: %s\\n" "$*" >> "{argv_log.as_posix()}"\n'
+            f'exec "{pathlib.Path(real_git).as_posix()}" "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        proc, _gh_log, _origin, ctx = run_deliver(
+            sync_branch=True,
+            sync_matches_source=False,
+            gh_env={"TEST_OPEN_PR": "645"},
+            pre_path=bin_dir,
+        )
+        with ctx:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            calls = argv_log.read_text(encoding="utf-8").splitlines()
+            write_b64 = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
+            read_b64 = base64.b64encode(b"x-access-token:READ_ONLY_TOKEN").decode()
+            for verb in ("clone", "fetch", "push"):
+                hits = [c for c in calls if f" {verb} " in f" {c} "]
+                assert hits, f"no `git {verb}` recorded: {calls}"
+                assert all(write_b64 in c for c in hits), f"`git {verb}` did not carry the write PAT header"
+            assert not any(read_b64 in c for c in calls), "a git call authenticated with the READ PAT"
+            assert not any(TOKEN in c for c in calls), "the raw PAT appeared in a git argv (URL?)"
+            config = (pathlib.Path(ctx.name) / "work" / "target" / ".git" / "config").read_text(encoding="utf-8")
+            assert TOKEN not in config and write_b64 not in config, f"credential persisted into .git/config: {config!r}"
+            # `::add-mask::<value>` is the one line that must carry the value: it is the
+            # runner directive that hides it everywhere else. Anything besides it leaks.
+            out = [l for l in (proc.stdout + proc.stderr).splitlines() if not l.startswith("::add-mask::")]
+            assert f"::add-mask::{write_b64}" in proc.stdout, "the base64 header was never masked"
+            assert not any(TOKEN in l or write_b64 in l for l in out), "credential reached the step output"
 
 
 # --- Scenario 1: sync branch exists on origin (the #733 regression case) -------

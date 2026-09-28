@@ -286,13 +286,21 @@ jobs:
           # This step writes, so it runs on the WRITE PAT (#848): the clone/push URL
           # and every `gh` call below. The read PAT cannot push or open a PR here.
           export GH_TOKEN="$GH_WRITE_TOKEN"
+          # The PAT rides in a per-invocation HTTP header, never in a URL: a token in
+          # the clone URL is persisted into target/.git/config as the `origin` remote
+          # and is one `git remote -v` from the log. `git -c` (before the subcommand)
+          # is not written to any config file. The base64 form is masked separately
+          # because the runner's mask only knows the raw token.
+          auth_b64="$(printf 'x-access-token:%s' "$GH_WRITE_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_b64"
+          gitw() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth_b64" "$@"; }
           git config --global user.name 'ffc-automation[bot]'
           git config --global user.email 'automation@freeforcharity.org'
-          git clone --depth 1 "https://x-access-token:${GH_WRITE_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
+          gitw clone --depth 1 https://github.com/FreeForCharity/FFC-IN-ffcadmin.org.git target
           cd target
           # True idempotency: base on the existing sync branch when it exists, so a re-run
           # with identical content produces no new commit and no PR churn.
-          if git fetch origin chore/ga-data-sync --depth 1 2>/dev/null; then
+          if gitw fetch origin chore/ga-data-sync --depth 1 2>/dev/null; then
             # Shallow single-branch clone: the fetch lands only in FETCH_HEAD —
             # no origin/chore/ga-data-sync tracking ref is created.
             git checkout -B chore/ga-data-sync FETCH_HEAD
@@ -312,7 +320,7 @@ jobs:
           git add public/data src/data/workflow-catalog.json
           if git diff --cached --quiet; then echo 'No data changes vs the sync branch; skipping.'; exit 0; fi
           git commit -m "chore(data): daily sync — GA metrics + time-series + workflow catalog + agentic-os status ($(date -u +%F))"
-          git push origin chore/ga-data-sync
+          gitw push origin chore/ga-data-sync
           # Only skip creation when an OPEN PR already exists for the branch.
           # `gh pr view <branch>` resolves the most recent PR in ANY state, so
           # after the first sync PR merges (branch left undeleted) it matches the

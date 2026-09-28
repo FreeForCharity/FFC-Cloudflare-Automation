@@ -215,6 +215,20 @@ jobs:
         # No explicit merge method: main has a merge-queue ruleset, which
         # rejects `--merge`/`--squash`/`--rebase` ("the merge strategy for
         # main is set by the merge queue"). Let the queue pick the method.
+        #
+        # GraphQL directly, not `gh pr merge --auto` (#848): gh only omits the
+        # method when it can SEE the merge queue, and the narrow 2-repo writer
+        # PAT cannot read the repo's queue settings, so gh demanded
+        # "--merge, --rebase, or --squash required when not running
+        # interactively" (run 36441804009) -- the one flag the queue refuses.
+        # enablePullRequestAutoMerge with no mergeMethod is what gh sends when
+        # it does see the queue; the queue picks the method server-side.
         env:
           GH_TOKEN: ${{ env.GH_WRITE_TOKEN }}
-        run: gh pr merge --auto "${{ steps.cpr.outputs.pull-request-number }}"
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          pr_id="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .node_id)"
+          gh api graphql \
+            -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { number autoMergeRequest { enabledAt } } } }' \
+            -f id="$pr_id"

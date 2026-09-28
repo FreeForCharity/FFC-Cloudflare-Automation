@@ -453,6 +453,52 @@ def _shell_c_payloads(cmd, depth=3):
             i = j
 
 
+def _substitution_sources(text, depth=3):
+    """The source text of every `$(...)` and backtick span in `text`.
+
+    Same principle as `_shell_c_payloads`, applied to the other construct whose
+    quoting does not make it data: a command substitution's contents are
+    EXECUTED, so blanking them as a quoted span hides a real command.
+
+    This restores coverage `main` had for free. `main` matched rule 8 against
+    the raw string, so `bash -c "$(printf 'gh api /markdown')"` was caught by
+    the literal text being present; making the span quote-aware removed that
+    and regressed three vectors, all confirmed with a `gh` shim to reach gh
+    with `/markdown`. Reported on #1313.
+
+    It is a LITERAL scan and is meant to be. `$(printf 'gh api /mark''down')`
+    is caught because the fragment `gh api /mark` is still there, but an
+    endpoint assembled from a variable or decoded from base64 is not, and
+    cannot be by any static reading. Both of those are allowed on `main` too,
+    so this closes the regression rather than claiming the class -- rule 8
+    exists to stop a command that will FAIL in git-bash, not to defeat someone
+    hiding one on purpose, and the boundary is recorded here so the next
+    reviewer does not read the gap as an oversight.
+    """
+    if depth <= 0:
+        return
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("$(", i):
+            inner = _call_args(text, i + 2)
+            if inner is not None:
+                yield inner
+                for nested in _substitution_sources(inner, depth - 1):
+                    yield nested
+                i += 2 + len(inner) + 1
+                continue
+        elif text[i] == "`":
+            end = text.find("`", i + 1)
+            if end != -1:
+                inner = text[i + 1:end]
+                yield inner
+                for nested in _substitution_sources(inner, depth - 1):
+                    yield nested
+                i = end + 1
+                continue
+        i += 1
+
+
 def _strip_assignments(segment):
     """Split a segment into (command part, [assigned values]).
 
@@ -1164,11 +1210,21 @@ def main():
     #    command itself -- see `_shell_c_payloads`. Scoped to this rule, which
     #    is the one this branch made quote-aware; the same wrapper in front of
     #    another quote-aware rule is that rule's to answer for, not this one's.
+    #    A command substitution is searched RAW, and the asymmetry is the
+    #    point. `$(printf 'gh api /markdown')` hides the endpoint in a quoted
+    #    ARGUMENT that printf then emits for the shell to run, so a
+    #    quote-aware read of the substitution finds nothing -- which is how
+    #    this branch regressed three vectors `main` caught. Inside `$(...)`
+    #    the rule therefore keeps `main`'s literal fidelity; outside it, the
+    #    quote-aware read stands. That costs the same narrow false positive
+    #    `main` has (`$(grep 'gh api /markdown' notes.md)`) and no other: the
+    #    prose case this branch exists to unblock -- a quoted endpoint in a
+    #    `-f body=` -- contains no substitution and is untouched.
     endpoint_re = r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]"
-    if any(
-        re.search(endpoint_re, _strip_quoted(text))
-        for text in [cmd, *_shell_c_payloads(cmd)]
-    ):
+    candidates = [_strip_quoted(cmd)]
+    candidates += [_strip_quoted(p) for p in _shell_c_payloads(cmd)]
+    candidates += list(_substitution_sources(cmd))
+    if any(re.search(endpoint_re, text) for text in candidates):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

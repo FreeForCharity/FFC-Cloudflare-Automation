@@ -652,6 +652,27 @@ RULES = [
         # bypass hiding behind it. Not reported; found by probing both sides.
         ("end-of-options after -c still blocks",
          "bash -c -- 'gh api /markdown'", BLOCK),
+        # A command substitution's contents are EXECUTED, so blanking them as
+        # a quoted span hides a real command. `main` caught these for free by
+        # matching the raw string; making the span quote-aware regressed them,
+        # and all three are confirmed with a `gh` shim to reach gh with
+        # `/markdown`. Reported on #1313.
+        ("substitution generates the -c payload",
+         'bash -c "$(printf \'gh api /markdown\')"', BLOCK),
+        ("backtick substitution generates the -c payload",
+         'bash -c "`printf \'gh api /markdown\'`"', BLOCK),
+        ("split literal inside the substitution",
+         'bash -c "$(printf \'gh api /mark\'\'down\')"', BLOCK),
+        # ...and a substitution outside any `-c`, same principle.
+        ("endpoint inside a bare substitution",
+         'echo "$(gh api /markdown)"', BLOCK),
+        # Controls. A substitution is only a candidate for what it CONTAINS --
+        # a dynamic payload with no endpoint in its source stays allowed, which
+        # is what keeps `bash -c "$(generate)"` from becoming unusable.
+        ("benign substitution allowed",
+         'echo "$(gh api rate_limit)"', ALLOW),
+        ("dynamic -c payload with no endpoint allowed",
+         'bash -c "$(cat scripts/deploy.sh)"', ALLOW),
         # REGRESSION PINS, not discriminators -- said plainly because a green
         # row that proves nothing is how a table stops meaning anything. Both
         # survive every mutation tried against the payload scanner, including

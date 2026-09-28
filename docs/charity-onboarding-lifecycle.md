@@ -95,11 +95,16 @@ Pick the path that matches the domain's origin:
 > Member Add** so they self-serve DNS.
 
 - **Run (dry-run first):** **103. Domain - Enforce Standard (GitHub Apex + M365)**. This applies the
-  FFC-standard records — GitHub Pages apex A/AAAA + `www` CNAME, and M365 MX/SPF/DMARC — and can
-  enable DKIM. It **defaults to `dry_run=true`**; read the preview, then re-run with `dry_run=false`
-  and approve the `cloudflare-prod-write` gate. **Note:** its `exo_check`/`exo_enable` jobs act on
-  the **FFC tenant's** Exchange Online (DKIM create/enable) — **always pass `skip_m365=true` for a
-  charity.** See [enforce-standard-workflow.md](enforce-standard-workflow.md).
+  FFC-standard records — GitHub Pages apex A/AAAA + `www` CNAME — and can enable DKIM. It **defaults
+  to `dry_run=true`**; read the preview, then re-run with `dry_run=false` and approve the
+  `cloudflare-prod-write` gate. **Note:** its `exo_check`/`exo_enable` jobs act on the **FFC
+  tenant's** Exchange Online (DKIM create/enable) — **always pass `skip_m365=true` for a charity.**
+  Mail records (MX/SPF/service records) are written **only** for a domain listed in
+  `data/mail-providers.json`, for the provider listed there (`Microsoft365` or `Google`); an
+  unlisted domain's mail is left alone. List a charity's domain with **its own** provider first, or
+  pass `github_pages_only=true` and add their mail records with **105** — never let a Google
+  Workspace charity's domain receive Microsoft 365 MX/SPF. See
+  [enforce-standard-workflow.md](enforce-standard-workflow.md).
 - **Charity's own tenant:** once the charity has added the domain in their own Microsoft 365 or
   Google Workspace admin console, add the records that console gives them with **105**. The FFC
   tenant workflows (`301`–`306`, including **305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL
@@ -195,8 +200,9 @@ Bringing `examplecharity.org` online from scratch:
    confirms no WHMCS client. Clear to onboard.
 2. File **template 01** to buy the domain → **12. Registrar Register** with `mode=execute-register`
    and `confirm_domain=examplecharity.org` → ⏸ approve `cloudflare-prod-write` → zone created.
-3. **03. Enforce Standard** with `skip_m365=true`, dry-run → review the planned GitHub Pages + mail
-   DNS records → re-run with `dry_run=false` → ⏸ approve → records applied. The charity sets up
+3. **03. Enforce Standard** with `skip_m365=true`, dry-run → review the planned GitHub Pages records
+   (plus mail records only if the domain is listed in `data/mail-providers.json` with the charity's
+   own provider) → re-run with `dry_run=false` → ⏸ approve → records applied. The charity sets up
    email in **their own** Microsoft 365 or Google Workspace tenant; FFC adds the records it gives
    them with **105**. (Never 305/304 — the FFC tenant is internal only.)
 4. File and **assign template 02** → **701. Website - Provision** → ⏸ approve DNS; the chained

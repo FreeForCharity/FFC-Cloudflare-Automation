@@ -85,13 +85,18 @@ file names — the two differ. Map display→file via
 > automation can **copy** those workflows to run against **their own** tenant; they are not run
 > against ours on their behalf. Details: `docs/m365-domain-and-dkim.md`.
 >
-> **Buy the domain last.** The website is built and working on its default GitHub Pages URL
-> **before** the domain is purchased (Phase 1 follows Phase 3 for a new domain). There is no rush.
+> **Buy the domain last.** For a charity that needs a new domain, build the website repo and get it
+> working on its default GitHub Pages URL **first**; purchase the domain only after that, even
+> though the domain steps are listed earlier in the chain above. There is no rush.
 
-- **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`, plus
-  the tenant-agnostic MX/SPF/DMARC standard. **Always pass `skip_m365=true` for a charity** — its
-  `exo_check`/`exo_enable` jobs act on the FFC tenant's Exchange Online. **Defaults to
-  `dry_run=true`** — read the preview, then re-run `dry_run=false` and approve the gate.
+- **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`.
+  **Always pass `skip_m365=true` for a charity** — its `exo_check`/`exo_enable` jobs act on the FFC
+  tenant's Exchange Online. Mail records (MX/SPF/service records) are touched **only** for a domain
+  listed in `data/mail-providers.json`, and then for the provider listed there (`Microsoft365` or
+  `Google`) — an unlisted domain's mail is left alone. So list a charity's domain with **its own**
+  provider before relying on 103 for mail, or use `github_pages_only=true` and add their mail
+  records with `105`. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`
+  and approve the gate.
 - **Charity's own tenant records:** once the charity has added the domain in _their_ Microsoft or
   Google admin console, write the verification TXT / DKIM / MX records they are given with
   **`105`**, or invite their contact as a zone-scoped Cloudflare Domain Admin with

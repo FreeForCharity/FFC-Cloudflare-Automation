@@ -233,10 +233,19 @@ jobs:
           PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
         run: |
           set -euo pipefail
+          # The node id is interpolated into a double-quoted query rather than
+          # passed as a GraphQL `$id` variable: a `$id` inside single quotes reads
+          # to shellcheck as a shell expansion that will not expand (SC2016) and
+          # actionlint fails the build (same constraint as 741/743). The id comes
+          # from GitHub's own API and is checked against its node-id shape first.
           pr_id="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .node_id)"
+          if ! [[ "$pr_id" =~ ^[A-Za-z0-9_=-]+$ ]]; then
+            echo "::error::Unexpected node id for #${PR_NUMBER}: refusing to build a query from it."
+            exit 1
+          fi
           if out="$(gh api graphql \
-            -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id}) { pullRequest { number } } }' \
-            -f id="$pr_id" 2>&1)"; then
+            -f query="mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"${pr_id}\"}) { pullRequest { number } } }" \
+            2>&1)"; then
             echo "Auto-merge armed on #${PR_NUMBER}; the queue takes it once checks pass."
             exit 0
           fi
@@ -246,6 +255,5 @@ jobs:
             exit 1
           fi
           gh api graphql \
-            -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position state } } }' \
-            -f id="$pr_id"
+            -f query="mutation { enqueuePullRequest(input: {pullRequestId: \"${pr_id}\"}) { mergeQueueEntry { position state } } }"
           echo "#${PR_NUMBER} was already mergeable, so it was enqueued directly."

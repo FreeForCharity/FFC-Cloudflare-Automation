@@ -1594,14 +1594,39 @@ export const PDF_DOWNSAMPLE_LADDER = ['/ebook', '/screen'];
 /**
  * Whether this asset is a candidate for downsampling at all.
  *
- * Size is part of the predicate, as it is for images: a PDF already under
- * budget is left byte-identical to what the charity uploaded. These are the
- * charity's own publications, so the bar for touching one is that it cannot
- * otherwise be published.
+ * Two modes, and the difference is the same one `shouldReencodeImage`
+ * documents:
+ *
+ * BUDGET GATE (`shrinkAll` false, the default). Size is part of the
+ * predicate: a PDF already under `maxBytes` is left byte-identical to what
+ * the charity uploaded. These are the charity's own publications, so the bar
+ * for touching one is that it cannot otherwise be published.
+ *
+ * WHOLE TREE (`shrinkAll` true). Every PDF is a candidate whatever its size,
+ * because a per-file budget cannot answer a TOTAL-size limit -- and on a real
+ * migration it did not. Measured on newheightseducation.org's apex export:
+ * 24 PDFs, 142.1 MB, `max-pdf-mb` at its 90 MB default, LARGEST FILE 13.1 MB.
+ * Zero of the 24 were over budget, so the budget gate examined none of them,
+ * while the tree as a whole was 1169.6 MB against GitHub Pages' 1024 MB
+ * ceiling. Running every one through the ladder -- which returns at `/ebook`
+ * for all 24, since its largest output is 3.5 MB against the 90 MB budget, so
+ * `/screen` is never reached on this corpus -- took the set to 33.3 MB, a
+ * 108.8 MB saving, with page counts preserved on all 24 (checked with
+ * Ghostscript's own `pdfpagecount`) and page-one renders at 100 dpi differing
+ * by 0.00%-3.28% (mean 0.40%) from the originals.
+ *
+ * `worthShrinking` still has the last word in both modes, which is what makes
+ * whole-tree safe to switch on blindly: of those 24, two came back LARGER
+ * (61,925 -> 62,502 bytes, +0.9%; 55,319 -> 56,895, +2.8%) and are declined
+ * rather than kept. The sign is the point: a growth is a POSITIVE percentage
+ * here, and an earlier draft of this comment wrote them as -1% and -3%, which
+ * reads as a saving and says the opposite of what the guard is for.
  */
-export function shouldShrinkPdf(absUrl, bytes, maxBytes) {
+export function shouldShrinkPdf(absUrl, bytes, maxBytes, shrinkAll = false) {
   if (typeof absUrl !== 'string' || !/\.pdf(\?|$)/i.test(absUrl)) return false;
-  if (!Number.isFinite(bytes) || !Number.isFinite(maxBytes)) return false;
+  if (!Number.isFinite(bytes)) return false;
+  if (shrinkAll) return bytes > 0;
+  if (!Number.isFinite(maxBytes)) return false;
   return bytes > maxBytes;
 }
 
@@ -2741,6 +2766,55 @@ function selfTest() {
     false,
   );
   eq('shouldShrinkPdf refuses a NaN size', shouldShrinkPdf('https://x.org/a.pdf', NaN, 90), false);
+  // --- whole-tree mode (`--shrink-all-pdfs`) ---
+  // The case the budget gate structurally cannot reach: every PDF under
+  // budget, the TREE over its host's total-size limit. Measured on
+  // newheightseducation.org — 24 PDFs, 142.1 MB, largest 13.1 MB, budget
+  // 90 MB, so the gate examined zero of them.
+  eq(
+    'shouldShrinkPdf whole-tree takes an UNDER-budget PDF',
+    shouldShrinkPdf('https://x.org/u/media-pack-2024.pdf', 13 * 1048576, 90 * 1048576, true),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf budget gate leaves that same PDF alone',
+    shouldShrinkPdf('https://x.org/u/media-pack-2024.pdf', 13 * 1048576, 90 * 1048576, false),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree still refuses a non-PDF however large',
+    shouldShrinkPdf('https://x.org/u/video.mp4', 400 * 1048576, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree refuses a zero-byte file rather than shelling out',
+    shouldShrinkPdf('https://x.org/u/empty.pdf', 0, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree refuses a NaN size',
+    shouldShrinkPdf('https://x.org/u/a.pdf', NaN, 90 * 1048576, true),
+    false,
+  );
+  eq(
+    'shouldShrinkPdf whole-tree does not need a budget at all',
+    shouldShrinkPdf('https://x.org/u/a.pdf', 1024, NaN, true),
+    true,
+  );
+  eq(
+    'shouldShrinkPdf defaults to the budget gate when the flag is omitted',
+    shouldShrinkPdf('https://x.org/u/a.pdf', 13 * 1048576, 90 * 1048576),
+    false,
+  );
+  // whole-tree does not disable worthShrinking, and that is what makes it
+  // safe to switch on blindly: two of the 24 measured files came back LARGER.
+  // The real pair, not a made-up one: video-production-and-new-media-release-
+  // form.pdf under `--shrink-all-pdfs`, which /ebook grows by 0.9%.
+  eq(
+    'worthShrinking still refuses a whole-tree result that grew',
+    worthShrinking(61925, 62502),
+    false,
+  );
   // The ladder's top rung MEASURED larger than its input on a scan-shaped
   // fixture (/prepress, 176%). This is the guard that makes that harmless.
   eq('worthShrinking keeps a strictly smaller result', worthShrinking(167, 74), true);
@@ -4337,6 +4411,13 @@ const maxImageBytes = parsedOptions['max-image-kb'] * 1024;
 // choice only when the originals are themselves the deliverable AND something
 // downstream is hosting them off the repo.
 const optimizePdfs = !flag('no-optimize-pdfs');
+// Off by default, for the same reason `--recode-all-images` is: a migration
+// that already fits should not re-encode the charity's own publications. Turn
+// it on when the tree is over a host's TOTAL-size limit, which the per-file
+// budget above cannot reach -- on newheightseducation.org every one of the 24
+// PDFs was under budget while together they were 142.1 MB of a 1169.6 MB tree
+// against a 1024 MB ceiling.
+const shrinkAllPdfs = flag('shrink-all-pdfs');
 const maxPdfBytes = parsedOptions['max-pdf-mb'] * 1024 * 1024;
 const jsonOut = arg('json-out', '');
 // Hosts whose references are dropped from the capture entirely: not fetched,
@@ -4353,6 +4434,7 @@ if (isMain && (!domain || (!inspectOnly && !outDir))) {
       '  --domain <domain> --inspect [--json-out <file>]\n' +
       '  --domain <domain> --out <dir> [--max 500] [--delay 250] [--include-posts] [--timeout 30]\n' +
       '      [--no-optimize-images] [--recode-all-images] [--max-image-kb 400]\n' +
+      '      [--no-optimize-pdfs] [--shrink-all-pdfs] [--max-pdf-mb 90]\n' +
       '  --self-test',
   );
   process.exit(2);
@@ -5210,7 +5292,7 @@ async function capture() {
     // an otherwise complete and gate-passing conversion was rejected outright
     // by the pre-receive hook -- after the 40-minute crawl and after the human
     // approval it had already spent.
-    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes)) {
+    if (optimizePdfs && shouldShrinkPdf(absUrl, buf.length, maxPdfBytes, shrinkAllPdfs)) {
       const shrunk = await shrinkPdfBuffer(buf, maxPdfBytes);
       if (shrunk && worthShrinking(buf.length, shrunk.buffer.length)) {
         pdfShrink.shrunk += 1;
@@ -5223,10 +5305,18 @@ async function capture() {
         // be a claim the operator cannot check: "downsampling would not have
         // been smaller" about a file nothing tried to downsample.
         pdfShrink.skippedNoEncoder += 1;
-        pdfShrink.stillOverBudget.push(name);
+        if (buf.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
       } else {
         pdfShrink.declined += 1;
-        pdfShrink.stillOverBudget.push(name);
+        // Guarded on the SHIPPED size rather than pushed unconditionally.
+        // Under the budget gate the two are the same thing, because nothing
+        // under budget reaches this branch at all; under `--shrink-all-pdfs`
+        // they are not, and the unconditional push named every declined file
+        // as one "a git push will REJECT" -- of 24 PDFs on
+        // newheightseducation.org, two decline and NEITHER is over budget.
+        // A size warning that fires on files that are not oversized is the
+        // kind an operator learns to scroll past.
+        if (buf.length > maxPdfBytes) pdfShrink.stillOverBudget.push(name);
       }
     }
 
@@ -5531,7 +5621,7 @@ async function capture() {
   if (pdfShrink.shrunk) {
     const mb = (n) => (n / 1048576).toFixed(1);
     console.error(
-      `[capture] downsampled ${pdfShrink.shrunk} oversized PDF(s):` +
+      `[capture] downsampled ${pdfShrink.shrunk} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s):` +
         ` ${mb(pdfShrink.bytesBefore)} MB -> ${mb(pdfShrink.bytesAfter)} MB` +
         ` (${(100 - (pdfShrink.bytesAfter / pdfShrink.bytesBefore) * 100).toFixed(1)}% smaller).` +
         ' Each kept its own name, so no reference needed rewriting.',
@@ -5539,12 +5629,12 @@ async function capture() {
   }
   if (pdfShrink.declined)
     console.error(
-      `[capture] ${pdfShrink.declined} oversized PDF(s) shipped as captured —` +
+      `[capture] ${pdfShrink.declined} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s) shipped as captured —` +
         ' downsampling them produced nothing smaller.',
     );
   if (pdfShrink.skippedNoEncoder)
     console.error(
-      `[capture] ${pdfShrink.skippedNoEncoder} oversized PDF(s) shipped as captured because` +
+      `[capture] ${pdfShrink.skippedNoEncoder} ${shrinkAllPdfs ? '' : 'oversized '}PDF(s) shipped as captured because` +
         ' ghostscript was not available. This is NOT a judgement that they were already' +
         ' optimal: nothing tried. Install ghostscript before the capture step.',
     );
@@ -5642,6 +5732,7 @@ async function capture() {
     },
     imageOptimization: {
       enabledPdfs: optimizePdfs,
+      shrinkAllPdfs,
       maxPdfMb: Math.round(maxPdfBytes / 1048576),
       pdfsShrunk: pdfShrink.shrunk,
       pdfsDeclined: pdfShrink.declined,

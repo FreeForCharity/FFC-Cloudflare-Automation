@@ -21,6 +21,7 @@ rather than left to review.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 import subprocess
@@ -1530,6 +1531,149 @@ def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
     assert "TOTAL size limit" in desc, desc
     # The measurement is what makes the trade-off checkable rather than a claim.
     assert "61.5%" in desc, desc
+
+
+def test_extract_shared_css_runs_in_BOTH_jobs_that_convert():
+    """`convert` previews the conversion and `deliver` pushes it, and they run
+    the same pipeline. Wiring one and not the other makes the previewed tree
+    and the delivered tree different sizes -- and `deliver` is the one that
+    has to fit under the host's limit, so a one-sided wiring passes every
+    preview and fails at the push."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        step = find_step(wf, job, "Lift duplicated inline CSS into shared stylesheets")
+        assert "automation/scripts/extract-shared-css.mjs" in step["run"], job
+        assert step["if"] == "${{ inputs.extract_shared_css }}" or (
+            step["if"] == "inputs.extract_shared_css"
+        ), (job, step["if"])
+
+
+def test_extract_shared_css_runs_before_the_size_gate():
+    """The gate exists to catch a tree the host will refuse, and this pass is
+    one of the things that gets a tree under that limit. After the gate it
+    would fail the run on a size the very next step was about to fix."""
+    wf = load_workflow(WORKFLOW)
+    for job in ("convert", "deliver"):
+        names = [s.get("name", "") for s in wf["jobs"][job]["steps"]]
+        convert = names.index("Convert the capture into real app routes")
+        css = names.index("Lift duplicated inline CSS into shared stylesheets")
+        gate = names.index("Gate - the tree must be publishable (push + Pages limits)")
+        # after the conversion, because that is what writes src/clone-content
+        assert convert < css < gate, (job, convert, css, gate)
+
+
+def test_extract_shared_css_is_off_by_default():
+    """It rewrites every captured page. A migration that already fits should
+    not take that change unasked."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    spec = triggers["workflow_dispatch"]["inputs"]["extract_shared_css"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_every_test_in_this_module_actually_asserts_something():
+    """A test with no assertion passes, so the suite cannot report its own
+    damage -- and that is not hypothetical here. Resolving the #1395 merge, a
+    conflict boundary fell INSIDE `test_extract_shared_css_is_off_by_default`,
+    the "keep both sides" resolution dropped its two asserts, and the suite
+    went on reporting 169 green. Copilot caught it; the test count could not.
+
+    Parsed with `ast`, not grepped for the substring "assert". A grep is
+    satisfied by the word appearing in a docstring or a comment -- including
+    a docstring that says the test asserts nothing -- so the check would pass
+    for the wrong reason on exactly the function it exists to catch. This
+    docstring alone contains the word six times.
+
+    `ast.Assert` only, deliberately: `self.assertEqual` is unittest and this
+    suite is plain asserts, so counting attribute calls would widen the check
+    to no purpose. A helper that legitimately needs no assertion is not named
+    `test_*`."""
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    silent = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+        and not any(isinstance(n, ast.Assert) for n in ast.walk(node))
+    ]
+    assert not silent, f"test(s) with no assert statement: {silent}"
+
+
+def test_recode_all_images_description_names_the_set_it_actually_recodes():
+    """It said "EVERY captured raster image", and GIF is a raster image that
+    `RECODABLE` deliberately excludes because re-encoding one drops the
+    animation. An operator reading that would expect the 13 GIFs in the
+    newheightseducation.org export to be covered; none of them is. Caught by
+    Copilot on #1394 after it had already merged, so this test exists to stop
+    the wording drifting back."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]["description"]
+    assert "PNG, JPEG and WebP" in desc, desc
+    assert "GIF is deliberately NOT included" in desc, desc
+    # The overstatement itself must not come back.
+    assert "EVERY captured raster image" not in desc, desc
+
+
+def test_shrink_all_pdfs_reaches_the_capture():
+    """The PDF half of the same gap, and inert unless BOTH halves are present.
+    On newheightseducation.org the budget gate examined zero of 24 PDFs because
+    the largest was 13.1 MB against a 90 MB budget, while those 24 carried
+    142.1 MB of a tree that was 145.6 MB over Pages' ceiling."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert step["env"]["SHRINK_ALL_PDFS"] == "${{ inputs.shrink_all_pdfs }}", step["env"]
+    assert "args+=(--shrink-all-pdfs)" in step["run"]
+
+
+def test_shrink_all_pdfs_is_off_by_default():
+    """These are the charity's own publications. Re-encoding one is a real if
+    small quality loss, so it has to be asked for rather than inherited."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    spec = triggers["workflow_dispatch"]["inputs"]["shrink_all_pdfs"]
+    assert spec["type"] == "boolean", spec
+    assert spec["default"] is False, spec
+
+
+def test_extract_shared_css_description_names_what_stays_inline():
+    """The two refusals are the whole correctness argument, and both are about
+    what a reference resolves against once it moves. An operator who does not
+    know they exist cannot tell this pass from one that would break the
+    SVG-filter effect on 245 pages."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["extract_shared_css"]["description"]
+    assert "url(#fragment)" in desc, desc
+    assert "%%BASE%%" in desc, desc
+    assert "SAME POSITION" in desc, desc
+
+
+def test_shrink_all_pdfs_is_only_passed_when_true():
+    """Same string-'false' trap as recode_all_images: an unchecked boolean
+    arrives as a non-empty string, so a truthiness test turns it on for every
+    run that left the box alone."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Capture the live WordPress site")
+    assert '[ "$SHRINK_ALL_PDFS" = "true" ]' in step["run"], step["run"][-600:]
+
+
+def test_shrink_all_pdfs_description_states_the_measured_trade():
+    """The saving is large and the cost is a genuine quality reduction, so the
+    description has to carry both numbers -- and the fact that names are kept,
+    which is what makes it safe for links people have already bookmarked."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["shrink_all_pdfs"]["description"]
+    assert "TOTAL-size limit" in desc, desc
+    assert "108.8 MB" in desc, desc
+    assert "KEEPS ITS NAME" in desc, desc
+    # The profile is a LADDER, not a fixed /ebook. Saying "/ebook" alone
+    # understates the worst case an operator can reach by lowering
+    # max_pdf_mb, and /screen is a markedly coarser image than /ebook.
+    assert "/screen" in desc, desc
+    assert "PDF_DOWNSAMPLE_LADDER" in desc, desc
 
 
 def test_the_resolve_job_publishes_max_pdf_mb():

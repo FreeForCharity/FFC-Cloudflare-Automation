@@ -415,6 +415,14 @@ def _shell_c_payloads(cmd, depth=3):
             if not word:
                 break
             if saw_c:
+                # `--` between `-c` and its operand is legal and changes
+                # nothing: measured with a `gh` shim, `bash -c -- 'gh api
+                # /markdown'` DOES run the payload. Skipping it here is what
+                # makes that a block; taking it as the payload -- the first
+                # version -- yielded a bare `--` and let the call through.
+                if word == "--":
+                    i = j
+                    continue
                 # `$'...'` / `$"..."` are quoting forms, so the `$` comes off
                 # before the pair does -- `bash -c $'gh api /markdown'` runs
                 # exactly what `bash -c 'gh api /markdown'` runs.
@@ -425,6 +433,14 @@ def _shell_c_payloads(cmd, depth=3):
                 yield word
                 for nested in _shell_c_payloads(word, depth - 1):
                     yield nested
+                break
+            # `--` BEFORE any `-c` ends the options, so what follows is the
+            # script path, not a command string: `bash -- -c '...'` asks the
+            # shell to RUN A FILE named `-c`, which is why it fails with
+            # `bash: -c: No such file or directory` and never reaches gh.
+            # Reported on #1313 and confirmed against the shim -- treating it
+            # as a payload blocked three commands that execute nothing.
+            if word == "--":
                 break
             if not word.startswith("-"):
                 break

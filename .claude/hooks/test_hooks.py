@@ -630,6 +630,28 @@ RULES = [
          ALLOW),
         ("advice about the wrapper echoed allowed",
          "echo 'never run bash -c \"gh api /markdown\"'", ALLOW),
+        # `--` ends the options, and the two sides of it behave oppositely.
+        # Both verified with a `gh` shim, because "what does the shell do with
+        # `--`" is exactly the kind of claim this PR has twice got wrong by
+        # reading the grammar instead of running it.
+        #
+        # BEFORE a `-c`, `--` means the next word is a SCRIPT PATH. The shell
+        # tries to open a file named `-c`, fails, and never reaches gh -- so
+        # blocking these was a false positive on commands that execute
+        # nothing. Reported by review on #1313.
+        ("end-of-options before -c allowed",
+         "bash -- -c 'gh api /markdown'", ALLOW),
+        ("end-of-options with a long option allowed",
+         "bash --norc -- -c 'gh api /markdown'", ALLOW),
+        ("sh end-of-options before -c allowed",
+         "sh -- -c 'gh api /markdown'", ALLOW),
+        # AFTER a `-c`, `--` is just a separator and the payload still runs --
+        # the shim shows gh receiving `/markdown`. The first fix for the rows
+        # above yielded the bare `--` as the payload and let this through, so
+        # the same review round that reported a false positive also had a
+        # bypass hiding behind it. Not reported; found by probing both sides.
+        ("end-of-options after -c still blocks",
+         "bash -c -- 'gh api /markdown'", BLOCK),
         # REGRESSION PINS, not discriminators -- said plainly because a green
         # row that proves nothing is how a table stops meaning anything. Both
         # survive every mutation tried against the payload scanner, including

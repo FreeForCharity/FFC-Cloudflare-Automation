@@ -169,9 +169,12 @@ Pick the path that matches the domain's origin:
 
 - **Zone already exists** (Phase 0/1 shows a Cloudflare zone): skip creation and go straight to
   Phase 2 enforce-standard to true-up the records. Don't re-run 02/09 against an existing zone.
-- **M365 domain verification pending** (Phase 2): the domain reads unverified until the verification
-  records propagate. Re-run **301. M365 (FFC Tenant) - Domain Preflight** to recheck; don't enable
-  DKIM (**304**) until the domain is verified.
+- **Email domain verification pending** (Phase 2): the charity's own Microsoft 365 or Google
+  Workspace admin console shows the domain unverified until the records FFC added with **105**
+  propagate. Check the records with **101. Domain - Status (All Sources)** (or a public DNS lookup)
+  and have the charity re-run verification in _their_ admin console; they enable DKIM there once the
+  domain verifies. Do **not** use **301**/**304** here — those act on the FFC tenant, which is for
+  FFC's internal projects only.
 - **Maintainer login dropped** (Phase 3): if the provision run logs
   `Skipping invalid GitHub username for maintainer`, the issue body almost certainly had prose
   **after** the last `###` field (it gets slurped into the field value). Fix the body and re-assign,

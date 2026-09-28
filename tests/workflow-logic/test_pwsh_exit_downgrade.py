@@ -68,6 +68,28 @@ SECOND REVIEW ROUND (#1347, Copilot HIGH)
     `exit` inside it was invisible and a propagating block was reported as a
     downgrade. `test_re` matches that spelling deliberately, so it is a shape
     the guard was written for, not an exotic input.
+
+LATER ROUND (#1347, Copilot: here-strings)
+    The reachable defect of ROUND ONE, one string kind over, and the reason it
+    survived three review rounds is instructive: `_scan_line`'s docstring
+    **listed here-strings as a known limit and stated the wrong failure
+    direction** -- "a brace that stops being counted, which surfaces as
+    `unbalanced-if-block` -- a reported finding, not a silent pass". Measured,
+    the direction is a SILENT PASS: a here-string whose prose contains the word
+    `exit` made `TERMINATES_RE` match inside the literal and `scan_body` return
+    `[]` on a live downgrade. A note that names a limit and misdescribes it is
+    worse than no note, because it tells the next reader not to bother looking;
+    it is also how this one stayed closed while four other literal defects in
+    the same lexer were found and fixed.
+
+    Also worth recording: the review that raised it posted **no thread** -- it
+    came as a 🔵 "needs a closer look" summary with `Findings: None`, so nothing
+    would have chased it. And the fix is latent rather than live: the lexer finds
+    **0** here-string openers anywhere in the repo's `run:` bodies today.
+
+    Of the five tests added, three discriminate and two are pins; the table in
+    the here-string section says which and why, replayed against the pre-fix
+    revision before any was counted as coverage.
 """
 
 from __future__ import annotations
@@ -338,6 +360,144 @@ if ($code -ne 0) {
 """
     assert _kinds(body) == [guard.NO_EXIT], (
         f"an annotation is not a terminator; got {_kinds(body)!r}"
+    )
+
+
+# --- here-strings (multi-line literals) --------------------------------------
+#
+# THREE of the five below discriminate; two are pins, and they are labelled as
+# such rather than counted as evidence. Replayed against the pre-fix revision
+# (`git show HEAD:scripts/check-pwsh-exit-downgrade.py`, loaded beside the fixed
+# one) before any of them was claimed as coverage:
+#
+#   fixture                      pre-fix                  fixed
+#   dq here-string w/ 'exit'     []                       [no-terminal-exit]   YES
+#   sq here-string w/ 'exit'     []                       [no-terminal-exit]   YES
+#   unterminated here-string     [no-terminal-exit]       [unterminated-...]   YES
+#   here-string + a real exit    []                       []                   pin
+#   'user@' is not an opener     [no-terminal-exit]       [no-terminal-exit]   pin
+#
+# The first two are the reported defect: the scanner was line-based with no
+# cross-line state, so a here-string's TEXT was read as code and `exit` in prose
+# matched `TERMINATES_RE` -- `[]`, a silent pass on a live downgrade, in the
+# permissive direction. `_scan_line`'s docstring had claimed this limit surfaced
+# as a reported `unbalanced-if-block`; that claim was measured false, which is
+# what makes it worse than an unhandled case -- it told the next reader not to
+# look.
+
+
+def test_a_here_string_containing_the_word_exit_is_not_propagation():
+    """The reported defect. `exit` inside a multi-line literal is prose, so the
+    block still only warns and the body still needs a terminal `exit`."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+tolerated -- do not exit here, this is prose
+"@
+  Write-Warning $msg
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "a here-string's text is data, not a terminator -- pre-fix this returned "
+        f"[] and called a live downgrade propagation; got {_kinds(body)!r}"
+    )
+
+
+def test_a_single_quoted_here_string_containing_exit_is_not_propagation():
+    """`@'` … `'@` is the non-interpolating form and closes with its own quote."""
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @'
+tolerated -- do not exit here
+'@
+  Write-Warning $msg
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], f"got {_kinds(body)!r}"
+
+
+def test_a_here_string_does_not_hide_a_real_exit():
+    """REGRESSION PIN, not a discriminator -- `[]` on both revisions, because
+    pre-fix the stray `exit $code` was read as a terminator for the wrong reason
+    and post-fix for the right one.
+
+    Kept because it pins the other POLARITY: blanking the literal must not blank
+    the code after it. A fix that swallowed the rest of the body would pass the
+    two tests above and fail this one."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+some prose
+"@
+  Write-Warning $msg
+  exit $code
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    assert _kinds(body) == [], (
+        f"this block propagates; it must be silent. got {_kinds(body)!r}"
+    )
+
+
+def test_a_string_ending_in_an_at_quote_is_not_a_here_string_opener():
+    """REGRESSION PIN, not a discriminator -- identical on both revisions, since
+    pre-fix there was no opener detection at all and so nothing to false-positive.
+
+    Kept because it pins the DESIGN CHOICE the fix had to make, and the rejected
+    alternative is the natural one. `'@'` is this repo's DNS apex record name
+    (105-manage-record.yml:248) and ends with `@'`; a regex over the raw line
+    cannot tell it from an opener, and the quote-tracking loop can, because by
+    that `@` it is already inside a literal. Measured while writing this: a
+    `grep -E "@'\\s*$"` over the workflow tree reports exactly that apex line and
+    no real here-string, while the lexer reports **0** openers repo-wide -- so the
+    grep's only hit was its own false positive, and this defect is latent rather
+    than live."""
+    for apex in ("$Name = '@'", '$Name = "@"'):
+        assert guard._scan_line(apex)[2] is None, (
+            f"{apex!r} is a string holding @, not a here-string opener"
+        )
+    for opener, quote in (("$x = @'", "'"), ('$x = @"', '"')):
+        assert guard._scan_line(opener)[2] == quote, (
+            f"{opener!r} must open a here-string with {quote!r}"
+        )
+
+    body = """
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  Write-Warning "contact user@"
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+"""
+    assert _kinds(body) == [guard.NO_EXIT], (
+        "a trailing @\" inside a normal string must not swallow the rest of the "
+        f"body as here-string text; got {_kinds(body)!r}"
+    )
+
+
+def test_an_unterminated_here_string_is_reported_not_swallowed():
+    """Fail closed. Blanking to end-of-body would hide the `$LASTEXITCODE`
+    capture and make `scan_body` return `[]` -- trading one silent pass for
+    another, which is the mistake this whole section exists to stop."""
+    body = '''
+$code = $LASTEXITCODE
+if ($code -ne 0) {
+  $msg = @"
+this literal never closes
+  Write-Warning $msg
+}
+"done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+'''
+    findings = guard.scan_body(body)
+    assert [f.kind for f in findings] == [guard.UNTERMINATED_HERE], (
+        f"an unreadable body must be reported, not called clean; got {findings!r}"
+    )
+    assert findings[0].line == 4, (
+        f"the finding must name the OPENING line, not the end of the body; got line {findings[0].line}"
     )
 
 

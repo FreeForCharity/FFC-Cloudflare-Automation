@@ -133,6 +133,7 @@ EXIT_STATEMENT_RE = re.compile(r"^exit\b", re.IGNORECASE)
 UNBALANCED = "unbalanced-if-block"
 NO_EXIT = "no-terminal-exit"
 CONDITIONAL_EXIT = "conditional-terminal-exit"
+UNTERMINATED_HERE = "unterminated-here-string"
 
 
 @dataclass(frozen=True)
@@ -146,8 +147,11 @@ class Finding:
         return f"line {self.line} [{self.kind}] ${self.variable}: {self.detail}"
 
 
-def _scan_line(line: str) -> tuple[str, str]:
-    """Split one line into `(code, visible)`, both the same length.
+def _scan_line(line: str) -> tuple[str, str, str | None]:
+    """Split one line into `(code, visible, here_open)`; the first two are the
+    same length, and `here_open` is the quote character of a here-string this
+    line OPENS (`"` or `'`), else None. Cross-line state belongs to the caller
+    (`_scan_lines`), so this stays line-local.
 
     `visible` is the line with any trailing `#` comment removed and string
     literals left intact -- what a human should be shown quoted back at them.
@@ -173,13 +177,25 @@ def _scan_line(line: str) -> tuple[str, str]:
         PowerShell gives it no special meaning -- so `'a`'` consumed the real
         closing quote.
 
-    Known limit, stated rather than hidden: this is line-based, so a string
-    that spans lines (including a here-string) resets at the newline. The
-    failure direction is a brace that stops being counted, which surfaces as
-    `unbalanced-if-block` -- a reported finding, not a silent pass.
+    HERE-STRINGS were once listed here as a "known limit" whose "failure
+    direction is a brace that stops being counted, which surfaces as
+    `unbalanced-if-block` -- a reported finding, not a silent pass." **That was
+    measured and is false** (Copilot, #1347). A here-string whose text merely
+    contains the word `exit` made `TERMINATES_RE` match inside the literal, so a
+    real downgrade was filed as propagation and `scan_body` returned `[]`: a
+    SILENT PASS, in the permissive direction, in the exact class this guard
+    exists to catch -- the same defect as the single-line-literal one, one
+    string kind over. The limit note would have told the next reader not to
+    bother looking, which is worse than not mentioning it.
+
+    So here-strings are now tracked: `_scan_lines` blanks their contents, and a
+    here-string that never closes is REPORTED rather than swallowed (blanking to
+    end-of-body would hide the `$LASTEXITCODE` capture and return `[]` again --
+    trading one silent pass for another).
     """
     code: list[str] = []
     visible: list[str] = []
+    here_open: str | None = None
     quote: str | None = None
     i = 0
     n = len(line)
@@ -198,6 +214,22 @@ def _scan_line(line: str) -> tuple[str, str]:
             # (Copilot, #1347). Keeping them costs nothing: a quote is not a
             # brace, not a `#`, and not a terminator keyword, so none of the
             # questions asked of `code` can be answered differently by it.
+            # A here-string OPENER (`@"` / `@'`) must be the last token on its
+            # line, and is only an opener in code position -- which is why this
+            # is detected here, inside the quote-tracking loop, rather than by a
+            # regex over the raw line. `Write-Output "user@"` also ends in `@"`,
+            # and a regex cannot tell the two apart; the lexer can, because by
+            # the time it reaches that `@` it is already inside a literal.
+            if (
+                ch == "@"
+                and i + 1 < n
+                and line[i + 1] in ("'", '"')
+                and line[i + 2 :].strip() == ""
+            ):
+                here_open = line[i + 1]
+                visible.extend(line[i + 1 :])
+                code.extend(" " * len(line[i + 1 :]))
+                break
             code.append(ch)
             if ch in ("'", '"'):
                 quote = ch
@@ -227,7 +259,44 @@ def _scan_line(line: str) -> tuple[str, str]:
         visible.append(ch)
         code.append(" ")
         i += 1
-    return "".join(code), "".join(visible)
+    return "".join(code), "".join(visible), here_open
+
+
+def _scan_lines(lines: list[str]) -> tuple[list[str], list[str], int | None]:
+    """`_scan_line` over a whole body, carrying here-string state across lines.
+
+    Returns `(code_lines, visible_lines, unterminated_at)`, where the last is the
+    1-based line number of a here-string opener that never closed, or None.
+
+    PowerShell requires a here-string's closing delimiter to be the FIRST thing
+    on its line, so that is what is matched -- deliberately not `lstrip()`ed. A
+    permissive match would end the literal early and hand its remaining text back
+    to the code view, which is precisely the false negative this function exists
+    to close; requiring column 0 is both what the language says and the safe
+    direction if the two ever disagree.
+    """
+    code_lines: list[str] = []
+    visible_lines: list[str] = []
+    here: str | None = None
+    opened_at: int | None = None
+
+    for index, line in enumerate(lines):
+        if here is not None:
+            # Inside a here-string: content and terminator are both non-code.
+            if line.startswith(here + "@"):
+                here = None
+                opened_at = None
+            code_lines.append(" " * len(line))
+            visible_lines.append(line)
+            continue
+        code, visible, opens = _scan_line(line)
+        code_lines.append(code)
+        visible_lines.append(visible)
+        if opens is not None:
+            here = opens
+            opened_at = index + 1
+
+    return code_lines, visible_lines, opened_at
 
 
 def _if_block(code_lines: list[str], start: int) -> tuple[int, str] | None:
@@ -279,9 +348,24 @@ def _last_statement(
 
 def scan_body(text: str) -> list[Finding]:
     """Findings for one `run:` body written in PowerShell."""
-    scanned = [_scan_line(line) for line in text.splitlines()]
-    code_lines = [code for code, _ in scanned]
-    visible_lines = [visible for _, visible in scanned]
+    code_lines, visible_lines, unterminated_at = _scan_lines(text.splitlines())
+
+    if unterminated_at is not None:
+        # Fail closed, and BEFORE the `if not captured` return below -- that is
+        # the whole point. An unclosed here-string blanks everything after it,
+        # including any `$LASTEXITCODE` capture, so falling through would return
+        # `[]` and call an unreadable body clean.
+        return [
+            Finding(
+                UNTERMINATED_HERE,
+                "(body)",
+                unterminated_at,
+                "a here-string opens here and never closes (PowerShell wants the "
+                "closing `\"@` / `'@` as the FIRST thing on a line) -- everything "
+                "after it is unreadable to this guard, so it is reported rather "
+                "than scanned as if it were empty",
+            )
+        ]
 
     captured = [
         (index, match.group("var"))

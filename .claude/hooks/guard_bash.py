@@ -478,7 +478,29 @@ def _substitution_sources(text, depth=3):
     if depth <= 0:
         return
     i, n = 0, len(text)
+    quote = None
     while i < n:
+        ch = text[i]
+        # SINGLE quotes neutralize a substitution; DOUBLE quotes do not, and
+        # that asymmetry is the whole point -- round 5's vectors all live in
+        # `bash -c "$(...)"`, which expands. Verified with a `gh` shim in both
+        # directions rather than read off the grammar: the four quoted/escaped
+        # forms never reach gh, the four expanding ones always do.
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            # An escaped `$` or backtick is literal. Skipping the pair is what
+            # stops `echo "\$(gh api /markdown)"` -- text bash prints rather
+            # than runs -- from being read as an executable span.
+            i += 2
+            continue
+        if ch in "'\"":
+            quote = None if quote == ch else (quote or ch)
+            i += 1
+            continue
         if text.startswith("$(", i):
             inner = _call_args(text, i + 2)
             if inner is not None:
@@ -487,7 +509,7 @@ def _substitution_sources(text, depth=3):
                     yield nested
                 i += 2 + len(inner) + 1
                 continue
-        elif text[i] == "`":
+        elif ch == "`":
             end = text.find("`", i + 1)
             if end != -1:
                 inner = text[i + 1:end]

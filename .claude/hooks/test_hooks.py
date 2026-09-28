@@ -673,6 +673,23 @@ RULES = [
          'echo "$(gh api rate_limit)"', ALLOW),
         ("dynamic -c payload with no endpoint allowed",
          'bash -c "$(cat scripts/deploy.sh)"', ALLOW),
+        # SINGLE quotes neutralize a substitution and DOUBLE quotes do not, so
+        # scanning every `$(` span blocked prose that bash only ever prints.
+        # Reported on #1313 after the round above introduced it. All four are
+        # confirmed with the `gh` shim NOT to reach gh, and their expanding
+        # counterparts above are confirmed to reach it -- the pair is what
+        # makes this a distinction rather than a loosening.
+        ("substitution inside single quotes is literal",
+         "echo '$(gh api /markdown)'", ALLOW),
+        ("backtick inside single quotes is literal",
+         "echo '`gh api /markdown`'", ALLOW),
+        ("escaped dollar neutralizes the substitution",
+         'echo "\\$(gh api /markdown)"', ALLOW),
+        ("escaped backtick neutralizes the substitution",
+         'echo "\\`gh api /markdown\\`"', ALLOW),
+        # ...and the unquoted form, which does expand, must still block.
+        ("unquoted substitution still blocks",
+         "echo $(gh api /markdown)", BLOCK),
         # REGRESSION PINS, not discriminators -- said plainly because a green
         # row that proves nothing is how a table stops meaning anything. Both
         # survive every mutation tried against the payload scanner, including

@@ -407,6 +407,33 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 tests/workflow-logic/run_all.py
 
+      # The same list 706's `resolve` job gates every later job on. It ran
+      # ONLY there until 2026-09-28, which meant a broken script self-test
+      # could merge green and then surface at the next 706 dispatch -- as a
+      # failure in the migration, not in the PR that caused it. #1411 did
+      # exactly that: it added a `shrinkPdf` assertion that needs ghostscript,
+      # passed on every developer host and in review, and turned run
+      # 36417508156 red inside `resolve`, which runs BEFORE `convert` installs
+      # ghostscript.
+      #
+      # Deliberately WITHOUT installing sharp or ghostscript. A self-test that
+      # needs host tooling the gate it guards does not have is the defect being
+      # caught here; installing the tooling would hide it again and make this
+      # step agree with 706 only by accident.
+      - name: Script self-tests (the list 706 gates on)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for s in capture-wordpress-api parse-host-mounts verify-reused-capture \
+                   replace-forms-with-mailto integrate-clone-into-nextjs verify-no-legacy \
+                   assess-capture-completeness dedupe-capture-assets heal-missing-asset-refs \
+                   fetch-asset-subresources clone-to-routes-lib convert-clone-to-routes \
+                   optimize-captured-assets extract-shared-css check-publishable-size; do
+            echo "::group::$s"
+            node "scripts/$s.mjs" --self-test
+            echo "::endgroup::"
+          done
+
       - name: Check formatting (Prettier)
         run: |
           npx --yes prettier@3.8.1 --check . --ignore-unknown

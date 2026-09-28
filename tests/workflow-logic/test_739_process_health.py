@@ -1332,10 +1332,10 @@ def test_a_quoted_bold_header_cannot_fake_a_heartbeat():
     """The 739-specific narrowing, and the reason this pattern is NOT a copy of
     747's.
 
-    #1341's `CONDUCTOR_RE` admits `>` in its prefix class on purpose — it scans
-    for liveness only and can afford to be generous. (That module arrives as
-    `scripts/conductor-liveness-lib.js` when #1341 lands and is not in this tree
-    yet, so the claim is checkable on the PR rather than in the checkout.) This
+    `CONDUCTOR_RE` in `scripts/conductor-liveness-lib.js` admits `>` in its prefix
+    class on purpose — it scans for liveness only and can afford to be generous.
+    (That module is in the tree since #1341 merged, so read it and compare rather
+    than taking this docstring's word for it.) This
     module pairs START with END, so a blockquoted END can retire a live alarm as
     well as fake a heartbeat, and the widening must not have picked `>` up along
     with the formats — which is why this assertion is not inherited from 747 and

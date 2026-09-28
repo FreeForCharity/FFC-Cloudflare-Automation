@@ -126,7 +126,21 @@ jobs:
 
           "out_dir=$outDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          # Published `out_dir` first so the failure below still names readable files.
+          # `out_dir` is published BEFORE the failure below because the SUCCESS
+          # path's upload step needs it. On the failure path it buys less than the
+          # first version of this comment claimed: `Upload Cloudflare outputs` has
+          # no `if:`, so the runner's default skips it once this step exits
+          # non-zero. The paths in the `::error::` lines below are therefore
+          # runner-local -- readable in this step's log, NOT downloadable as an
+          # artifact.
+          #
+          # Deliberately NOT given `if: always()`, which is AC3's reasoning one
+          # level down: that upload sets `if-no-files-found: error`, and the
+          # empty-token failure above exits before `out_dir` is published at all,
+          # so an unconditional upload would resolve `path` to `/*.txt` and add a
+          # second, misleading red to a run that already stated its real cause.
+          # Changing that means giving the upload a no-data path of its own, not
+          # just relaxing its condition.
           $fatal = @()
           if ($auditExit -ne 0) {
             $fatal += "Update-CloudflareDns.ps1 -Zone $domain -Audit exited with code $auditExit (output saved to $auditPath)"

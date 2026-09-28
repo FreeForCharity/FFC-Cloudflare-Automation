@@ -639,6 +639,25 @@ RULES = [
         # tries to open a file named `-c`, fails, and never reaches gh -- so
         # blocking these was a false positive on commands that execute
         # nothing. Reported by review on #1313.
+        # A GLUED `-c` payload does not run, so blocking it would be a false
+        # positive. Reported on #1313 as a bypass; the premise is wrong for
+        # bash and sh, and these rows exist so it is not re-reported a third
+        # time. `-c` is not a getopt-style option -- its argument must be the
+        # NEXT word -- so `-c'...'` arrives as the single word `-cgh api /...`
+        # and the shell reads `g`, `h`, ... as option letters. Measured:
+        #
+        #   bash -c'echo RAN'      -> rc=1  bash: - : invalid option
+        #   sh   -c'echo RAN'      -> rc=2  sh: 0: Illegal option -h
+        #   bash -c 'echo RAN'     -> rc=0  RAN            (the control)
+        #
+        # A `gh` shim on PATH confirms the negative directly: gh is never
+        # reached by any glued form, and is reached by the separate-word one.
+        ("glued -c payload does not run, so it is allowed",
+         "bash -c'gh api /markdown'", ALLOW),
+        ("glued -c payload with escaped spaces allowed",
+         r"bash -cgh\ api\ /markdown", ALLOW),
+        ("sh glued -c payload allowed",
+         "sh -c'gh api /markdown'", ALLOW),
         ("end-of-options before -c allowed",
          "bash -- -c 'gh api /markdown'", ALLOW),
         ("end-of-options with a long option allowed",

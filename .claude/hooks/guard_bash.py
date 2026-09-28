@@ -68,12 +68,25 @@ def _strip_quoted(text):
     copy. It fails PERMISSIVELY, which is the direction that matters: the
     caller sees a command with nothing left in it to object to.
 
-    The scanner's own rule, stated as such because it is deliberately BROADER
-    than bash's: outside single quotes a backslash consumes the next character
-    (so `\"` does not close a double-quoted span); inside single quotes nothing
-    is special and only `'` closes. The escaped character is blanked along with
-    its backslash, because an escaped character is data and never an operator,
-    which is the only question any caller of this asks.
+    The scanner's own rule, which is STATE-AWARE and differs from bash in one
+    direction only. Inside single quotes nothing is special and only `'`
+    closes. Outside them a backslash consumes the next character (so `\"` does
+    not close a double-quoted span), and what happens to that character
+    depends on where it is:
+
+    - inside DOUBLE quotes, both go -- the span's contents are blanked anyway,
+      and honouring the escape is only what stops `\"` ending the span early;
+    - UNQUOTED, the backslash goes (it is syntax) and the escaped character
+      survives unless it would itself read as an operator or a quote. An
+      escaped ordinary character is data the command really receives, and
+      blanking it hid a live endpoint from rule 8 -- `gh api \/markdown`
+      reaches gh as `/markdown`, measured with a shim (#1313).
+
+    This paragraph said the pair is ALWAYS blanked until 2026-09-28, which was
+    true when written and false after the state test landed three commits
+    later. Caught in review, not by a test -- nothing asserts a docstring's
+    agreement with its function, and this is the second time on this branch
+    that prose here outlived the code it described.
 
     Where that is broader than the shell, and why it is safe: inside double
     quotes bash escapes only backslash, `"`, `$`, backtick and newline, and

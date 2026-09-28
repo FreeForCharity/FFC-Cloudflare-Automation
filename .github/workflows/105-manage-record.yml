@@ -1,7 +1,8 @@
 name: '105. DNS - Manage Record (Manual / Issue Label) [CF]'
 run-name:
-  'Manage Record: ${{ inputs.domain }} (${{ inputs.record_type }} ${{ inputs.record_name }})
-  (dry_run=${{ inputs.dry_run }})'
+  "${{ inputs.domain && format('Manage Record: {0} ({1} {2}) (dry_run={3})', inputs.domain,
+  inputs.record_type, inputs.record_name, inputs.dry_run) || format('Manage Record: from issue #{0}
+  (dry_run=true)', github.event.issue.number) }}"
 on:
   workflow_dispatch:
     inputs:

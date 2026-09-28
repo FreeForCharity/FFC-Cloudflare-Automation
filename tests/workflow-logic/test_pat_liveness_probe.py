@@ -53,7 +53,7 @@ MASK_LINE = 'echo "::add-mask::$token"'
 # The census is asserted, not assumed. A helper that quietly returns [] makes
 # every "for every step ..." test below pass over nothing -- the reassuring
 # direction, and the shape L47 warns about one layer down in the harness.
-EXPECTED_STEPS = 19
+EXPECTED_STEPS = 21
 
 BASH = shutil.which("bash")
 CURL = shutil.which("curl")
@@ -337,7 +337,8 @@ def test_live_token_passes_and_exports_gh_token():
 def test_revoked_token_fails_with_the_revoked_message():
     proc, gh_env, _ = run_step(_body(DELIVER, "deliver"), http_code="401")
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "::error::read-all-cbm-github-pat returned 401 from GET /user" in proc.stdout, proc.stdout
+    # 502/deliver's FIRST PAT step is the read PAT since #848 retired read-all-cbm-github-pat.
+    assert "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned 401 from GET /user" in proc.stdout, proc.stdout
     assert "not missing" in proc.stdout, proc.stdout
     assert EMPTY_MARKER not in proc.stdout, "a revoked token must not be reported as an empty one"
     assert "GH_TOKEN" not in gh_env, "a rejected token was exported to GITHUB_ENV anyway"

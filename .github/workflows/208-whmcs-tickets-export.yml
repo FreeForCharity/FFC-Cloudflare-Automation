@@ -169,6 +169,41 @@ jobs:
           if ($env:IN_OUTPUT_FILE -match '[\r\n]') {
             throw "output_file contains a carriage return or newline. The 'Upload CSV artifact' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
           }
+          # WHY THE SET STOPS AT `* ? [ ]`, and why it is deliberately NOT widened to
+          # `{ } ( ) !`. The reason is a fact about a THIRD-PARTY package, which is why
+          # it is written here instead of left to be re-derived by every reviewer
+          # (#1380 — raised as a High on #1361 on the theory that `{a,b}` and `!(x)`
+          # smuggle extra paths in, and it does not reproduce).
+          #
+          # `@actions/glob@0.7.0` builds its minimatch with brace expansion and
+          # extglobs DISABLED — `lib/internal-pattern.js`, `nobrace: true` (:58) and
+          # `noext: true` (:61) — so `{a,b}` and `!(x)` reach the globber as LITERAL
+          # TEXT, not as alternations. Re-measured 2026-09-28 against a fixture tree
+          # holding a legitimate CSV and a planted `.azure/msal_token_cache.json`, with
+          # `implicitDescendants: false`:
+          #
+          #   `{<csv>,<secret>}`               0 hits    `!(nope).csv`        0 hits
+          #   `{whmcs_domains,nope}.csv`       0 hits    `@(a|whmcs_domains)` 0 hits
+          #   `(x).csv`                        0 hits — literal, not a group
+          #   `!<csv>` alone                   0 hits — an exclude can only REMOVE
+          #   `.azure/[m]sal_token_cache.json` 1 hit  — the REAL file, via the class
+          #   `<csv>` and `<dir>/*.csv`        1 hit each — the controls, so no 0
+          #                                               above is read as evidence
+          #
+          # The `[m]sal…` row is the measurement behind the `[` / `]` paragraph: that
+          # character class is the shape with no self-block, and it resolves to a file
+          # this export never wrote.
+          #
+          # So the set is not widened. `{ } ( ) !` are legal filename characters that
+          # expand to nothing at this consumer, so a guard rejecting them would refuse
+          # legitimate paths while STATING a hazard that does not exist — which is its
+          # own failure mode, and the one #1380 asks not to introduce. What would
+          # change this is the dependency, not the character list: if `@actions/glob`
+          # ever ships `nobrace: false` or `noext: false`, this set must widen with it.
+          # Re-measure that, rather than adding characters defensively.
+          #
+          # The one multi-path vector that DOES work is the newline, refused above.
+          # That is why the newline guard cannot be reordered below this one.
           if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
             throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload CSV artifact' step, whose path: is a glob selector, so a pattern can match files this export never wrote. Pass a plain relative path."
           }

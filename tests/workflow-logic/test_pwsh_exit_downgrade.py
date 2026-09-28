@@ -634,23 +634,35 @@ prose
 
 def test_a_terminator_tail_can_open_another_here_string():
     """`"@ + @"` -- the terminator line is itself a here-string opener, so state
-    is taken from the tail's own scan rather than simply cleared. Otherwise the
-    second literal's text would be read as code, which is the original defect
-    again one line further on."""
+    comes from the tail's own scan rather than being cleared. Otherwise the second
+    literal's text is read as code: the original defect, one line further on.
+
+    The second here-string sits INSIDE the downgrade block deliberately. An
+    earlier version of this fixture put it after the block, where its text cannot
+    reach the verdict -- so `here = tail_opens` -> `here = None` SURVIVED the
+    mutation review while this test passed. The assertion was true and proved
+    nothing, which is this module's recurring lesson; placing the literal where it
+    can change the answer is what makes it evidence:
+
+        state carried (correct) -> [no-terminal-exit]
+        state cleared (mutant)  -> []                  <- silent
+    """
     body = '''
 & pwsh -NoProfile -File .\\x.ps1
 $code = $LASTEXITCODE
-if ($code -ne 0) { Write-Warning "tolerated $code" }
-$a = @"
+if ($code -ne 0) {
+  $a = @"
 one
 "@ + @"
-two -- exit is prose here
+two -- do not exit here
 "@
+  Write-Warning $a
+}
 "done" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 '''
     assert _kinds(body) == [guard.NO_EXIT], (
-        "the second here-string's text is data; if it were read as code its "
-        f"`exit` would suppress the finding. got {_kinds(body)!r}"
+        "the second here-string's text is data; read as code its `exit` would "
+        f"make this block look like propagation. got {_kinds(body)!r}"
     )
 
 

@@ -574,9 +574,15 @@ after this section shipped without them:
   first without the second.
 
 **The sandboxed worker has no `gh` CLI at all** (#1360), so from there read the same fact through
-`mcp__github__list_pull_requests` with `state: closed`, `sort: updated`, **`direction: desc`** and
-the `merged_at` field — the `asc` default applies identically there, and it was measured through
-that client. The discriminator is the field, not the client.
+the GitHub MCP server's **`list_pull_requests`** tool with `state: closed`, `sort: updated`,
+**`direction: desc`** and the `merged_at` field — the `asc` default applies identically there, and
+it was measured through that client. The discriminator is the field, not the client.
+
+Named bare, as `CLAUDE.md` names every other MCP tool (`actions_run_trigger`, `pending_deployments`,
+`actions_list`, `get_job_logs`), because **the prefix is the runtime's, not the tool's**: the same
+tool is `mcp__github__list_pull_requests` to a Claude Code session and something else again to
+another agent, and this file is onboarding for _any_ of them. Match on the tool name and the
+parameters; if your runtime's spelling differs, that is a prefix, not a different tool.
 
 One residual imprecision, stated rather than left to be rediscovered: `updated_at` is not
 `merged_at`, so an old PR commented on today outranks an untouched newer merge. It is a sound

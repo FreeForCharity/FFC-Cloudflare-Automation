@@ -257,12 +257,30 @@ def test_ac1_the_mcp_spelling_carries_the_same_two_parameters():
 
 def test_ac1_is_executable_by_the_agent_class_that_reads_it():
     """The sandboxed worker has no `gh` CLI (#1360), so a `gh`-only instruction
-    is unrunnable by the one reader that hits this state every run."""
-    section = _section()
-    assert "mcp__github__list_pull_requests" in section, (
-        "the section prescribes only a `gh` call; the sandboxed worker cannot run it"
+    is unrunnable by the one reader that hits this state every run.
+
+    Matches the **tool name**, not one runtime's prefixed spelling. This assertion
+    first pinned `mcp__github__list_pull_requests`, which is what a Claude Code
+    session calls it -- correct for that runtime and wrong as a guard, because
+    `AGENTS.md` is onboarding for *any* agent and a prefix is the runtime's rather
+    than the tool's. A test pinning one prefix would have to be edited, not merely
+    re-read, the first time the doc was made runtime-agnostic. Reported by Copilot
+    on #1390.
+
+    Matched on a phrase only the *instruction* carries, not on the bare tool name:
+    the paragraph explaining that the prefix is runtime-specific necessarily also
+    contains `list_pull_requests`, so a bare-token assertion would stay green with
+    the instruction deleted. That is the fourth appearance in this module of one
+    defect -- an assertion a neighbouring sentence answers -- and it was introduced
+    by this very fix, which is why it is called out here rather than just avoided.
+    """
+    flat = _section_flat()
+    assert "GitHub MCP server's" in flat, (
+        "the section prescribes only a `gh` call; the sandboxed worker, which has no "
+        "`gh` CLI, cannot run it"
     )
-    assert "#1360" in section, "the section does not cite the no-gh-CLI issue"
+    assert "list_pull_requests" in flat, "the MCP instruction names no tool"
+    assert "#1360" in flat, "the section does not cite the no-gh-CLI issue"
 
 
 # --------------------------------------------------------------------------

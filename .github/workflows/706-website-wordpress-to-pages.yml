@@ -135,6 +135,60 @@ on:
         required: false
         type: string
         default: ''
+      extract_shared_css:
+        description: >-
+          Lift byte-identical inline <style> blocks out of the captured pages into shared
+          stylesheets under public/_ffc-css, replacing each with a <link> AT THE SAME POSITION so
+          the cascade is unchanged. Unlike the image and PDF passes this is not a quality trade: the
+          visitor stops re-downloading the same CSS on every page and gets it once from cache, so
+          pages get lighter AND the site gets faster. Measured on newheightseducation.org: 130.2 MB
+          of HTML over 785 fragments, mean 170 KB, SMALLEST page 106 KB -- 64.3 MB of that is inline
+          <style> and 62.5 MB is byte-identical repetition. Extracting the 55 safe blocks removes
+          36.7 MB of inline CSS for 0.18 MB of .css plus 0.43 MB of <link>: net 36.4 MB off the
+          repo, and in the built export 133.9 -> 113.9 MB of HTML plus 187.5 -> 157.6 MB of Next's
+          RSC payloads, which embed the same markup -- 49.9 MB off what ships. Blocks carrying
+          url(#fragment) or %%BASE%% stay inline because moving them changes what the reference
+          resolves against. Verified by a built-vs-built pixel diff: 33 of 34 pages identical, every
+          page height identical, same-build control 0.000%. Off by default.
+        required: false
+        type: boolean
+        default: false
+      recode_all_images:
+        description: >-
+          Re-encode every captured PNG, JPEG and WebP to WebP, not only those over the per-file
+          budget. GIF is deliberately NOT included -- re-encoding one drops its animation -- and SVG
+          is vector, so "every raster image" would overstate what this does: `RECODABLE` in
+          capture-wordpress-api.mjs is the authority on the set. Off by default: it renames
+          thousands of files, and a migration that already fits should not pay that churn. Turn it
+          on when the tree exceeds a host's TOTAL size limit, which the per-file budget cannot help
+          with -- a site can be far too heavy without any single file being too big. Measured on
+          newheightseducation.org: of 3,888 captured JPEGs totalling 175.8 MB, ZERO exceed the 400
+          KB budget (mean 46 KB), so the budget pass examined none of them, while the three-host
+          tree came to 1169.6 MB against Pages' 1024 MB ceiling. Re-encoding them all yields 67.7
+          MB, a 61.5% saving. Each file still has to clear the existing 25% floor to be kept, so one
+          that does not earn its rename keeps its original bytes.
+        required: false
+        type: boolean
+        default: false
+      shrink_all_pdfs:
+        description: >-
+          Downsample EVERY captured PDF with Ghostscript, not only those over max_pdf_mb. The
+          profile is not fixed: PDF_DOWNSAMPLE_LADDER is tried in order (/ebook, then /screen) and
+          the FIRST rung whose output lands under max_pdf_mb wins, so a file /ebook cannot bring
+          under budget is kept at /screen, which is a markedly coarser image. On
+          newheightseducation.org that rung is unreachable -- the largest /ebook output is 3.5 MB
+          against a 90 MB budget -- but lowering max_pdf_mb far enough would reach it. The same
+          structural gap as recode_all_images, on the other heavy asset class: a per-file budget
+          cannot answer a TOTAL-size limit. Measured on newheightseducation.org: 24 PDFs totalling
+          142.1 MB, LARGEST 13.1 MB against a 90 MB budget, so the budget pass examined none of
+          them. Downsampling all 24 gives 33.3 MB, a 108.8 MB (77%) saving. Page counts were
+          preserved on all 24 and page-one renders at 100 dpi differ from the originals by
+          0.00%-3.28% (mean 0.40%). Unlike images, a shrunk PDF KEEPS ITS NAME, so no reference is
+          rewritten and no bookmarked or shared link breaks. Any file the pass makes larger is
+          declined and ships as captured -- two of the 24 did.
+        required: false
+        type: boolean
+        default: false
       max_pdf_mb:
         description: >-
           Downsample any captured PDF larger than this, in MB. GitHub REFUSES a push containing any
@@ -517,6 +571,7 @@ jobs:
           node scripts/fetch-asset-subresources.mjs --self-test
           node scripts/clone-to-routes-lib.mjs --self-test
           node scripts/convert-clone-to-routes.mjs --self-test
+          node scripts/extract-shared-css.mjs --self-test
           node scripts/check-publishable-size.mjs --self-test
 
   convert:
@@ -763,6 +818,8 @@ jobs:
           IGNORE_HOSTS: ${{ needs.resolve.outputs.ignore_hosts }}
           MOUNTS: ${{ needs.resolve.outputs.mounts }}
           MAX_PDF_MB: ${{ needs.resolve.outputs.max_pdf_mb }}
+          RECODE_ALL_IMAGES: ${{ inputs.recode_all_images }}
+          SHRINK_ALL_PDFS: ${{ inputs.shrink_all_pdfs }}
         shell: bash
         run: |
           set -uo pipefail
@@ -803,6 +860,8 @@ jobs:
             if [ "$POSTS" = "true" ]; then args+=(--include-posts); fi
             if [ -n "$IGNORE_HOSTS" ]; then args+=(--ignore-hosts "$IGNORE_HOSTS"); fi
             if [ -n "$MAX_PDF_MB" ]; then args+=(--max-pdf-mb "$MAX_PDF_MB"); fi
+            if [ "$RECODE_ALL_IMAGES" = "true" ]; then args+=(--recode-all-images); fi
+            if [ "$SHRINK_ALL_PDFS" = "true" ]; then args+=(--shrink-all-pdfs); fi
 
             echo "::group::capture $label"
             # `|| rc=$?`, never `set +e … set -e`. This step declares
@@ -1103,6 +1162,20 @@ jobs:
       # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
       # 108.72 and 167.22 MB. Answering it here costs milliseconds.
       #
+      # Before the size gate on purpose: the gate exists to catch a tree the
+      # host will refuse, and this pass is one of the things that gets a tree
+      # under that limit. Running it afterwards would fail the run on a size
+      # the very next step was about to fix.
+      - name: Lift duplicated inline CSS into shared stylesheets
+        if: inputs.extract_shared_css
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/extract-shared-css.mjs \
+            --content-dir ffc-ex/src/clone-content \
+            --css-dir ffc-ex/public/_ffc-css \
+            --href-base '%%BASE%%/_ffc-css'
+
       # Named files, not a count: an operator told "3 files are too large" has
       # to re-run the crawl to learn which three.
       - name: Gate - the tree must be publishable (push + Pages limits)
@@ -1633,6 +1706,20 @@ jobs:
       # was refused by the pre-receive hook over three EdGuide PDFs of 115.93,
       # 108.72 and 167.22 MB. Answering it here costs milliseconds.
       #
+      # Before the size gate on purpose: the gate exists to catch a tree the
+      # host will refuse, and this pass is one of the things that gets a tree
+      # under that limit. Running it afterwards would fail the run on a size
+      # the very next step was about to fix.
+      - name: Lift duplicated inline CSS into shared stylesheets
+        if: inputs.extract_shared_css
+        shell: bash
+        run: |
+          set -euo pipefail
+          node automation/scripts/extract-shared-css.mjs \
+            --content-dir ffc-ex/src/clone-content \
+            --css-dir ffc-ex/public/_ffc-css \
+            --href-base '%%BASE%%/_ffc-css'
+
       # Named files, not a count: an operator told "3 files are too large" has
       # to re-run the crawl to learn which three.
       - name: Gate - the tree must be publishable (push + Pages limits)

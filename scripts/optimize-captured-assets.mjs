@@ -47,6 +47,7 @@ import {
   readdirSync,
   statSync,
   mkdtempSync,
+  mkdirSync,
   rmSync,
   existsSync,
 } from 'node:fs';
@@ -165,38 +166,118 @@ export function selectTargets(files, { jpegs, pdfs }) {
  * trying at all, versus skip this one file -- and ENOENT is what separates
  * them.
  */
-export async function shrinkPdf(buf, state) {
-  if (state.gsMissing) return { ok: false };
+/**
+ * Did the process fail to START, as opposed to running and rejecting its input?
+ *
+ * Node distinguishes the two by the TYPE of `err.code`, which is measurable
+ * rather than folklore. Measured on this host with `execFile`:
+ *
+ *   absent binary            code="ENOENT"  (string)
+ *   present, not executable  code="EACCES"  (string)
+ *   a directory              code="EACCES"  (string)
+ *   present, exits 3         code=3         (number), signal=null
+ *
+ * So a string code means gs never ran and no later file will fare better; a
+ * number means gs ran and refused THAT input, which says nothing about the
+ * next file. A signal kill leaves `code` null and sets `signal`, which is
+ * also "it ran" -- and `typeof null` is 'object', so it falls on the right
+ * side here without a special case.
+ */
+export function isSpawnFailure(err) {
+  return Boolean(err) && typeof err.code === 'string';
+}
+
+/**
+ * Is ghostscript usable on this host?
+ *
+ * Exported and shared with the self-test rather than written twice. The
+ * duplicate spelling is what let #1411 ship a test that silently required a
+ * binary: the production path asks this question, the test assumed the
+ * answer, and the two could not be compared because they were different code.
+ *
+ * Deliberately broader than `isSpawnFailure`, and the asymmetry is the point.
+ * This one gates a whole run, so it fails CLOSED: a `gs` that cannot even
+ * report its version is not one to hand a charity's 24 PDFs to, whether it is
+ * absent, unexecutable or simply broken. `isSpawnFailure` gates a RETRY, and
+ * there the only question is whether trying the next file could differ.
+ */
+export async function haveGhostscript() {
+  return new Promise((res) => execFile('gs', ['--version'], (err) => res(!err)));
+}
+
+export const GS_BIN = 'gs';
+
+/**
+ * `gsBin` exists so the latch can be tested on ANY host, and it has to be a
+ * parameter rather than a PATH shadow: `execvp` treats an EACCES candidate as
+ * "keep looking", so prepending an unrunnable `gs` to PATH silently falls
+ * through to the real one further along. Measured -- the shadow attempt
+ * passed on a host with no ghostscript and failed on a host with it, which is
+ * the wrong way round and exactly the tell. An absolute path performs no
+ * search, so the failure is the one the test asked for.
+ */
+export async function shrinkPdf(buf, state, gsBin = GS_BIN) {
+  if (state.gsMissing) return { ok: false, spawnFailed: true };
   const dir = mkdtempSync(join(tmpdir(), 'ffc-optpdf-'));
   const src = join(dir, 'in.pdf');
   const dest = join(dir, 'out.pdf');
   try {
-    writeFileSync(src, buf);
-    await new Promise((res, rej) => {
-      execFile(
-        'gs',
-        [
-          '-q',
-          '-dNOPAUSE',
-          '-dBATCH',
-          '-dSAFER',
-          '-sDEVICE=pdfwrite',
-          `-dPDFSETTINGS=${PDF_PROFILE}`,
-          '-dDetectDuplicateImages=true',
-          '-o',
-          dest,
-          src,
-        ],
-        { maxBuffer: 1 << 20 },
-        (err) => (err ? rej(err) : res()),
-      );
-    });
-    return existsSync(dest) ? { ok: true, buffer: readFileSync(dest) } : { ok: false };
-  } catch (err) {
-    // Preflight already refused a run whose gs is missing, so an ENOENT here
-    // means it vanished mid-run; either way this file is not downsampled.
-    if (err && err.code === 'ENOENT') state.gsMissing = true;
-    return { ok: false };
+    // OUR OWN file I/O, outside the latching catch below on purpose.
+    //
+    // `writeFileSync` reports EISDIR, ENOENT and ERR_INVALID_ARG_TYPE -- all
+    // STRING codes, measured -- so a disk-full or permission fault here is
+    // indistinguishable from a failed spawn by code alone. Inside that catch
+    // it would latch `gsMissing`, and every remaining PDF would then be
+    // reported as "ghostscript could not process": a disk problem wearing a
+    // missing-encoder costume, which is the exact accounting dishonesty
+    // #1411 existed to remove. Scoped structurally rather than by sniffing
+    // `err.syscall`, so it cannot be reintroduced by a new call joining the
+    // block.
+    try {
+      writeFileSync(src, buf);
+    } catch {
+      return { ok: false, spawnFailed: false };
+    }
+
+    try {
+      await new Promise((res, rej) => {
+        execFile(
+          gsBin,
+          [
+            '-q',
+            '-dNOPAUSE',
+            '-dBATCH',
+            '-dSAFER',
+            '-sDEVICE=pdfwrite',
+            `-dPDFSETTINGS=${PDF_PROFILE}`,
+            '-dDetectDuplicateImages=true',
+            '-o',
+            dest,
+            src,
+          ],
+          { maxBuffer: 1 << 20 },
+          (err) => (err ? rej(err) : res()),
+        );
+      });
+    } catch (err) {
+      // Latched on any SPAWN failure, not just ENOENT. A `gs` that is present
+      // but unexecutable answers EACCES, and retrying it once per PDF is as
+      // pointless as retrying one that is absent -- the ENOENT-only test left
+      // a 24-PDF run spawning 24 doomed processes on exactly that host.
+      //
+      // A numeric code must NOT latch: gs ran and refused this file, and the
+      // next file may well convert. That is the distinction the whole run
+      // depends on, so it is reported back to the caller too rather than only
+      // recorded here.
+      const spawnFailed = isSpawnFailure(err);
+      if (spawnFailed) state.gsMissing = true;
+      return { ok: false, spawnFailed };
+    }
+
+    if (!existsSync(dest)) return { ok: false, spawnFailed: false };
+    // Reading the output is ours too, and a failure here is not gs's fault.
+    const out = readOrNull(dest);
+    return out ? { ok: true, buffer: out } : { ok: false, spawnFailed: false };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -260,9 +341,9 @@ async function main() {
       /* reported by the preflight below, with the others */
     }
   }
-  let haveGhostscript = true;
+  let haveGs = true;
   if (doPdfs) {
-    haveGhostscript = await new Promise((res) => execFile('gs', ['--version'], (err) => res(!err)));
+    haveGs = await haveGhostscript();
   }
   // Fail before touching a single file, so a run that cannot do what was
   // asked stops here rather than producing a half-optimized tree.
@@ -270,7 +351,7 @@ async function main() {
     jpegs: doJpegs,
     pdfs: doPdfs,
     haveSharp: Boolean(sharp),
-    haveGhostscript,
+    haveGhostscript: haveGs,
   });
   if (missing.length) {
     for (const m of missing) console.error(`::error::${m}`);
@@ -448,10 +529,83 @@ async function selfTest() {
   eq(
     'shrinkPdf reports a refusal as {ok:false}, not as a buffer-or-null',
     await shrinkPdf(Buffer.from('not a pdf'), { gsMissing: true }),
-    { ok: false },
+    { ok: false, spawnFailed: true },
   );
+
+  // --- spawn failure vs. a process that ran and said no -----------------
+  // Host-independent: these are the four error shapes measured from
+  // `execFile` (see isSpawnFailure). The distinction decides whether the run
+  // stops shelling out, so it is pinned here rather than inferred from
+  // whatever `gs` this host happens to have.
+  eq('ENOENT is a spawn failure', isSpawnFailure({ code: 'ENOENT' }), true);
+  eq(
+    'EACCES is a spawn failure too -- present but unexecutable',
+    isSpawnFailure({ code: 'EACCES' }),
+    true,
+  );
+  eq('a NUMERIC code is not: gs ran and refused this input', isSpawnFailure({ code: 3 }), false);
+  eq('exit 0 as a number is still "it ran"', isSpawnFailure({ code: 0 }), false);
+  eq('a signal kill is "it ran"', isSpawnFailure({ code: null, signal: 'SIGKILL' }), false);
+  eq('no error at all is not a spawn failure', isSpawnFailure(null), false);
+  eq('...nor is undefined', isSpawnFailure(undefined), false);
+
   {
-    // gs on a real (tiny) PDF: ok:true, and the caller then decides on size.
+    // A failure in OUR OWN file I/O must not latch, however much it looks
+    // like a spawn failure. Measured, `writeFileSync` reports EISDIR, ENOENT
+    // and ERR_INVALID_ARG_TYPE -- every one a STRING code, so `isSpawnFailure`
+    // cannot tell them from a failed spawn and the scoping is what protects
+    // this. A non-Buffer payload is the portable way to provoke it: no
+    // filesystem state, same error shape as a disk-full.
+    //
+    // Latching here would report every REMAINING pdf as "ghostscript could
+    // not process" -- a disk fault wearing a missing-encoder costume, which
+    // is the accounting dishonesty #1411 removed.
+    const state = {};
+    const res = await shrinkPdf({ not: 'a buffer' }, state);
+    eq('a write failure is a refusal', res.ok, false);
+    eq('...not reported as a spawn failure', res.spawnFailed, false);
+    eq('...and must NOT latch: the next pdf still gets its chance', state.gsMissing, undefined);
+  }
+  {
+    // The latch itself, on EVERY host, by making `gs` unrunnable for the
+    // duration of one call: a DIRECTORY named `gs`, first on PATH. Measured
+    // above, that answers EACCES on this platform; on any platform it cannot
+    // be executed, so the code is a string either way and the latch must fire.
+    //
+    // Needed because the invariant asserted in the no-ghostscript branch below
+    // moves BOTH of its sides: reverting the latch to ENOENT-only also stops
+    // `spawnFailed` reporting, the two agree, and the assertion passes. That
+    // mutation survived all three host shapes until this case existed.
+    const shadow = mkdtempSync(join(tmpdir(), 'ffc-gsshadow-'));
+    const unrunnable = join(shadow, 'gs');
+    mkdirSync(unrunnable);
+    try {
+      const state = {};
+      const res = await shrinkPdf(
+        Buffer.from('%PDF-1.1\ntrailer<<>>\n', 'latin1'),
+        state,
+        unrunnable,
+      );
+      eq('a gs that cannot be executed is a refusal', res.ok, false);
+      eq('...reported as a spawn failure', res.spawnFailed, true);
+      eq('...and latched, so the next PDF does not spawn it again', state.gsMissing, true);
+    } finally {
+      rmSync(shadow, { recursive: true, force: true });
+    }
+  }
+  {
+    // gs on a real (tiny) PDF. WHICH assertion applies depends on whether this
+    // host has ghostscript, and branching on that is the fix rather than a
+    // dodge.
+    //
+    // Written as an unconditional `ok === true`, this passed everywhere a
+    // person runs it -- gs is on most workstations -- and failed on a bare
+    // runner. 706's `resolve` job runs this gate BEFORE the `convert` job
+    // installs ghostscript, and `Validate Repository` does not run this
+    // self-test at all, so #1411 merged green and then turned 706 red at the
+    // next dispatch (run 36417508156), blocking the migration it was written
+    // to unblock. The companion fix is in 722: the same self-tests now run
+    // there, so the next host-dependent assertion is caught on its own PR.
     const tiny = Buffer.from(
       '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
         '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
@@ -459,13 +613,28 @@ async function selfTest() {
         'trailer<</Root 1 0 R>>\n',
       'latin1',
     );
-    const res = await shrinkPdf(tiny, {});
-    eq('shrinkPdf on a parseable PDF reports ok:true', res.ok, true);
-    eq('...and carries a buffer', Buffer.isBuffer(res.buffer), true);
-  }
-  {
-    const res = await shrinkPdf(Buffer.from('definitely not a pdf'), {});
-    eq('shrinkPdf on bytes ghostscript cannot parse reports ok:false', res.ok, false);
+    if (await haveGhostscript()) {
+      const res = await shrinkPdf(tiny, {});
+      eq('shrinkPdf on a parseable PDF reports ok:true', res.ok, true);
+      eq('...and carries a buffer', Buffer.isBuffer(res.buffer), true);
+      const junk = await shrinkPdf(Buffer.from('definitely not a pdf'), {});
+      eq('shrinkPdf on bytes ghostscript cannot parse reports ok:false', junk.ok, false);
+    } else {
+      // NOT a skip. A host without ghostscript must still get a well-formed
+      // refusal -- not a throw, not a hang -- and must latch `gsMissing` so a
+      // 24-PDF run spawns one doomed process instead of 24.
+      const state = {};
+      const res = await shrinkPdf(tiny, state);
+      eq('without ghostscript shrinkPdf refuses cleanly', res.ok, false);
+      eq('...carrying no buffer', res.buffer, undefined);
+      // An INVARIANT, not a host-specific value. Asserting `gsMissing === true`
+      // outright was wrong for the same reason the whole PR exists: it holds
+      // when gs is absent and fails where gs is present but unexecutable --
+      // `haveGhostscript` sends that host down this branch, and there the
+      // latch is set by EACCES rather than ENOENT. Tying the two together
+      // holds on every host and still catches a latch that stops firing.
+      eq('...and the latch agrees with what it reports', state.gsMissing === true, res.spawnFailed);
+    }
   }
 
   // --- preflight: a requested pass that cannot run is an ERROR -----------

@@ -43,7 +43,7 @@ file names — the two differ. Map display→file via
 ```
 (0) Find the application   → 221 (search by domain) → confirm client id → 219 (read full app)
 (1) Domain under CF        → 113 (buy) OR 102 (add existing)          ⏸ cloudflare-prod-write
-(2) DNS + M365 email       → 103 (enforce standard) · 305/304/303/301  ⏸ cloudflare-prod-write, m365-prod
+(2) DNS + email records    → 103 (skip_m365=true) · 105 · 122          ⏸ cloudflare-prod-write
 (3) Website repo + Pages   → 701 (assign the issue)                   ⏸ github-prod, cloudflare-prod-write
 (4) Rebrand the site       → edit FFC-EX-<domain>/src/lib/site.config.ts from the application (PR)
 (5) Analytics              → 505 (GA4 property) → 503 (GTM container) → wire analytics.config.ts ⏸ google-prod-write
@@ -74,24 +74,28 @@ file names — the two differ. Map display→file via
 - **Existing domain:** **`102. Domain - Add to FFC Cloudflare + WHMCS Nameservers`**.
 - After registrar purchase, the zone auto-creates; verify with `101`.
 
-## Phase 2 — DNS + Microsoft 365 email ⏸
+## Phase 2 — DNS + email records ⏸
 
-> **Which Microsoft path? Decide FIRST** (`docs/m365-domain-and-dkim.md`, internal vs external). The
-> `3xx` workflows are **`M365 (FFC Tenant)`** — they act on **FFC's own tenant**. A domain verifies
-> in only ONE tenant, so running `305` for a charity that has/wants **their own** Microsoft tenant
-> **blocks them from adding it to theirs**. External-tenant charities: they add the domain in their
-> own admin.microsoft.com; FFC only writes DNS records (`105`, or `103` with `skip_m365=true` —
-> 103's exo jobs act on the FFC tenant) — or invites their contact as a zone-scoped Cloudflare
-> Domain Admin with **`122. Cloudflare - Zone Member Add`** to self-serve.
+> **FFC NEVER hosts a charity's email in the FFC Microsoft 365 tenant.** The FFC tenant is for FFC's
+> **internal** projects only. Every charity gets **its own** email tenant — Microsoft 365 (nonprofit
+> grant) or Google Workspace for Nonprofits — which the charity applies for and owns, with FFC's
+> help. So the `3xx` **`M365 (FFC Tenant)`** workflows (`301`–`306`) are **never run for an external
+> charity**: `305` would verify the charity's domain in FFC's tenant, and a domain verifies in only
+> one tenant, which blocks the charity from adding it to their own. A charity that wants the same
+> automation can **copy** those workflows to run against **their own** tenant; they are not run
+> against ours on their behalf. Details: `docs/m365-domain-and-dkim.md`.
+>
+> **Buy the domain last.** The website is built and working on its default GitHub Pages URL
+> **before** the domain is purchased (Phase 1 follows Phase 3 for a new domain). There is no rush.
 
 - **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`, plus
-  M365 MX/SPF/DMARC. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`
-  and approve the gate.
-- **FFC-tenant email only:** add the domain to the FFC tenant if new:
-  **`305. M365 (FFC Tenant) - Add Tenant Domain (INTERNAL ONLY)`**, then
-  **`304. M365 (FFC Tenant) - Enable DKIM`**; verify with **`301`/`303`**.
-- **M365 was broken by a federated-credential typo** (`AADSTS700213`). If any m365 job fails Azure
-  login, it's almost certainly that — see the repair in `docs/azure-oidc-federated-credentials.md`.
+  the tenant-agnostic MX/SPF/DMARC standard. **Always pass `skip_m365=true` for a charity** — its
+  `exo_check`/`exo_enable` jobs act on the FFC tenant's Exchange Online. **Defaults to
+  `dry_run=true`** — read the preview, then re-run `dry_run=false` and approve the gate.
+- **Charity's own tenant records:** once the charity has added the domain in _their_ Microsoft or
+  Google admin console, write the verification TXT / DKIM / MX records they are given with
+  **`105`**, or invite their contact as a zone-scoped Cloudflare Domain Admin with
+  **`122. Cloudflare - Zone Member Add`** to self-serve.
 
 ## Phase 3 — Website repo + Pages ⏸
 
@@ -168,7 +172,8 @@ file names — the two differ. Map display→file via
 
 - [ ] `221` → confirmed client id (not a masked-name guess)
 - [ ] Domain in CF zone (`113`/`102`), active
-- [ ] `103` enforce-standard applied (apex + `www` + M365), DKIM valid
+- [ ] `103` enforce-standard applied with `skip_m365=true` (apex + `www` + mail DNS); the charity's
+      own Microsoft/Google tenant records added via `105`/`122` — never the FFC tenant
 - [ ] `701` provisioned `FFC-EX-<domain>`, Pages live over HTTPS, maintainer added
 - [ ] `site.config.ts` rebranded from the application (PR merged, drift clean)
 - [ ] `505` GA4 property + `503` GTM container, ids wired in `analytics.config.ts`

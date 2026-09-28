@@ -243,18 +243,6 @@ def test_the_safety_doc_states_the_convention():
     )
 
 
-TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-
-if __name__ == "__main__":
-    failures = 0
-    for t in TESTS:
-        try:
-            t()
-            print(f"  PASS {t.__name__}")
-        except AssertionError as e:
-            failures += 1
-            print(f"  FAIL {t.__name__}: {str(e)[:2000]}")
-    sys.exit(1 if failures else 0)
 
 
 # --- Second clause of the convention: it must RENDER, not merely be present ---
@@ -401,3 +389,17 @@ def test_a_dispatch_only_workflow_is_left_alone():
         "    runs-on: ubuntu-latest\n"
     )
     assert run_names_that_render_empty([(pathlib.Path("fixture.yml"), doc)]) == []
+
+
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    failures = 0
+    for t in TESTS:
+        try:
+            t()
+            print(f"  PASS {t.__name__}")
+        except AssertionError as e:
+            failures += 1
+            print(f"  FAIL {t.__name__}: {str(e)[:2000]}")
+    sys.exit(1 if failures else 0)

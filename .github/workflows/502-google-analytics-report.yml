@@ -5,8 +5,13 @@ run-name: 'Google Analytics Report'
 # it to FreeForCharity/FFC-IN-ffcadmin.org as a reviewable PR (never a direct push). PII-safe:
 # aggregate metrics only. Requires the google-prod-read environment (report) and the ungated
 # github-prod-read environment (delivery, #834) + the Wave 0 foundation. Opening the PR is reporting
-# plumbing, not a Write — the data this workflow consumes is a Read. The delivery PAT comes from Key
-# Vault (`read-all-cbm-github-pat`) over OIDC on the READER identity, never a GitHub secret — #844.
+# plumbing, not a Write — the data this workflow consumes is a Read. Two PATs come from Key Vault
+# over OIDC on the READER identity, never GitHub secrets (#844), split by what they do (#848):
+#   - `read-all-cbm-ffc-copilot-mcp-github-pat` — org-wide READS (the status-feed generator).
+#   - `wr-all-cbm-datasync-github-pat` — the WRITE: push + PR into FFC-IN-ffcadmin.org. Fine-grained,
+#     scoped to FFC-IN-ffcadmin.org + FFC-Cloudflare-Automation only (Contents + Pull requests RW).
+# A writer PAT on the ungated lane is a Clarke ruling (2026-09-28, #848): the token cannot reach
+# main (merge-queue rulesets) and can only open PRs in those two repos, which still pass CI.
 
 on:
   schedule:
@@ -139,16 +144,17 @@ jobs:
 
       # Key Vault is the single source of truth for credentials (#844). Rotation is
       # a new KV version — no GitHub change and no second copy that can drift.
-      - name: Load the GitHub PAT from Key Vault
+      # READ PAT first: it exports GH_TOKEN, which the status-feed generator uses.
+      - name: Load the read PAT from Key Vault
         shell: bash
         run: |
           set -euo pipefail
           token="$(az keyvault secret show \
             --vault-name kv-ffc-admin-prod-cbm \
-            --name read-all-cbm-github-pat \
+            --name read-all-cbm-ffc-copilot-mcp-github-pat \
             --query value -o tsv)"
           if [ -z "$token" ]; then
-            echo "::error::read-all-cbm-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
             exit 1
           fi
           echo "::add-mask::$token"
@@ -189,20 +195,73 @@ jobs:
           retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
           rm -f "$hdrs"
           if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
-            echo "::error::read-all-cbm-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
             exit 1
           fi
           if [ "$code" = "401" ] || [ "$code" = "403" ]; then
-            echo "::error::read-all-cbm-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
             exit 1
           fi
           if [ "$code" != "200" ]; then
-            echo "::error::read-all-cbm-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
             exit 1
           fi
           d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
           {
             echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      # WRITE PAT (#848): push + PR into FFC-IN-ffcadmin.org only. Exported as
+      # GH_WRITE_TOKEN so nothing but the delivery step below ever uses it.
+      - name: Load the write PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-cbm-datasync-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-datasync-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Same liveness probe as the read step above (#1102); see the rationale there.
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # GitHub answers a PRIMARY rate limit with 403 + `x-ratelimit-remaining: 0`
+          # and a SECONDARY one with 403 + `retry-after`. Either way the credential is
+          # LIVE, so it must not be handed the revoked wording below: prescribing a
+          # remint for a throttled token is the same wrong-subsystem failure this guard
+          # exists to remove. 321 draws the same line for Cloudflare, where a 403 on a
+          # resource endpoint is authenticated-but-unauthorized and never "dead".
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-datasync-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-datasync-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-datasync-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHWRITE_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_WRITE_TOKEN<<${d}"
             echo "$token"
             echo "${d}"
           } >> "$GITHUB_ENV"
@@ -215,7 +274,7 @@ jobs:
 
       # Generate the Agentic OS status feed (backlog #723) so it rides the same
       # daily sync PR as the GA data + workflow catalog — one reviewable pipe,
-      # no new gate. REST-only, PII-safe aggregates; the PAT just reads here.
+      # no new gate. REST-only, PII-safe aggregates; GH_TOKEN is the READ PAT here.
       - name: Generate Agentic OS status feed
         run: |
           set -euo pipefail
@@ -224,9 +283,12 @@ jobs:
       - name: Open/update daily data-sync PR into FFC-IN-ffcadmin.org
         run: |
           set -euo pipefail
+          # This step writes, so it runs on the WRITE PAT (#848): the clone/push URL
+          # and every `gh` call below. The read PAT cannot push or open a PR here.
+          export GH_TOKEN="$GH_WRITE_TOKEN"
           git config --global user.name 'ffc-automation[bot]'
           git config --global user.email 'automation@freeforcharity.org'
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
+          git clone --depth 1 "https://x-access-token:${GH_WRITE_TOKEN}@github.com/FreeForCharity/FFC-IN-ffcadmin.org.git" target
           cd target
           # True idempotency: base on the existing sync branch when it exists, so a re-run
           # with identical content produces no new commit and no PR churn.

@@ -150,12 +150,18 @@ def run_deliver(*, sync_branch: bool, sync_matches_source: bool, gh_env: dict | 
     # found via HOME: under inheritance an ambient GIT_CONFIG_GLOBAL would win
     # over HOME and the insteadOf redirect below would silently not apply,
     # sending the clone at the real network URL (#943).
+    # Two distinct tokens, as the job now exports (#848): GH_TOKEN is the READ PAT,
+    # GH_WRITE_TOKEN the 2-repo writer. Only the writer's URL is redirected to the
+    # local origin, so a step that clones/pushes on the read PAT goes to the real
+    # network URL and fails -- every test below doubles as "the write uses the
+    # write PAT".
     env = child_env(
         HARNESS_DIR,
         HOME=str(home),
         GIT_CONFIG_GLOBAL=str(gitconfig),
         GIT_CONFIG_NOSYSTEM="1",
-        GH_TOKEN=TOKEN,
+        GH_TOKEN="READ_ONLY_TOKEN",
+        GH_WRITE_TOKEN=TOKEN,
         TEST_GH_LOG=str(gh_log),
     )
     if gh_env:

@@ -318,9 +318,12 @@ def test_the_shipped_registry_probes_read_all_secrets_only():
     assert not offenders, offenders
 
 
-def test_the_registry_covers_both_dead_pats_from_848():
+def test_the_registry_tracks_848s_resolution():
+    # #848 retired `read-all-cbm-github-pat` (502/735 moved off it). Probing a
+    # retired secret would keep #877 open forever on a `missing` finding, so it
+    # must be gone; the surviving read PAT from the same finding must stay.
     named = {p["secret"] for p in const("PROBES")}
-    assert "read-all-cbm-github-pat" in named, named
+    assert "read-all-cbm-github-pat" not in named, named
     assert "read-all-cbm-ffc-copilot-mcp-github-pat" in named, named
 
 

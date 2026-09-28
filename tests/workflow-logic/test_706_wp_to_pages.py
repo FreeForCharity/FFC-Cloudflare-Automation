@@ -1533,6 +1533,64 @@ def test_recode_all_images_description_says_what_the_budget_gate_cannot_do():
     assert "61.5%" in desc, desc
 
 
+def test_a_reused_capture_still_gets_its_assets_optimized():
+    """recode_all_images and shrink_all_pdfs are CAPTURE-time flags, and the
+    capture step is `if: reuse_run == \'\'`. Without this step, setting
+    reuse_capture_from_run turns both into silent no-ops that still read as
+    enabled in the run summary -- issue #1401, which cost run 36357186683 a
+    2h46m re-crawl that then died at the completeness floor because the
+    origin had been crawled three times that day."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Optimize the reused capture's heavy assets")
+    assert "scripts/optimize-captured-assets.mjs" in step["run"], step["run"]
+    assert "--recode-jpegs" in step["run"], step["run"]
+    assert "--shrink-pdfs" in step["run"], step["run"]
+
+
+def test_the_reused_capture_optimizer_runs_only_on_the_reuse_path():
+    """A fresh capture applies these inline as it downloads, so running them
+    again would re-encode already-encoded bytes for nothing. Guarding on the
+    flags alone would do exactly that."""
+    wf = load_workflow(WORKFLOW)
+    step = find_step(wf, "convert", "Optimize the reused capture's heavy assets")
+    cond = " ".join(step["if"].split())
+    assert "needs.resolve.outputs.reuse_run != ''" in cond, cond
+    assert "inputs.recode_all_images" in cond and "inputs.shrink_all_pdfs" in cond, cond
+
+
+def test_the_optimizer_sits_between_the_reuse_and_everything_downstream():
+    """It rewrites asset bytes in place, so every later step -- dedupe, the
+    reference repairs, the size gate -- must see the optimized tree."""
+    wf = load_workflow(WORKFLOW)
+    names = [s.get("name", "") for s in wf["jobs"]["convert"]["steps"]]
+    reuse = names.index("Reuse the capture from an earlier run")
+    opt = names.index("Optimize the reused capture's heavy assets")
+    dedupe = names.index("Collapse duplicate assets")
+    gate = names.index("Gate - the tree must be publishable (push + Pages limits)")
+    assert reuse < opt < dedupe < gate, (reuse, opt, dedupe, gate)
+
+
+def test_deliver_does_not_re_optimize_what_convert_already_did():
+    """`deliver` downloads the capture convert uploaded, so the assets arrive
+    already optimized. A second pass there would re-encode them again -- a
+    lossy operation applied twice for no saving."""
+    wf = load_workflow(WORKFLOW)
+    names = [s.get("name", "") for s in wf["jobs"]["deliver"]["steps"]]
+    assert "Optimize the reused capture's heavy assets" not in names, names
+    assert "Download the capture that passed the gate" in names, names
+
+
+def test_recode_all_images_description_admits_the_reused_path_differs():
+    """Same flag, different mechanism and a different number: renaming WebP on
+    a fresh capture, name-preserving mozjpeg on a reused one. An operator
+    comparing two runs' sizes needs that stated, not inferred."""
+    wf = load_workflow(WORKFLOW)
+    triggers = wf[True] if True in wf else wf["on"]
+    desc = triggers["workflow_dispatch"]["inputs"]["recode_all_images"]["description"]
+    assert "REUSED capture" in desc, desc
+    assert "name-preserving" in desc, desc
+
+
 def test_extract_shared_css_runs_in_BOTH_jobs_that_convert():
     """`convert` previews the conversion and `deliver` pushes it, and they run
     the same pipeline. Wiring one and not the other makes the previewed tree

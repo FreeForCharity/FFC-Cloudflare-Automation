@@ -318,7 +318,29 @@ export async function explainMissingAsset(
   if (abs === null) return null;
 
   const basename = rel.replace(/^\/+/, '').split('/').pop();
-  const out = { basename, onDisk: existsSync(abs), siblings: [], mentionedIn: [], capped: false };
+  const dot = basename.lastIndexOf('.');
+  // A basename with NO STEM — `.conf`, `.json` — is not a name the export ever
+  // wrote. It is the shape a runtime-assembled reference takes when the value
+  // that should have carried the id came out empty, and saying so IS the
+  // diagnosis. Searching for it is worse than saying nothing: `.conf` is a
+  // five-byte substring that occurs inside unrelated minified chunks, so the
+  // `named in` line fills up with files that have no connection to the
+  // reference at all, and the sibling scan looks for a family key of `""`.
+  //
+  // Measured on 706 run 36410991329: the Animoto player's missing
+  // `configurations/.conf` was reported as named in `.well-known/security.txt`
+  // and four `_next/static/chunks/*.js`. Confidently wrong in the direction
+  // that sends a reader to read those files.
+  const stemless = (dot === -1 ? basename : basename.slice(0, dot)) === '';
+  const out = {
+    basename,
+    stemless,
+    onDisk: existsSync(abs),
+    siblings: [],
+    mentionedIn: [],
+    capped: false,
+  };
+  if (stemless) return out;
 
   const family = foldFamilyBase(basename);
   try {
@@ -415,7 +437,38 @@ if (process.argv.includes('--self-test')) {
   writeFileSync(join(budgetRoot, 'big.html'), 'x'.repeat(5000) + wanted);
   const budgeted = await explainMissingAsset(budgetRoot, `/a/b/${wanted}`, { maxBytes: 100 });
 
+  // A stemless basename. `.conf` occurs inside the decoy-free tree below on
+  // purpose: a search would "find" both files and name them, which is exactly
+  // the wrong answer this case exists to prevent.
+  const stemlessRoot = mkdtempSync(join(tmpdir(), 'vnl-stemless-'));
+  writeFileSync(join(stemlessRoot, 'chunk.js'), 'loadConfig(".conf");');
+  writeFileSync(join(stemlessRoot, 'other.html'), '<p>see abc.conf</p>');
+  const stemless = await explainMissingAsset(stemlessRoot, '/configurations/.conf');
+  const stemmed = await explainMissingAsset(stemlessRoot, '/configurations/abc.conf');
+  // A DOTLESS basename has a stem: the whole name IS the stem. The natural
+  // spelling of the test — `basename.slice(0, dot) === ''` — is wrong here,
+  // because `dot === -1` makes that slice off the LAST CHARACTER, so a
+  // one-character name reads as stemless and its search is skipped. One
+  // character is the only length at which the two spellings disagree, which is
+  // why this case uses one.
+  const dotless = await explainMissingAsset(stemlessRoot, '/configurations/q');
+
   const cases = [
+    // --- a stemless basename is diagnosed, not searched for (706 run 36410991329) ---
+    ['a stemless basename is flagged as such', stemless.stemless, true],
+    // The point of the flag: NOTHING is searched. Both files in that tree
+    // contain the literal `.conf`, so a substring search names both — which is
+    // what shipped and what reported a missing Animoto config as "named in
+    // .well-known/security.txt".
+    ['a stemless basename names no file', stemless.mentionedIn.join('|'), ''],
+    ['a stemless basename lists no siblings', stemless.siblings.join('|'), ''],
+    // Discrimination, not permissiveness: the same tree, the same extension,
+    // a real stem — the search must still run and still find its mention.
+    // Without this pair the fix could be "never search for a `.conf`", which
+    // passes the three assertions above and guts the diagnostic.
+    ['a stemmed basename is not flagged', stemmed.stemless, false],
+    ['a stemmed basename is still searched for', stemmed.mentionedIn.join('|'), 'other.html'],
+    ['a dotless one-character basename is not stemless', dotless.stemless, false],
     ['apex is legacy', legacy('https://example.org/a.jpg'), true],
     ['www is legacy', legacy('https://www.example.org/a.jpg'), true],
     ['any subdomain is legacy', legacy('https://staging.example.org/a.jpg'), true],
@@ -1276,6 +1329,14 @@ async function main() {
       console.log(
         `      on disk under ${dir}: ${e.onDisk ? 'YES — the export HAS it and the server still 404ed' : 'NO'}`,
       );
+      if (e.stemless) {
+        console.log(
+          `      the name "${e.basename}" has no stem — nothing was searched for, because that is` +
+            ` already the answer: the reference is built at runtime and the value that names the` +
+            ` file came out empty.`,
+        );
+        continue;
+      }
       console.log(
         `      other files sharing the base name "${foldFamilyBase(e.basename)}": ${e.siblings.length ? e.siblings.join(', ') : 'none'}`,
       );

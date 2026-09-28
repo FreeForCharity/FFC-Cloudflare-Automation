@@ -135,6 +135,25 @@ def test_the_slice_excludes_its_neighbours():
     assert SECTION_HEADING in section
 
 
+def test_a_green_from_this_module_is_not_a_well_formed_section():
+    """Every other assertion here is a positive `in` check over the slice, so
+    INSERTED text cannot redden any of them.
+
+    Measured during a 2026-09-28 sweep: this module reported **19 PASS, rc=0**
+    against an `AGENTS.md` that still contained unresolved conflict markers. No
+    one commits markers, so that is not a defect in the document -- it is a limit
+    on what a green from this module means, and the cheapest way to stop the
+    limit existing is to assert the absence directly.
+    """
+    section = _section()
+    for marker in ("<<<<<<<", "=======", ">>>>>>>"):
+        assert marker not in section, (
+            f"the landing-sweep section contains a conflict marker {marker!r} -- "
+            "an unresolved merge, which every other assertion in this module would "
+            "happily pass over"
+        )
+
+
 # --------------------------------------------------------------------------
 # AC1 -- the discriminator
 # --------------------------------------------------------------------------
@@ -184,11 +203,31 @@ def _documented_query_params() -> dict:
     parameter two paragraphs down -- measured: mutations M13 and M14 both survived
     that spelling. A section that documents a flag will always contain the flag's
     name; only the query can say whether the flag is in the query.
+
+    Selected by **what the endpoint is**, never by position. This helper used to
+    take the section's *first* `gh api '<url>'`, which was right only by accident
+    of spelling: #1341's block (now on `main`) adds `gh api --paginate '<url>'` to
+    this same section, and a third line uses `gh api <url> --jq`. Neither matches
+    `gh api '`, so the first-match rule still landed on the discriminator -- but it
+    was one edit away from silently retargeting the assertion at another URL, with
+    every test staying green while checking the wrong query. Reported from a sweep
+    on #1390 before it could bite.
+
+    Ambiguity is a failure, not a tie-break: if the section ever carries two
+    `pulls?` endpoints, this raises instead of picking one.
     """
     section = _section()
-    m = re.search(r"gh api '([^']+)'", section)
-    assert m, "no single-quoted `gh api <endpoint>` found in the section"
-    endpoint = m.group(1)
+    candidates = [
+        url
+        for url in re.findall(r"gh api [^\n]*?'([^']+)'", section)
+        if "pulls?" in url
+    ]
+    assert len(candidates) == 1, (
+        f"expected exactly 1 `gh api` endpoint containing `pulls?` in the section, "
+        f"found {len(candidates)}: {candidates}. The discriminator query is "
+        "identified by its endpoint, not by being first."
+    )
+    endpoint = candidates[0]
     assert "?" in endpoint, f"the documented endpoint carries no query string: {endpoint!r}"
     query = endpoint.split("?", 1)[1]
     # `parse_qs` drops a valueless key, which would silently excuse `&sort` with

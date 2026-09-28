@@ -357,6 +357,12 @@ BURNED_DOWN = (
     "218-whmcs-siteslist-reconciliation.yml",
     "208-whmcs-tickets-export.yml",
     "202-whmcs-export-products.yml",
+    # Lane 26 took two workflows in one PR rather than the usual one. Two lines,
+    # because the ledger is keyed by workflow and the counts are derived from
+    # its length — a lane that burns N workflows appends N lines, whatever the
+    # PR count.
+    "201-whmcs-export-domains.yml",
+    "203-whmcs-export-payment-methods.yml",
 )
 
 

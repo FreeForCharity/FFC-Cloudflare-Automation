@@ -50,7 +50,7 @@ import {
   rmSync,
   existsSync,
 } from 'node:fs';
-import { join, resolve, extname } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +98,23 @@ export function missingTooling({ jpegs, pdfs, haveSharp, haveGhostscript }) {
   if (pdfs && !haveGhostscript)
     missing.push('--shrink-pdfs needs ghostscript (gs), which is not installed');
   return missing;
+}
+
+/**
+ * Read a file, or null if it cannot be read.
+ *
+ * The loops below track a per-file failure count, which is a promise that one
+ * bad file costs one file. A bare `readFileSync` in the loop breaks that
+ * promise at the first unreadable asset: the whole pass aborts, and on the
+ * reuse path that is thousands of already-optimized files thrown away over
+ * one. Returning null keeps the accounting honest and the run going.
+ */
+export function readOrNull(path) {
+  try {
+    return readFileSync(path);
+  } catch {
+    return null;
+  }
 }
 
 /** Every file under `dir`, recursively. */
@@ -202,7 +219,14 @@ async function main() {
   const files = walkFiles(resolve(dir));
   const targets = selectTargets(files, { jpegs: doJpegs, pdfs: doPdfs });
   const state = { gsMissing: false };
-  const tally = { jpegKept: 0, jpegDeclined: 0, jpegFailed: 0, pdfKept: 0, pdfDeclined: 0 };
+  const tally = {
+    jpegKept: 0,
+    jpegDeclined: 0,
+    jpegFailed: 0,
+    pdfKept: 0,
+    pdfDeclined: 0,
+    pdfFailed: 0,
+  };
   let before = 0;
   let after = 0;
 
@@ -232,7 +256,11 @@ async function main() {
   }
 
   for (const f of targets.jpegs) {
-    const buf = readFileSync(f);
+    const buf = readOrNull(f);
+    if (!buf) {
+      tally.jpegFailed += 1;
+      continue;
+    }
     before += buf.length;
     try {
       const out = await sharp(buf).jpeg({ quality, mozjpeg: true }).toBuffer();
@@ -251,7 +279,11 @@ async function main() {
   }
 
   for (const f of targets.pdfs) {
-    const buf = readFileSync(f);
+    const buf = readOrNull(f);
+    if (!buf) {
+      tally.pdfFailed += 1;
+      continue;
+    }
     before += buf.length;
     const out = await shrinkPdf(buf, state);
     if (out && worthKeeping(buf.length, out.length)) {
@@ -273,7 +305,7 @@ async function main() {
   if (doPdfs)
     console.log(
       `[optimize] pdf ${PDF_PROFILE}: ${tally.pdfKept} downsampled, ` +
-        `${tally.pdfDeclined} left as captured`,
+        `${tally.pdfDeclined} left as captured, ${tally.pdfFailed} could not be read`,
     );
   console.log(
     `[optimize] ${mb(before)} MB -> ${mb(after)} MB (saved ${mb(before - after)} MB). ` +
@@ -338,6 +370,21 @@ function selfTest() {
     pdfs: [],
   });
 
+  // --- one unreadable file costs one file, not the run -------------------
+  eq(
+    'readOrNull returns null for a path that does not exist',
+    readOrNull(join(tmpdir(), `ffc-nope-${process.pid}-${Date.now()}.jpg`)),
+    null,
+  );
+  eq('readOrNull returns null for a directory', readOrNull(tmpdir()), null);
+  {
+    const probe = join(tmpdir(), `ffc-probe-${process.pid}-${Date.now()}.bin`);
+    writeFileSync(probe, 'hello');
+    const got = readOrNull(probe);
+    rmSync(probe, { force: true });
+    eq('readOrNull returns the bytes of a file it CAN read', got && got.toString(), 'hello');
+  }
+
   // --- preflight: a requested pass that cannot run is an ERROR -----------
   eq(
     'asking for jpegs without sharp is refused',
@@ -372,5 +419,15 @@ function selfTest() {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   if (process.argv.includes('--self-test')) process.exit(selfTest());
-  main().then((code) => process.exit(code));
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      // Without this an unexpected throw is an unhandled rejection: no
+      // ::error:: annotation, and a step whose failure reads as a crash
+      // rather than as this script refusing.
+      console.error(
+        `::error::optimize-captured-assets crashed: ${err && err.stack ? err.stack : err}`,
+      );
+      process.exit(1);
+    });
 }

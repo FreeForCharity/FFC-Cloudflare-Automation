@@ -8,7 +8,8 @@ URL-keyed fixtures. That exercises the real pagination / last-page logic too.
 
 Locked down here:
   * the backlog and the in-flight PR panels are ORG-WIDE (#925) — sourced from
-    one `search/issues` call matching AGENTS.md's pickup query, paginated, and
+    one `search/issues` query per kind (`is:issue`, `is:pull-request` — GitHub
+    422s a query with neither) matching AGENTS.md's pickup query, paginated, and
     aborting rather than publishing a partial set on `incomplete_results`;
   * every backlog and PR row carries its `repo`, and `open_prs_total` is summed
     over exactly the repositories swept, so the fraction's halves agree;
@@ -68,7 +69,6 @@ ORG = "FreeForCharity"
 HUB = "FreeForCharity/FFC-Cloudflare-Automation"
 ADMIN = "FreeForCharity/FFC-IN-ffcadmin.org"  # the repo #925 found invisible
 
-SEARCH_PAGE2 = "https://api.github.com/search/issues?q=x&per_page=100&page=2"
 
 COMMENTS = "/issues/719/comments"
 LAST_URL = (
@@ -270,12 +270,22 @@ def _make_fake_request(m, call_log):
         call_log.append(url)
         # Search first: its path also contains "/issues".
         if "/search/issues" in url:
+            # GitHub requires `is:issue` or `is:pull-request` (422 otherwise), so
+            # the generator runs one search per kind; serve each only its kind,
+            # as the real endpoint does. The fixture pages hold both kinds.
+            q = urllib.parse.unquote_plus(url)
+            check(("is:issue" in q) != ("is:pull-request" in q),
+                  f"every search must name exactly one kind, got {q}")
+            want_pr = "is:pull-request" in q
+            p1 = [i for i in search_page1 if ("pull_request" in i) == want_pr]
+            p2 = [i for i in search_page2 if ("pull_request" in i) == want_pr]
             if "page=2" in url:
-                return {"total_count": 3, "incomplete_results": False,
-                        "items": search_page2}, None
+                return {"total_count": len(p1) + len(p2), "incomplete_results": False,
+                        "items": p2}, None
+            nxt = url + "&page=2"
             return (
-                {"total_count": 3, "incomplete_results": False, "items": search_page1},
-                f'<{SEARCH_PAGE2}>; rel="next", <{SEARCH_PAGE2}>; rel="last"',
+                {"total_count": len(p1) + len(p2), "incomplete_results": False, "items": p1},
+                f'<{nxt}>; rel="next", <{nxt}>; rel="last"',
             )
         lone = re.search(r"/repos/([^/]+/[^/]+)/issues/(\d+)$", url)
         if lone:
@@ -380,11 +390,14 @@ def main():
     check(any(i["repo"] == ADMIN for i in backlog), "the second repo's backlog is present")
     # Search paginated: page 2 must have been fetched, or ffcadmin vanishes.
     searches = [u for u in call_log if "/search/issues" in u]
-    check(len(searches) == 2, f"search must follow rel=next, got {len(searches)} call(s)")
-    q = urllib.parse.unquote_plus(searches[0])
-    check(f"org:{ORG}" in q and f"label:{m.LABEL}" in q and "is:open" in q,
-          f"search must match AGENTS.md's pickup query, got {q}")
-    check("is:issue" not in q, "the single search deliberately returns PRs too")
+    check(len(searches) == 4, f"each kind's search must follow rel=next, got {len(searches)} call(s)")
+    firsts = [urllib.parse.unquote_plus(u) for u in searches if "page=2" not in u]
+    for q in firsts:
+        check(f"org:{ORG}" in q and f"label:{m.LABEL}" in q and "is:open" in q,
+              f"search must match AGENTS.md's pickup query, got {q}")
+    check(sorted("is:issue" in q for q in firsts) == [False, True]
+          and sorted("is:pull-request" in q for q in firsts) == [False, True],
+          f"one search per kind — issues AND PRs — got {firsts}")
 
     # --- in-flight PRs (#909) ---
     # Newest first across repos: 300 (07:00), 903 (05:00), 902 (04:00), 900 (02:00).
@@ -662,7 +675,8 @@ def main():
     # ...but an OVER-read is harmless: an item added mid-pagination costs
     # nothing, and aborting on it would make the daily feed flaky for no gain.
     m._request = _short(2, 3)
-    check(len(m.search_agentic_items(ORG, "tok")) == 3, "an over-read must not abort")
+    # 3 per kind: the fake answers both the is:issue and the is:pull-request search.
+    check(len(m.search_agentic_items(ORG, "tok")) == 6, "an over-read must not abort")
 
     # --- the ready queue (#922) ------------------------------------------
     # `agentic-os` is one label doing five jobs, so counting it counted epics,

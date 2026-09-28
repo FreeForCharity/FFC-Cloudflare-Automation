@@ -543,6 +543,38 @@ RULES = [
          'bash -c "gh api markdown"', ALLOW),
         ("the endpoint quoted as prose in a comment body allowed",
          "gh issue comment 1 -f body='do not write gh api /markdown'", ALLOW),
+        # An ESCAPED leading slash is still a leading slash. Verified with a
+        # `gh` shim on PATH rather than by reading the grammar: all three of
+        # these reach gh as `/markdown`, so MSYS mangles them exactly as the
+        # bare form does. Allowed on `main` too -- the lookbehind wants
+        # whitespace before the `/` and a backslash is not whitespace -- so
+        # this one is older than the quote-aware span, not a regression of it.
+        ("escaped slash unquoted",
+         r"gh api \/markdown", BLOCK),
+        ("escaped slash inside a -c payload",
+         r"bash -c 'gh api \/markdown'", BLOCK),
+        ("escaped slash inside a double-quoted -c payload",
+         r'bash -c "gh api \/markdown"', BLOCK),
+        # ...and the over-block direction, which is why the escape rule is
+        # state-aware. Inside double quotes bash PRESERVES the backslash, so
+        # the shim shows gh receiving a literal `\/markdown` as field data --
+        # not an endpoint. Blanking only the backslash regardless of state
+        # would expose a `/` after a blank and block a correct call.
+        ("escaped slash as double-quoted field data allowed",
+         r'gh api repos/o/r/issues -f body="see \/markdown"', ALLOW),
+        ("escaped slash as single-quoted field data allowed",
+         r"gh api repos/o/r/issues -f body='see \/markdown'", ALLOW),
+        # Two `-c` spellings the first version of the payload scanner missed,
+        # both of which block on `main` and so were regressions of it.
+        ("bash --norc -c endpoint",
+         "bash --norc -c 'gh api /markdown'", BLOCK),
+        ("bash --noprofile --norc -c endpoint",
+         "bash --noprofile --norc -c 'gh api /markdown'", BLOCK),
+        # `$'...'` is a quoting form, so the `$` comes off before the pair.
+        ("bash -c ANSI-C quoted endpoint",
+         "bash -c $'gh api /markdown'", BLOCK),
+        ("sh -c ANSI-C quoted endpoint",
+         "sh -c $'gh api /markdown'", BLOCK),
         # REGRESSION PINS, not discriminators -- said plainly because a green
         # row that proves nothing is how a table stops meaning anything. Both
         # survive every mutation tried against the payload scanner, including
@@ -1076,27 +1108,60 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
            f"docstring says {claimed.groups() if claimed else None}, "
            f"test walks length {max_length} / {corpus_size:,} strings")
 
-    diffs = []
+    # The two scanners are NO LONGER expected to be identical, and comparing
+    # them for equality is what this test used to do. Unquoted, the shipped
+    # scanner deliberately reveals an escaped ORDINARY character, because that
+    # character is data the command receives -- `gh api \/markdown` reaches gh
+    # as `/markdown`, so hiding it hid a live endpoint (#1313 review).
+    #
+    # Asserting the new rule by re-implementing it here would make the test
+    # agree with the code by construction. So `bash_accurate` stays a model of
+    # the SHELL, and the two properties below are stated independently of how
+    # the scanner is written:
+    #
+    #   1. at every operator and quote position the two agree on blanked-ness
+    #      -- that is what this function exists to get right, and no escape
+    #      policy may change it;
+    #   2. the shipped scanner never blanks MORE than bash-accurate does, so
+    #      the divergence can only ever reveal, never hide.
+    #
+    # Together these fail for any divergence except the intended one.
+    syntax = set(sq + dq + "|;&<>`" + bs)
+    disagree_on_syntax = []
+    hides_more = []
     walked = 0
     for length in range(1, max_length + 1):
         for combo in itertools.product(alphabet, repeat=length):
             s = "".join(combo)
             walked += 1
-            if gb._strip_quoted(s) != bash_accurate(s):
-                diffs.append(s)
-                if len(diffs) >= 5:
+            got, ref = gb._strip_quoted(s), bash_accurate(s)
+            for idx, src in enumerate(s):
+                got_blank, ref_blank = got[idx] == " ", ref[idx] == " "
+                if src in syntax and got_blank != ref_blank:
+                    disagree_on_syntax.append((s, idx))
                     break
-        if diffs:
+                if got_blank and not ref_blank:
+                    hides_more.append((s, idx))
+                    break
+            if len(disagree_on_syntax) >= 5 or len(hides_more) >= 5:
+                break
+        if disagree_on_syntax or hides_more:
             break
-    record("_strip_quoted's broader escape rule never changes what it blanks",
-           not diffs,
-           "\n".join(f"{s!r}: scanner={gb._strip_quoted(s)!r} "
-                     f"bash-accurate={bash_accurate(s)!r}" for s in diffs))
+
+    record("_strip_quoted agrees with bash at every operator and quote",
+           not disagree_on_syntax,
+           "\n".join(f"{s!r} at {i}: scanner={gb._strip_quoted(s)!r} "
+                     f"bash-accurate={bash_accurate(s)!r}"
+                     for s, i in disagree_on_syntax))
+    record("_strip_quoted never hides a character bash-accurate keeps",
+           not hides_more,
+           "\n".join(f"{s!r} at {i}: scanner={gb._strip_quoted(s)!r} "
+                     f"bash-accurate={bash_accurate(s)!r}" for s, i in hides_more))
     # A corpus that silently shrinks is the failure this test had; assert the
     # walk actually completed rather than inferring it from the absence of
     # diffs, which an empty corpus also produces.
     record("the equivalence walk covered the whole corpus",
-           bool(diffs) or walked == corpus_size,
+           bool(disagree_on_syntax or hides_more) or walked == corpus_size,
            f"walked {walked:,} of {corpus_size:,} strings")
 
 

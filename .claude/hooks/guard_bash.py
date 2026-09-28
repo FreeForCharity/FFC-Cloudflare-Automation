@@ -78,19 +78,32 @@ def _strip_quoted(text):
     Where that is broader than the shell, and why it is safe: inside double
     quotes bash escapes only backslash, `"`, `$`, backtick and newline, and
     keeps the backslash before anything else -- measured, `"a\zb"` and
-    `"a\|b"` print `a\zb` and `a\|b` in both bash and dash. This scanner
-    instead treats a backslash plus ANY next character there as an escape. The
-    two cannot disagree about what this function returns: inside a
-    double-quoted span every character is blanked regardless, and the one
-    character whose escaping could move the span's END is `"`, which bash
-    escapes too. Measured exhaustively over the alphabet that reaches here
-    (`a`, backslash, `"`, `'`, `|`, `;`, `&`, `$`, backtick, `/`, `<`, `>`) to
-    length 5 -- 271,452 strings, ZERO differing from a bash-accurate variant.
+    `"a\|b"` print `a\zb` and `a\|b` in both bash and dash. INSIDE a
+    double-quoted span this scanner still blanks the pair whatever follows,
+    and that cannot disagree with bash about the result: every character in
+    such a span is blanked anyway, and the one character whose escaping could
+    move the span's END is `"`, which bash escapes too.
 
-    So the broader rule is a simplification, not a bug, and the paragraph above
-    is this scanner's rule rather than a statement about how the shell parses.
-    `test_strip_quoted_matches_a_bash_accurate_scanner` pins the equivalence,
-    so a later "fix" toward bash has to keep it rather than trust this note.
+    UNQUOTED the two deliberately differ, and the difference is the point. The
+    backslash is syntax and always goes; the character it consumes is blanked
+    only when it would otherwise read as a shell operator or a quote. An
+    escaped ORDINARY character is data the command really receives -- measured
+    with a `gh` shim on PATH, `gh api \/markdown` reaches gh as `/markdown` --
+    so blanking it hid a live endpoint from rule 8 (#1313 review).
+
+    The state test is what keeps that from becoming an over-block: inside
+    double quotes the backslash survives into the argument, so
+    `-f body="see \/markdown"` is field data and not an endpoint.
+
+    Over the alphabet that reaches here (`a`, backslash, `"`, `'`, `|`, `;`,
+    `&`, `$`, backtick, `/`, `<`, `>`) to length 5 -- 271,452 strings, the two
+    scanners agree at every operator and quote position, which is the property
+    this function exists for, and differ ONLY where the shipped one reveals an
+    escaped ordinary character.
+
+    `test_strip_quoted_matches_a_bash_accurate_scanner` pins both halves --
+    the agreement and the shape of the intended divergence -- so a later "fix"
+    toward bash has to keep them rather than trust this note.
     """
     out = list(text)
     quote = None
@@ -104,18 +117,44 @@ def _strip_quoted(text):
                 quote = None
             else:
                 out[i] = " "
-        elif ch == "\\" and i + 1 < n:
-            # Unquoted, or inside double quotes: the escape and what it
-            # consumes are both literal data.
-            out[i] = " "
-            out[i + 1] = " "
-            i += 2
-            continue
         elif quote == '"':
+            if ch == "\\" and i + 1 < n:
+                # Inside a double-quoted span every character is data and is
+                # blanked anyway; the escape is honoured only so that `\"`
+                # does not close the span early.
+                out[i] = " "
+                out[i + 1] = " "
+                i += 2
+                continue
             if ch == quote:
                 quote = None
             else:
                 out[i] = " "
+        elif ch == "\\" and i + 1 < n:
+            # UNQUOTED. The backslash itself is syntax and always goes. What
+            # it consumes is blanked only when that character would otherwise
+            # read as a shell operator or a quote delimiter -- which is the
+            # whole reason this function exists: `\|` must not look like a
+            # pipeline and `\"` must not open a span.
+            #
+            # An escaped ORDINARY character is literal data the command really
+            # receives, and blanking it hid a live endpoint. Measured with a
+            # `gh` shim on PATH rather than reasoned about: `gh api \/markdown`
+            # reaches gh as `/markdown`, so MSYS mangles it exactly as the bare
+            # form does. Reported on #1313.
+            #
+            # The state test is load-bearing and the first fix did not have it.
+            # Inside double quotes bash PRESERVES a backslash before an
+            # ordinary character, so `gh api -f body="see \/markdown"` sends a
+            # literal `\/markdown` as field data and is not an endpoint at all.
+            # Blanking only the backslash there would expose a `/` preceded by
+            # a blank and block a correct command -- the over-block direction
+            # this rule has already been fixed for once (run 161).
+            out[i] = " "
+            if text[i + 1] in "|;&<>\"'`\\":
+                out[i + 1] = " "
+            i += 2
+            continue
         elif ch in "'\"":
             quote = ch
             out[i] = " "
@@ -324,15 +363,24 @@ def _shell_c_payloads(cmd, depth=3):
             if not word:
                 break
             if saw_c:
+                # `$'...'` / `$"..."` are quoting forms, so the `$` comes off
+                # before the pair does -- `bash -c $'gh api /markdown'` runs
+                # exactly what `bash -c 'gh api /markdown'` runs.
+                if word[:2] in ("$'", '$"'):
+                    word = word[1:]
                 if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
                     word = word[1:-1]
                 yield word
                 for nested in _shell_c_payloads(word, depth - 1):
                     yield nested
                 break
-            if not word.startswith("-") or word.startswith("--"):
+            if not word.startswith("-"):
                 break
-            if "c" in word[1:]:
+            # A `--long` option is skipped rather than ending the scan:
+            # `bash --norc -c '...'` is an ordinary spelling, and treating the
+            # first `--` word as "not a -c invocation" lost it. It must not
+            # arm the payload either -- `--norc` contains a `c`.
+            if not word.startswith("--") and "c" in word[1:]:
                 saw_c = True
             i = j
 

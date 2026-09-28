@@ -222,42 +222,62 @@ export async function shrinkPdf(buf, state, gsBin = GS_BIN) {
   const src = join(dir, 'in.pdf');
   const dest = join(dir, 'out.pdf');
   try {
-    writeFileSync(src, buf);
-    await new Promise((res, rej) => {
-      execFile(
-        gsBin,
-        [
-          '-q',
-          '-dNOPAUSE',
-          '-dBATCH',
-          '-dSAFER',
-          '-sDEVICE=pdfwrite',
-          `-dPDFSETTINGS=${PDF_PROFILE}`,
-          '-dDetectDuplicateImages=true',
-          '-o',
-          dest,
-          src,
-        ],
-        { maxBuffer: 1 << 20 },
-        (err) => (err ? rej(err) : res()),
-      );
-    });
-    return existsSync(dest)
-      ? { ok: true, buffer: readFileSync(dest) }
-      : { ok: false, spawnFailed: false };
-  } catch (err) {
-    // Latched on any SPAWN failure, not just ENOENT. A `gs` that is present
-    // but unexecutable answers EACCES, and retrying it once per PDF is as
-    // pointless as retrying one that is absent -- the ENOENT-only test left a
-    // 24-PDF run spawning 24 doomed processes on exactly that host.
+    // OUR OWN file I/O, outside the latching catch below on purpose.
     //
-    // A numeric code must NOT latch: gs ran and refused this file, and the
-    // next file may well convert. That is the distinction the whole run
-    // depends on, so it is reported back to the caller too rather than only
-    // recorded here.
-    const spawnFailed = isSpawnFailure(err);
-    if (spawnFailed) state.gsMissing = true;
-    return { ok: false, spawnFailed };
+    // `writeFileSync` reports EISDIR, ENOENT and ERR_INVALID_ARG_TYPE -- all
+    // STRING codes, measured -- so a disk-full or permission fault here is
+    // indistinguishable from a failed spawn by code alone. Inside that catch
+    // it would latch `gsMissing`, and every remaining PDF would then be
+    // reported as "ghostscript could not process": a disk problem wearing a
+    // missing-encoder costume, which is the exact accounting dishonesty
+    // #1411 existed to remove. Scoped structurally rather than by sniffing
+    // `err.syscall`, so it cannot be reintroduced by a new call joining the
+    // block.
+    try {
+      writeFileSync(src, buf);
+    } catch {
+      return { ok: false, spawnFailed: false };
+    }
+
+    try {
+      await new Promise((res, rej) => {
+        execFile(
+          gsBin,
+          [
+            '-q',
+            '-dNOPAUSE',
+            '-dBATCH',
+            '-dSAFER',
+            '-sDEVICE=pdfwrite',
+            `-dPDFSETTINGS=${PDF_PROFILE}`,
+            '-dDetectDuplicateImages=true',
+            '-o',
+            dest,
+            src,
+          ],
+          { maxBuffer: 1 << 20 },
+          (err) => (err ? rej(err) : res()),
+        );
+      });
+    } catch (err) {
+      // Latched on any SPAWN failure, not just ENOENT. A `gs` that is present
+      // but unexecutable answers EACCES, and retrying it once per PDF is as
+      // pointless as retrying one that is absent -- the ENOENT-only test left
+      // a 24-PDF run spawning 24 doomed processes on exactly that host.
+      //
+      // A numeric code must NOT latch: gs ran and refused this file, and the
+      // next file may well convert. That is the distinction the whole run
+      // depends on, so it is reported back to the caller too rather than only
+      // recorded here.
+      const spawnFailed = isSpawnFailure(err);
+      if (spawnFailed) state.gsMissing = true;
+      return { ok: false, spawnFailed };
+    }
+
+    if (!existsSync(dest)) return { ok: false, spawnFailed: false };
+    // Reading the output is ours too, and a failure here is not gs's fault.
+    const out = readOrNull(dest);
+    return out ? { ok: true, buffer: out } : { ok: false, spawnFailed: false };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -529,6 +549,23 @@ async function selfTest() {
   eq('no error at all is not a spawn failure', isSpawnFailure(null), false);
   eq('...nor is undefined', isSpawnFailure(undefined), false);
 
+  {
+    // A failure in OUR OWN file I/O must not latch, however much it looks
+    // like a spawn failure. Measured, `writeFileSync` reports EISDIR, ENOENT
+    // and ERR_INVALID_ARG_TYPE -- every one a STRING code, so `isSpawnFailure`
+    // cannot tell them from a failed spawn and the scoping is what protects
+    // this. A non-Buffer payload is the portable way to provoke it: no
+    // filesystem state, same error shape as a disk-full.
+    //
+    // Latching here would report every REMAINING pdf as "ghostscript could
+    // not process" -- a disk fault wearing a missing-encoder costume, which
+    // is the accounting dishonesty #1411 removed.
+    const state = {};
+    const res = await shrinkPdf({ not: 'a buffer' }, state);
+    eq('a write failure is a refusal', res.ok, false);
+    eq('...not reported as a spawn failure', res.spawnFailed, false);
+    eq('...and must NOT latch: the next pdf still gets its chance', state.gsMissing, undefined);
+  }
   {
     // The latch itself, on EVERY host, by making `gs` unrunnable for the
     // duration of one call: a DIRECTORY named `gs`, first on PATH. Measured

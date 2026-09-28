@@ -26,12 +26,14 @@
 # Two failures, two messages (#1243)
 # -----------------------------------
 # "A binary was swept in by `git add -A`" and "a text file the repo already
-# tracks grew past the limit" are different mistakes with different remedies,
+# tracks is over the limit" are different mistakes with different remedies,
 # and this guard used to describe only the first -- so the second was handed a
 # diagnosis about somebody else's mistake, plus instructions to delete a file
 # that has to stay. Each offender is therefore classified on two independent
 # axes, tracked-on-base vs new, and text vs binary, and the report names the
-# base size, the head size, the limit and the overage.
+# base size, the head size, the limit and the overage. Tracked does not imply
+# grown: a file already oversized on the base can SHRINK and still be over it,
+# so the direction is measured per file and named, never assumed.
 #
 # Usage:  check-large-blobs.sh <base-ref> <head-ref>
 # Env:    MAX_BLOB_BYTES     (default 1048576 = 1 MiB)
@@ -148,9 +150,11 @@ size_on_base() {
 offenders=""
 allowed=""
 # Which SHAPES of offender were seen. The headline and the remedy differ: a
-# committed binary is removed, a tracked text file that grew past the limit is
+# committed binary is removed, a tracked text file that is over the limit is
 # not -- and until #1243 the message described only the first, so every reader
-# of the second was handed a diagnosis about somebody else's mistake.
+# of the second was handed a diagnosis about somebody else's mistake. These
+# flags carry shape only, not direction: a tracked offender may have grown,
+# shrunk or changed at the same size, and that is decided per file below.
 tracked_seen=0
 tracked_text_seen=0
 new_seen=0

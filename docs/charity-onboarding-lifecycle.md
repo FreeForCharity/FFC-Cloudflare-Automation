@@ -80,7 +80,7 @@ Pick the path that matches the domain's origin:
 - **Done when:** the Cloudflare zone exists and is active (nameservers delegated). Re-run **01** to
   confirm.
 
-## Phase 2 — Standard DNS + Microsoft 365 email ⏸ waits for approval
+## Phase 2 — Standard DNS + email records (charity's own tenant) ⏸ waits for approval
 
 > **FFC never hosts a charity's email in the FFC Microsoft 365 tenant — it is for FFC's internal
 > projects only.** Every charity applies for and owns **its own** email tenant (Microsoft 365

@@ -130,6 +130,11 @@ If the task is to **migrate an existing WordPress/legacy site to GitHub Pages** 
 capture + asset localization, the `FFC-EX-<domain>` scaffold, footer standard, Pages on the default
 URL, and the workflow-121 DNS-ready verdict (epic #702).
 
+If the task is to **refresh the Sites Master List** ("update the sites list", "the sites list is
+stale", "approve the sites list gate") — use the **`sites-list-refresh` skill**
+(`.claude/skills/sites-list-refresh/SKILL.md`): find the waiting 703 run, approve its `github-prod`
+gate (and the 601 prompt that follows), merge the data PR, then run and merge the ffcadmin sync.
+
 ## Picking a workflow
 
 1. **Read the catalog first**: `docs/workflow-catalog.json` (machine-readable) or the generated

@@ -92,6 +92,11 @@ tab:
 - `mode=dry-run-register` — shows what would be purchased
 - `mode=execute-register` — purchases (requires `confirm_domain` to match)
 
+`issue_number` (optional) is an issue **in this repo**. A number meant for another repo (such as the
+charity's `FFC-EX-<domain>` tracking issue) is checked up front: if it is a pull request or missing
+here, post-back is skipped with a warning. A failed comment never fails the run — the purchase has
+already happened by then — and the outcome is always written to the run summary.
+
 ### Label-triggered availability check
 
 Applying the **`domain-purchase-approved`** label to a

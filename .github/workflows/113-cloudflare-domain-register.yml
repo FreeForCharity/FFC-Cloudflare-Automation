@@ -62,7 +62,7 @@ on:
         required: false
         type: string
       issue_number:
-        description: 'Optional: issue number to comment results back to'
+        description: 'Optional: issue number IN THIS REPO to comment results back to'
         required: false
         type: number
 
@@ -136,7 +136,32 @@ jobs:
               core.setOutput('issue_number', String(issue.number));
               core.setOutput('post_comments', 'true');
             } else {
-              const issueNumber = (process.env.IN_ISSUE_NUMBER || '').trim();
+              let issueNumber = (process.env.IN_ISSUE_NUMBER || '').trim();
+              // issue_number is resolved in THIS repo only. A number meant for another
+              // repo (e.g. the charity's FFC-EX-<domain> tracking issue) lands on
+              // whatever shares that number here - often a PR, which GITHUB_TOKEN
+              // cannot comment on without pull-requests: write. Check it up front and
+              // drop post-back rather than turning a paid purchase run red afterwards.
+              if (issueNumber) {
+                try {
+                  const { data: target } = await github.rest.issues.get({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: Number(issueNumber),
+                  });
+                  if (target.pull_request) {
+                    core.warning(
+                      `issue_number ${issueNumber} is a pull request in ${context.repo.owner}/${context.repo.repo}, not an issue; skipping post-back. It is resolved in this repo only.`,
+                    );
+                    issueNumber = '';
+                  }
+                } catch (e) {
+                  core.warning(
+                    `issue_number ${issueNumber} not found in ${context.repo.owner}/${context.repo.repo} (${e.status || e.message}); skipping post-back. It is resolved in this repo only.`,
+                  );
+                  issueNumber = '';
+                }
+              }
               core.setOutput('skip', 'false');
               core.setOutput('domain', normDomain(process.env.IN_DOMAIN));
               core.setOutput('account', (process.env.IN_ACCOUNT || 'FFC').trim());
@@ -290,7 +315,20 @@ jobs:
             }
 
             let statusLine;
-            if (parsed && typeof parsed.registrable !== 'undefined') {
+            if (parsed && parsed.action === 'register') {
+              // execute-register / dry-run-register: report the purchase outcome, not
+              // availability. registrable stays true on a successful purchase, so the
+              // availability branch below would label a real purchase "check only".
+              const cost = parsed.registrationCost ? `${parsed.registrationCost} ${parsed.currency || ''}`.trim() : 'see details';
+              const renew = parsed.renewalCost ? `${parsed.renewalCost} ${parsed.currency || ''}`.trim() : 'see details';
+              if (parsed.dryRun) {
+                statusLine = `🧪 **Dry run** for **${domain}** — would register for **${cost}** (renews at ${renew}). Nothing was purchased.`;
+              } else if (parsed.registered) {
+                statusLine = `✅ **${domain}** was **registered** — cost **${cost}**, renews at ${renew}, auto-renew ${parsed.autoRenew ? 'on' : 'off'}.`;
+              } else {
+                statusLine = `❌ Registration of **${domain}** did **not** complete (state: ${parsed.state || 'unknown'}${parsed.message ? ` — ${parsed.message}` : ''}).`;
+              }
+            } else if (parsed && typeof parsed.registrable !== 'undefined') {
               const price = parsed.registrationCost ? `${parsed.registrationCost} ${parsed.currency || ''}`.trim() : 'see details';
               statusLine = parsed.registrable
                 ? `🔍 **${domain}** is **available** — price: **${price}** (check only, not purchased).`
@@ -304,16 +342,27 @@ jobs:
               '',
               statusLine,
               '',
-              '> A label runs a **check only** and never purchases. To buy, an admin runs workflow **12** with `mode=execute-register` and a typed `confirm_domain`.',
-              '',
+              ...(mode === 'execute-register'
+                ? []
+                : [
+                    '> A label runs a **check only** and never purchases. To buy, an admin runs workflow **12** with `mode=execute-register` and a typed `confirm_domain`.',
+                    '',
+                  ]),
               `- Run: ${runUrl}`,
               '',
               '<details><summary>Full result (JSON)</summary>\n\n```json\n' + raw.trim() + '\n```\n</details>',
             ].join('\n');
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body,
-            });
+            // The registrar action has already happened by now. A failed comment must
+            // not fail the run - a red execute-register run reads as "purchase failed".
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+            } catch (e) {
+              core.warning(`Could not comment on #${issueNumber} (${e.status || e.message}); result is in the run summary.`);
+            }
+            await core.summary.addRaw(`${statusLine}\n`).write();

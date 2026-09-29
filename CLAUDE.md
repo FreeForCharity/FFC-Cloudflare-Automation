@@ -1190,14 +1190,30 @@ gh api graphql -f query='{viewer{login}}'   # costs 1 point; a refusal is the an
 
 Substitutes, all used successfully during the outage:
 
-| instead of                | use                                                                                                      |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `gh pr view <n> --json …` | `gh api repos/{owner}/{repo}/pulls/<n> --jq '…'`                                                         |
-| `gh pr create`            | `gh api repos/{owner}/{repo}/pulls --method POST --input f.json`                                         |
-| `gh issue comment <n>`    | `gh api repos/{owner}/{repo}/issues/<n>/comments --method POST --input f.json`                           |
-| `gh pr list`              | `gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100'`                                            |
-| adding one label          | `gh api repos/{owner}/{repo}/issues/<n>/labels --method POST -f 'labels[]=<name>'` (also the #1127 rule) |
-| merge-queue state         | `git ls-remote --heads origin 'gh-readonly-queue/*'` — not an API call at all                            |
+| instead of                     | use                                                                                                      |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `gh pr view <n> --json …`      | `gh api repos/{owner}/{repo}/pulls/<n> --jq '…'`                                                         |
+| `gh pr create`                 | `gh api repos/{owner}/{repo}/pulls --method POST --input f.json`                                         |
+| `gh issue comment <n>`         | `gh api repos/{owner}/{repo}/issues/<n>/comments --method POST --input f.json`                           |
+| `gh pr list`                   | `gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100'`                                            |
+| adding one label               | `gh api repos/{owner}/{repo}/issues/<n>/labels --method POST -f 'labels[]=<name>'` (also the #1127 rule) |
+| merge-queue state              | `git ls-remote --heads origin 'gh-readonly-queue/*'` — not an API call at all                            |
+| **promoting a draft to ready** | **no REST fallback — see the warning below**                                                             |
+
+**One thing has no REST fallback, and it fails silently.** `gh pr ready` is the GraphQL mutation
+`markPullRequestReadyForReview`, and REST cannot replace it. Worse, the obvious attempt _looks like
+it worked_:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<n> --method PATCH --input <(echo '{"draft":false}')
+# HTTP 200. The response body itself says  "draft": true.  Nothing changed.
+```
+
+Verified against a control on the same call: a `title` PATCH through that endpoint is honoured in
+the same breath, so this is not auth and not the endpoint — `draft` is simply not writable over REST
+and GitHub does not say so. **Check `.draft` on a re-read; never trust the 200.** Practical
+consequence: a run that loses GraphQL can create, review, comment on, label and merge-queue PRs, but
+**cannot take its own drafts out of draft** — they wait for the next run.
 
 `--input` takes a JSON file, which is also how you send a body containing backticks, newlines or `$`
 without fighting the shell.

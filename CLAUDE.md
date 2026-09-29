@@ -414,6 +414,49 @@ answered `"already in the queue"` for two of them and `"Pull request is closed"`
 which had already merged. So the absence of the stderr advisory is **not** the signal that the queue
 declined the request. Empty output is not evidence; only the probe is.
 
+### A queued PR will not accept a push, and the refusal names the wrong subsystem (run 185, 2026-09-29)
+
+To amend a PR that is **already in the merge queue**, dequeue it first. A push to its branch while
+the entry exists is refused by a pre-receive hook:
+
+```
+ ! [remote rejected] fix/… -> fix/… (protected branch hook declined)
+error: failed to push some refs to 'https://github.com/…'
+```
+
+**Nothing in that message mentions the merge queue.** It reads as branch protection or a missing
+permission, and both of those are slow to rule out — the same wrong-subsystem shape as #848's remint
+trap, where the error named the layer that refused rather than the layer that caused it. The tell is
+not in the message at all; it is that the PR has a `mergeQueueEntry`. Check before diagnosing:
+
+```bash
+gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+  pullRequest(number:<n>){ mergeQueueEntry{ id position state } }}}'
+```
+
+**Dequeue takes the PULL REQUEST node id, under the key `id` — not the entry id, and not
+`pullRequestId`.** The pair is inconsistent with `enqueuePullRequest`, which is why remembering one
+misleads on the other, and the error messages walk you through three attempts rather than one:
+
+| call                                                                          | answer                                                                    |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `dequeuePullRequest(input:{pullRequestId:"PR_…"})`                            | `doesn't accept argument 'pullRequestId'` + `Argument 'id' … is required` |
+| `dequeuePullRequest(input:{id:"MQE_…"})` (the entry id — the obvious reading) | `Could not resolve to PullRequest node with the global id of 'MQE_…'`     |
+| `dequeuePullRequest(input:{id:"PR_…"})`                                       | ✅                                                                        |
+
+So the working sequence is **dequeue → push → re-enqueue**:
+
+```bash
+PRID=$(gh pr view <n> --repo FreeForCharity/FFC-Cloudflare-Automation --json id --jq .id)
+gh api graphql -f query="mutation{dequeuePullRequest(input:{id:\"$PRID\"}){mergeQueueEntry{state}}}"
+git push origin <branch>
+# …wait for branch checks, then enqueue again (note the DIFFERENT key):
+gh api graphql -f query="mutation{enqueuePullRequest(input:{pullRequestId:\"$PRID\"}){mergeQueueEntry{position state}}}"
+```
+
+Re-enqueueing immediately after the push fails with `Required status check … is in progress`, which
+is the ordinary post-`ready` race two sections above — retry, do not diagnose.
+
 ### Promoting a draft can hard-block the enqueue — a different case from the one AGENTS.md covers
 
 AGENTS.md says a branch-level check failure does not dequeue an **already-queued** PR, so leave the
@@ -793,6 +836,24 @@ from the same mistake.
 - Separate the two populations before reporting: branch-CI failures on PR head SHAs are normal churn
   (a promoted draft re-runs Phantom Revert Guard and can fail there legitimately — see AGENTS.md),
   whereas a failing scheduled workflow is a standing outage.
+
+**The same mistake wearing a duration (run 185, 2026-09-29).** Run 61's rule is about a health
+verdict; it fires just as hard when the claim is **how long** something has been broken, and there
+it is harder to see, because the answer arrives already shaped like a duration. Runs 183 and 184
+both recorded 735's outage as **"four weeks"** — 09-07, 09-14, 09-21, 09-28. Neither misread
+anything: both asked for the newest few scheduled runs and reported exactly what came back. Reading
+until the **last success** gives **nine** consecutive weekly failures, 2026-08-03 → 2026-09-28, last
+green 2026-07-27. The published number was the window, not the extent, and it understated a standing
+outage by five weeks across two runs.
+
+- **When the claim is an extent, the read must terminate on a success, not on `per_page`.** Ask for
+  more than you expect to need and assert you actually found the boundary:
+  `…/runs?event=schedule&branch=main&per_page=40`, then confirm a `success` appears in the page. If
+  none does, the outage is **at least** that long — say "at least", and page further before writing
+  a number.
+- A weekly cron makes this trap much worse than a daily one: `per_page=5` is five days for a daily
+  workflow and **five weeks** for a weekly one, so the default-looking read silently changes scale
+  with the cadence.
 - **The workflow file name is not derivable from the number.** `739-process-health.yml` returns a
   bare `404` that reads like "this workflow does not exist"; the real file is
   `739-process-health-metrics.yml`. List `.github/workflows/` and match the numeric prefix rather

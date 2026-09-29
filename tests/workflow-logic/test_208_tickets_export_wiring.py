@@ -1071,6 +1071,67 @@ def test_a_whitespace_status_adds_no_filter():
     )
 
 
+def test_the_glob_guard_records_the_dependency_fact_it_rests_on():
+    """#1380: the glob set is correct because of a THIRD-PARTY option, so say so.
+
+    `[*?\\[\\]]` rejects exactly `* ? [ ]`.  That set is complete only because
+    `@actions/glob` builds its minimatch with `nobrace: true` and `noext: true`,
+    so `{a,b}` and `!(x)` are literal text rather than alternations.  Nothing in
+    this repository depends on that package, so nothing here can assert it by
+    importing it -- and a test that skips for want of a dependency leaves the
+    tree in exactly the "asserted nowhere" state #1380 was filed about.
+
+    What CAN be asserted without the dependency is that the fact is written down
+    where a reviewer meets the guard.  Two failure modes this closes: a reviewer
+    who does not know about `nobrace` reads the set as arbitrary and files a
+    finding (that is #1361's High, measured and not reproduced), and a reviewer
+    who assumes the set is exhaustive will not notice if the option ever flips.
+
+    The region searched is the text BETWEEN the newline condition and the glob
+    condition, so "beside the guard" is structural: moving the rationale to the
+    top of the step, or reordering the newline guard below this one, fails here.
+    """
+    required = {
+        "nobrace: true": (
+            "the minimatch option that makes `{a,b}` literal -- without it the "
+            "brace form expands and the character set is incomplete"
+        ),
+        "noext: true": (
+            "the minimatch option that makes `!(x)` literal -- without it the "
+            "extglob form expands and the character set is incomplete"
+        ),
+        "#1380": "the citation, so the measurement behind this set is findable",
+        "not widened": (
+            "the recorded DECISION not to add `{ } ( ) !`; widening on a "
+            "mechanism that measurably does not exist would leave a guard whose "
+            "stated reason is false"
+        ),
+    }
+    newline_cond = GUARD_BLOCKS[1][0]
+    glob_cond = GUARD_BLOCKS[2][0]
+    body = _body()
+    assert newline_cond in body and glob_cond in body, (
+        f"the newline or glob condition is gone, so there is no region for the "
+        f"rationale to sit in. Body: {body!r}"
+    )
+    newline_at = body.index(newline_cond)
+    glob_at = body.index(glob_cond)
+    assert newline_at < glob_at, (
+        "the glob guard now precedes the newline guard. The newline guard must "
+        "stay first -- the anchored guards below it use '^', which is "
+        "start-of-STRING, so over a multi-line value they validate only the "
+        "first line"
+    )
+    region = body[newline_at:glob_at]
+    for token, why in required.items():
+        assert token in region, (
+            f"the comment beside the glob guard no longer names {token!r} -- "
+            f"{why}. The guard's character set is a fact about @actions/glob, "
+            f"not a style choice; re-derive the comment (and re-measure the "
+            f"package) rather than deleting this check. Region: {region!r}"
+        )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 # Only the behavioural cases spawn a subprocess; the wiring and checker-agreement

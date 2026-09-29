@@ -31,7 +31,9 @@
 //                             so a caller that forgets to paginate provably sees only the first
 //                             page — the 105-workflow truncation from #843
 //   TEST_WORKFLOW_RUNS_FILE   JSON map of workflow id (as a string) -> array of run objects
-//                             returned by actions.listWorkflowRuns; a missing id yields none
+//                             returned by actions.listWorkflowRuns; a missing id yields none.
+//                             `status` and `event` are filtered SERVER-side here as GitHub
+//                             does; a run object with no `event` counts as `schedule` (#1440)
 //
 //   --- multi-repo fixtures (#1296) ------------------------------------------------------
 //   The two files above are repo-BLIND: every repo sees the same inventory and runs. That is
@@ -219,6 +221,7 @@ const github = {
           repo: where,
           workflow_id: args.workflow_id,
           branch: args.branch,
+          event: args.event,
           status: args.status,
           per_page: args.per_page,
         });
@@ -241,8 +244,20 @@ const github = {
             ? workflowRunsByRepo[where]
             : workflowRuns;
         const all = byId[String(args.workflow_id)] || [];
+        // `event` filters server-side too, and modelling it is what makes the #1440 class
+        // testable at all: a shim that ignored `event` would return the same run whether
+        // or not the caller asked for one, so removing the filter from the workflow would
+        // flip nothing and every test of it would pass by construction.
+        //
+        // A fixture run with no `event` is read as `schedule`. That is not leniency — 740
+        // watches cron-driven workflows only, so every pre-#1440 fixture in this repo
+        // models a scheduled run, and the default keeps them meaning what they were
+        // written to mean. A test about the OTHER event must therefore say
+        // `event: 'workflow_dispatch'` out loud, which is exactly the case under test.
+        const eventOf = (r) => r.event || 'schedule';
+        const byEvent = args.event ? all.filter((r) => eventOf(r) === args.event) : all;
         const runs =
-          args.status === 'success' ? all.filter((r) => r.conclusion === 'success') : all;
+          args.status === 'success' ? byEvent.filter((r) => r.conclusion === 'success') : byEvent;
         return {
           data: {
             total_count: runs.length,

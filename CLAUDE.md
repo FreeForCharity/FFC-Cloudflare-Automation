@@ -1166,6 +1166,75 @@ gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare
   pullRequest(number:904){reviewThreads(first:50){nodes{isResolved path}}}}}'
 ```
 
+## When GraphQL is rate-limited, most of `gh` stops working — REST fallbacks (measured 2026-09-29)
+
+`gh` is a GraphQL client wearing a REST coat. When the shared user pool exhausts its GraphQL budget,
+commands that sound like plain REST operations fail too:
+
+```
+{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit",
+            "message":"API rate limit already exceeded for user ID 2991935."}]}
+```
+
+Confirmed down in run 180: `gh pr view`, `gh pr create`, `gh issue comment`. REST was **completely
+untouched at the same instant** (`core 5000/5000`) — the two budgets are independent.
+
+**`gh api rate_limit` cannot tell you this is happening.** It reported `graphql 4905/5000` during
+the outage and then `5000/5000` — a _full_ budget — while `{viewer{login}}` was still being refused.
+This is a secondary limit the endpoint does not expose. **The only reliable GraphQL health signal is
+one real GraphQL call:**
+
+```bash
+gh api graphql -f query='{viewer{login}}'   # costs 1 point; a refusal is the answer
+```
+
+Substitutes, all used successfully during the outage:
+
+| instead of                     | use                                                                                                      |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `gh pr view <n> --json …`      | `gh api repos/{owner}/{repo}/pulls/<n> --jq '…'`                                                         |
+| `gh pr create`                 | `gh api repos/{owner}/{repo}/pulls --method POST --input f.json`                                         |
+| `gh issue comment <n>`         | `gh api repos/{owner}/{repo}/issues/<n>/comments --method POST --input f.json`                           |
+| `gh pr list`                   | `gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100'`                                            |
+| adding one label               | `gh api repos/{owner}/{repo}/issues/<n>/labels --method POST -f 'labels[]=<name>'` (also the #1127 rule) |
+| merge-queue state              | `git ls-remote --heads origin 'gh-readonly-queue/*'` — not an API call at all                            |
+| **promoting a draft to ready** | **no REST fallback — see the warning below**                                                             |
+
+**One thing has no REST fallback, and it fails silently.** `gh pr ready` is the GraphQL mutation
+`markPullRequestReadyForReview`, and REST cannot replace it. Worse, the obvious attempt _looks like
+it worked_:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<n> --method PATCH --input <(echo '{"draft":false}')
+# HTTP 200. The response body itself says  "draft": true.  Nothing changed.
+```
+
+Verified against a control on the same call: a `title` PATCH through that endpoint is honoured in
+the same breath, so this is not auth and not the endpoint — `draft` is simply not writable over REST
+and GitHub does not say so. **Check `.draft` on a re-read; never trust the 200.** Practical
+consequence: a run that loses GraphQL can create, review, comment on, label and merge-queue PRs, but
+**cannot take its own drafts out of draft** — they wait for the next run.
+
+`--input` takes a JSON file, which is also how you send a body containing backticks, newlines or `$`
+without fighting the shell.
+
+**The cost worth knowing before you need it.** Runs 176/177 established GraphQL
+`pullRequest{isInMergeQueue mergeQueueEntry{position state}}` as _the_ authoritative merge-queue
+check, because `autoMergeRequest` reads null both for "never queued" and for "queued and
+progressing". There is no REST equivalent. During a GraphQL outage the best available signal is the
+weaker `gh-readonly-queue/main/pr-<n>-<sha>` branch, which appears only once the queue has built a
+merge group — so a PR sitting at position 2 is invisible. **Our most reliable check is also our
+least available one**; plan enqueues accordingly and verify by `merged` on the REST pull object
+afterwards.
+
+Cause and remedy are tracked on
+[#605](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/605): a PAT is
+**user-scoped**, so minting more of them does not partition the pool — every PAT, `gh` session,
+cloud worker and Conductor run draws on the same 5,000/hr. Only a GitHub App installation token has
+its own. Workflow **745** (board audit) failed to complete on this same limit while authenticating
+with `read-all-cbm-ffc-copilot-mcp-github-pat`; Projects v2 is GraphQL-only, so it has no fallback
+by construction.
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run
@@ -1466,3 +1535,79 @@ MSYS_NO_PATHCONV=1 git -C C:/…/wt164-1297 checkout -- .claude/hooks/test_hooks
 This section is appended at the end on purpose. `docs/lessons-ledger.md` cites `CLAUDE.md` by line
 number, and inserting it beside the earlier note shifted the `CLAUDE.md` line that ledger row L147
 (in `docs/lessons-ledger.md`, not a line number here) cites onto a blank one.
+
+## A background verification is bound to the working tree it started in (validated 2026-09-29, Conductor run 182)
+
+**Do not check out another ref in a tree that has a suite running against it.** Reviewing PR #1436,
+run 182 started `python tests/workflow-logic/run_all.py` on the PR branch, then — while it ran —
+`git checkout main` **in the same working tree** to read an unrelated workflow. The suite spent most
+of its ~8 minutes reading a mixed tree: some modules from the branch, some from `main`, with no
+boundary recorded anywhere.
+
+Nothing errored. No line of output looked unusual, and it exited **1**, which is what this host does
+anyway (27 modules fail here for platform reasons). So the result was not merely wrong, it was
+**indistinguishable from the branch genuinely failing** — and the natural reading of a red suite on
+a PR branch is "the PR is broken".
+
+The general form is worth more than the instance: **a background process holds a PATH, not a
+snapshot.** Anything that mutates the path invalidates the result without touching the process, so
+the usual tells — a non-zero exit, an error message, a crash — are all absent. Same family as L182
+(a restore defined against the wrong baseline) and as the parallel-`cd` rule above (state owned by
+something other than the command that reads it).
+
+The remedy is a dedicated tree, which costs one command:
+
+```bash
+git worktree add C:/…/scratch/wt<pr> pr<pr>          # detached copy; the main checkout is free
+( cd C:/…/scratch/wt<pr> && nohup python tests/workflow-logic/run_all.py > suite.txt 2>&1 & )
+git worktree remove C:/…/scratch/wt<pr>              # when the run is scored, not before
+```
+
+Two further notes from the same episode. Use `nohup … &` rather than the Bash tool's own
+backgrounding if you want the run to survive independently of the call that started it — a
+foreground call is capped at ten minutes and this suite does not fit. And **do not read a
+backgrounded suite's pass/fail by grepping `FAIL`**: score it from the
+`::error::workflow-logic tests failed:` line, which names the modules, because a truncated roster
+reports no `FAIL` at all (L194).
+
+## A wrong `gh api` query-parameter NAME is dropped in silence, and the answer looks plausible (validated 2026-09-29, Conductor run 182)
+
+**GitHub REST ignores a query parameter it does not recognise instead of rejecting it.** Counting
+the `agentic-os` backlog, run 182 wrote `?label=agentic-os` — the parameter is **`labels`**, plural.
+The filter was dropped, so every call returned the same unfiltered first page:
+
+```bash
+# WRONG -- `label=` is not a parameter; the filter silently does not happen
+for q in "label=agentic-os" "label=agentic-os,agent-ready" "label=agentic-os,blocked"; do
+  gh api "repos/$R/issues?state=open&per_page=100&$q" --jq '[.[]|select(.pull_request==null)]|length'
+done
+# → 94, 94, 94      (100 items minus 6 PRs, three times)
+
+# RIGHT
+gh api --paginate "repos/$R/issues?state=open&per_page=100&labels=agentic-os,agent-ready" \
+  --jq '.[]|select(.pull_request==null)|.number' | wc -l
+# → 62, against 137 for `agentic-os` alone
+```
+
+`94` is an entirely plausible count for that label, which is what makes this expensive: nothing in
+the value says the filter never ran. **The tell was not the number, it was that three queries which
+must differ agreed exactly.** Hit again in the same run with `?sort=created&direction=desc` on
+`issues/{n}/comments`, which is also unsupported and also ignored — it returned the **oldest**
+comments, and run 8's log very nearly got read as the newest entry on #719.
+
+This is the same family as the `--paginate`, `gh search` and `.auto_merge` rules above — an API
+answering a question you did not ask, in the reassuring direction — but the **remedy is different**,
+which is why it needs its own entry. Those are fixed by a flag, another page, or a different
+endpoint. A dropped filter is fixed only by getting the parameter's **name** right, and no amount of
+retrying, paginating or re-reading detects it.
+
+Two habits that do:
+
+- **Check the parameter name against the endpoint's docs whenever a filtered count feeds a
+  conclusion**, the same way `--paginate` is required for a negative one. `labels`, not `label`;
+  `state`, not `status`; the runs API wants `status`, the issues API wants `state`.
+- **Distrust agreement between queries that should differ.** Print every denominator side by side
+  (`agentic-os=137 agent-ready=62 blocked=6`) and read the _set_, not each number alone. Two filters
+  returning an identical count is the signature of neither filter running — the same reason
+  `audit-agentic-os-board.py` prints `expected=N board=M` rather than just reporting "0 missing"
+  (#966).

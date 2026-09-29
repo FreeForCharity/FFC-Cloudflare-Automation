@@ -26,6 +26,7 @@ that happen to fit.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 import yaml
@@ -240,6 +241,154 @@ def test_the_safety_doc_states_the_convention():
         "the safety doc should name this module as the enforcement, so a reader "
         "who changes the rule knows what will fail."
     )
+
+
+
+
+# --- Second clause of the convention: it must RENDER, not merely be present ---
+#
+# The guard above asks whether `dry_run` appears in `run-name`. That is the
+# first half of the convention in docs/workflow-safety-and-approvals.md. The
+# second half — "where the workflow also fires on events that carry no
+# `inputs`, render the effective value the job's own condition evaluates,
+# rather than an expression that renders empty" — had no guard, and two
+# workflows quietly failed it while passing the check above, because the
+# literal string `dry_run` was present in a fragment that renders to nothing.
+#
+# `${{ inputs.x }}` is empty on every trigger that is not a dispatch, so
+# `228`'s weekday cron produced `(dry_run=)` and `105`'s issue-label runs
+# produced `Manage Record:  ( ) (dry_run=)` — no domain, no record, no state.
+# Neither is a gate-safety hole: `228` is ungated on both its lanes, and
+# `105`'s write job requires `dry_run == 'false'` from a resolver that hard-codes
+# `'true'` on the issue path, so its `cloudflare-prod-write` gate is unreachable
+# from that trigger. It is a readability contract, and the reason to hold it
+# mechanically is that presence and validity came apart here exactly as they
+# did in #1107 itself — one layer further in.
+
+BARE_INPUT = re.compile(r"\$\{\{\s*inputs\.[A-Za-z0-9_]+\s*\}\}")
+DISPATCH_EVENTS = frozenset({"workflow_dispatch", "workflow_call"})
+
+
+def _non_dispatch_triggers(doc: dict) -> list[str]:
+    """Events that fire this workflow without a caller supplying `inputs`.
+
+    Same `doc.get(True, ...)` dance as `_dispatch_inputs`: PyYAML reads the
+    bare key `on:` as the boolean `True`. `on:` also has a bare-string and a
+    list spelling, and a workflow using either would otherwise be scored as
+    having no triggers at all — passing for the wrong reason.
+    """
+    on = doc.get(True, doc.get("on"))
+    if isinstance(on, str):
+        events = {on}
+    elif isinstance(on, list):
+        events = {e for e in on if isinstance(e, str)}
+    elif isinstance(on, dict):
+        events = set(on)
+    else:
+        events = set()
+    return sorted(events - DISPATCH_EVENTS)
+
+
+def run_names_that_render_empty(workflows) -> list[str]:
+    """Workflows whose `run-name` interpolates a bare `inputs.*` they can fire without."""
+    bad = []
+    for path, doc in workflows:
+        run_name = str(doc.get("run-name") or "")
+        if not BARE_INPUT.search(run_name):
+            continue
+        if not _non_dispatch_triggers(doc):
+            continue
+        bad.append(path.name)
+    return bad
+
+
+def test_no_run_name_renders_empty_on_a_trigger_that_carries_no_inputs():
+    bad = run_names_that_render_empty(_workflows())
+    assert not bad, (
+        f"{len(bad)} workflow(s) interpolate a bare `${{{{ inputs.x }}}}` into run-name "
+        f"while also firing on a trigger that supplies no inputs, so those runs render "
+        f"blank fields in the run list: {', '.join(bad)}. Render the effective value "
+        f"instead — `${{{{ inputs.dry_run || false }}}}`, or a `format(...)` branch per "
+        f"trigger (see 105 and docs/workflow-safety-and-approvals.md)."
+    )
+
+
+def test_the_render_guard_has_a_population_to_check():
+    """A denominator, for the same reason the guard above has one.
+
+    This one is deliberately *not* a floor on offenders — it is a floor on
+    workflows that carry a `run-name` at all and on ones with a non-dispatch
+    trigger. If either collapses to zero the assertion above goes green while
+    reading nothing, which is the failure mode this whole module exists about.
+    """
+    workflows = _workflows()
+    with_run_name = [p.name for p, d in workflows if str(d.get("run-name") or "")]
+    with_other_trigger = [p.name for p, d in workflows if _non_dispatch_triggers(d)]
+    assert len(with_run_name) >= 50, (
+        f"only {len(with_run_name)} workflows parsed with a run-name — the "
+        f"extraction is probably broken, not the fleet."
+    )
+    assert len(with_other_trigger) >= 20, (
+        f"only {len(with_other_trigger)} workflows parsed with a non-dispatch "
+        f"trigger — `_non_dispatch_triggers` is probably not matching."
+    )
+
+
+def test_the_render_guard_reports_the_shape_it_was_written_for():
+    """Polarity, on 228's exact pre-fix shape: a cron plus a bare interpolation."""
+    doc = yaml.safe_load(
+        "name: fixture\n"
+        "run-name: 'Fraud Review (dry_run=${{ inputs.dry_run }})'\n"
+        "on:\n"
+        "  schedule:\n"
+        "    - cron: '27 13 * * 1-5'\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      dry_run:\n"
+        "        type: boolean\n"
+        "jobs:\n"
+        "  go:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert run_names_that_render_empty([(pathlib.Path("fixture.yml"), doc)]) == [
+        "fixture.yml"
+    ]
+
+
+def test_a_defaulted_interpolation_is_accepted():
+    """The fix must pass, or the guard just forbids the trigger."""
+    doc = yaml.safe_load(
+        "name: fixture\n"
+        "run-name: 'Fraud Review (dry_run=${{ inputs.dry_run || false }})'\n"
+        "on:\n"
+        "  schedule:\n"
+        "    - cron: '27 13 * * 1-5'\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      dry_run:\n"
+        "        type: boolean\n"
+        "jobs:\n"
+        "  go:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert run_names_that_render_empty([(pathlib.Path("fixture.yml"), doc)]) == []
+
+
+def test_a_dispatch_only_workflow_is_left_alone():
+    """A bare interpolation is correct when nothing else can fire the workflow."""
+    doc = yaml.safe_load(
+        "name: fixture\n"
+        "run-name: 'Thing ${{ inputs.domain }}'\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      domain:\n"
+        "        type: string\n"
+        "jobs:\n"
+        "  go:\n"
+        "    runs-on: ubuntu-latest\n"
+    )
+    assert run_names_that_render_empty([(pathlib.Path("fixture.yml"), doc)]) == []
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

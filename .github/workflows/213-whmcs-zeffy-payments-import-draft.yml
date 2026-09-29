@@ -85,6 +85,161 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # #1422. All five output-path inputs are consumed TWICE: once by an export
+      # or generator body below (through `env:`, as of #1080 lane 21) and once,
+      # RAW, by an `actions/upload-artifact` step's `path:`. A `path:` is an
+      # `@actions/glob` SELECTOR, not a filename, so the second consumer has a
+      # different grammar from the first (ledger L298) and the move to `env:`
+      # closed only one of the two. 201/202/203/208 ship six guard conditions on
+      # such a value; this workflow shipped one of six -- the blank check, in
+      # each consuming step -- while the burn-down scored it finished.
+      #
+      # WHY THIS IS ONE STEP RATHER THAN A COPY IN EACH CONSUMING BODY
+      #   The five values are first read by FOUR different steps, and
+      #   `invoices_output` only behind `include_zero_invoices`. Five copies of
+      #   six checks is how one value silently keeps a check another gains --
+      #   exactly what 202's loop was introduced to prevent, with five times the
+      #   surface. One loop over all five makes coverage structural: a sixth
+      #   artifact-consumed input that is not added to the spec list is a failing
+      #   test, not an unguarded path in production.
+      #
+      # WHY IT RUNS BEFORE `whmcs-secrets-from-kv` RATHER THAN INSIDE AN EXPORT
+      #   A refused dispatch then never fetches the WHMCS credential and never
+      #   leaves an `az` session on disk (#1188/#1208). The per-step blank guards
+      #   below are NOT removed: they also catch a missing or misnamed
+      #   step-level `env:` mapping, which is a different failure from a bad
+      #   dispatch value and is the attribution they were added for (#1213).
+      - name: Validate artifact-consumed output paths
+        shell: pwsh
+        env:
+          IN_CLIENTS_OUTPUT: ${{ inputs.clients_output }}
+          IN_TRANSACTIONS_OUTPUT: ${{ inputs.transactions_output }}
+          IN_INVOICES_OUTPUT: ${{ inputs.invoices_output }}
+          IN_ZEFFY_OUTPUT: ${{ inputs.zeffy_output }}
+          IN_ZEFFY_OUTPUT_XLSX: ${{ inputs.zeffy_output_xlsx }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # One guard body over ALL FIVE values. The input NAME travels with the
+          # value so each `throw` names the input the dispatcher actually typed,
+          # and the UPLOAD STEP travels with it too: the artifact step differs
+          # per value here, unlike the single-upload lanes, and a message naming
+          # the wrong one would send a reader to the wrong `path:`.
+          foreach ($spec in @(
+            @{ Input = 'clients_output';      Upload = 'Upload WHMCS clients';      Value = $env:IN_CLIENTS_OUTPUT },
+            @{ Input = 'transactions_output'; Upload = 'Upload WHMCS transactions'; Value = $env:IN_TRANSACTIONS_OUTPUT },
+            @{ Input = 'invoices_output';     Upload = 'Upload WHMCS invoices';     Value = $env:IN_INVOICES_OUTPUT },
+            @{ Input = 'zeffy_output';        Upload = 'Upload Zeffy draft';        Value = $env:IN_ZEFFY_OUTPUT },
+            @{ Input = 'zeffy_output_xlsx';   Upload = 'Upload Zeffy draft';        Value = $env:IN_ZEFFY_OUTPUT_XLSX }
+          )) {
+            $name   = $spec.Input
+            $upload = $spec.Upload
+            $value  = $spec.Value
+
+            # Fail closed, not default-fill (ledger L254): the upload step reads
+            # each input directly, so a default supplied only in a body would
+            # write to the substituted path while the upload still looked at the
+            # blank one.
+            #
+            # `-not IsNullOrWhiteSpace` rather than `-ne ''`, and the spelling is
+            # what makes this do anything: the move to `env:` widens the domain
+            # from string to string-or-null, so an omitted input arrives as
+            # `$null` and an all-whitespace one as `'   '`. `IsNullOrWhiteSpace`
+            # is true for both; `-ne ''` is true for `$null` (#1213).
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "$name is blank. It is consumed BOTH by this job's export/generator bodies and by the '$upload' step's path:, so nothing substitutes a default here — re-dispatch with a path, or omit the input to get its declared default."
+            }
+
+            # FIRST, and the four checks below depend on it.
+            #
+            # `actions/upload-artifact` reads `path:` as a NEWLINE-DELIMITED
+            # LIST of patterns — and the 'Upload Zeffy draft' step's `path:` is
+            # literally spelled as such a list — so one input carrying a newline
+            # is several patterns to that consumer while still being one string
+            # here.
+            #
+            # It also breaks the checks below, which is why it cannot come last.
+            # `^` anchors at the start of the STRING, not of each line, so
+            # `^([A-Za-z]+:|[\\/])` and `^~` see only the first line of a
+            # multi-line value and a payload on the second walks past both.
+            # Forbidding the newline is the remedy rather than `(?m)`: multiline
+            # mode would make each check see every line but would still leave
+            # the value meaning ONE path here and SEVERAL there.
+            if ($value -match '[\r\n]') {
+              throw "$name contains a carriage return or newline. The '$upload' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
+            }
+
+            # `path:` is glob-capable (`@actions/glob`), so the junior consumer
+            # can be pointed at files this job never wrote. Not every payload
+            # self-blocks first: `*` and `?` are illegal in a Windows filename,
+            # but `[` and `]` are legal filename characters AND character-class
+            # metacharacters — the export writes a literal `[m]sal…json` and
+            # exits 0, and the upload's glob then matches a different, real file.
+            #
+            # WHY THE SET STOPS AT `* ? [ ]`, and why it is deliberately NOT widened to
+            # `{ } ( ) !`. The reason is a fact about a THIRD-PARTY package, which is why
+            # it is written here instead of left to be re-derived by every reviewer
+            # (#1380 — raised as a High on #1361 on the theory that `{a,b}` and `!(x)`
+            # smuggle extra paths in, and it does not reproduce).
+            #
+            # `@actions/glob@0.7.0` builds its minimatch with brace expansion and
+            # extglobs DISABLED — `lib/internal-pattern.js`, `nobrace: true` (:58) and
+            # `noext: true` (:61) — so `{a,b}` and `!(x)` reach the globber as LITERAL
+            # TEXT, not as alternations. Re-measured against a fixture tree holding a
+            # legitimate CSV and a planted `.azure/msal_token_cache.json`, with
+            # `implicitDescendants: false`:
+            #
+            #   `{<csv>,<secret>}`               0 hits    `!(nope).csv`        0 hits
+            #   `{whmcs_clients,nope}.csv`       0 hits    `@(a|whmcs_clients)` 0 hits
+            #   `(x).csv`                        0 hits — literal, not a group
+            #   `!<csv>` alone                   0 hits — an exclude can only REMOVE
+            #   `.azure/[m]sal_token_cache.json` 1 hit  — the REAL file, via the class
+            #   `<csv>` and `<dir>/*.csv`        1 hit each — the controls, so no 0
+            #                                               above is read as evidence
+            #
+            # So the set is not widened. `{ } ( ) !` are legal filename characters that
+            # expand to nothing at this consumer, so a guard rejecting them would refuse
+            # legitimate paths while STATING a hazard that does not exist — which is its
+            # own failure mode, and the one #1380 asks not to introduce. What would
+            # change this is the dependency, not the character list: if `@actions/glob`
+            # ever ships `nobrace: false` or `noext: false`, this set must widen with it.
+            # Re-measure that, rather than adding characters defensively.
+            #
+            # The one multi-path vector that DOES work is the newline, refused above.
+            # That is why the newline guard cannot be reordered below this one.
+            if ($value -match '[*?\[\]]') {
+              throw "$name contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the '$upload' step, whose path: is a glob selector, so a pattern can match files this job never wrote. Pass a plain relative path."
+            }
+
+            # `[A-Za-z]+:`, not `[A-Za-z]:` — a PSDrive qualifier is not limited
+            # to a single-letter filesystem drive, so `Temp:/x.csv` and `env:/x`
+            # pass the narrow spelling and are still resolved by the provider.
+            #
+            # An explicit regex rather than [System.IO.Path]::IsPathRooted,
+            # which is platform-DEPENDENT: `C:\x` and `\x` are rooted on Windows
+            # and neither is on Linux, so a test running on ubuntu CI would
+            # assert something the `windows-latest` runner does not do.
+            if ($value -match '^([A-Za-z]+:|[\\/])') {
+              throw "$name must be a workspace-relative path; got an absolute, UNC, drive- or PSDrive-qualified path. The '$upload' step uploads whatever its path: resolves to, so a path outside the workspace can put runner files into a downloadable artifact."
+            }
+
+            # `~` begins with neither a separator nor a qualifier, so the test
+            # above does not catch it. This is the sharpest instance of the
+            # two-consumer point rather than a repeat of it: PowerShell expands
+            # `~` and `@actions/glob` does not, so the consumers disagree about
+            # WHICH FILE IS MEANT — and `~/.azure` is where the `az` session
+            # this job's OIDC login leaves behind actually lives (#1188/#1208).
+            if ($value -match '^~') {
+              throw "$name must not begin with '~': PowerShell expands it to the user profile, so this job would write outside the workspace, while the '$upload' step's globber does not expand it — the two consumers would not even agree which file is meant."
+            }
+
+            if (($value -split '[\\/]') -contains '..') {
+              throw "$name must not contain a '..' segment: it escapes the workspace, and the '$upload' step uploads whatever its path: resolves to."
+            }
+          }
+
+          "All five artifact-consumed output paths passed the #1422 guard set." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:

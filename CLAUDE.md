@@ -1166,6 +1166,59 @@ gh api graphql -f query='{repository(owner:"FreeForCharity",name:"FFC-Cloudflare
   pullRequest(number:904){reviewThreads(first:50){nodes{isResolved path}}}}}'
 ```
 
+## When GraphQL is rate-limited, most of `gh` stops working — REST fallbacks (measured 2026-09-29)
+
+`gh` is a GraphQL client wearing a REST coat. When the shared user pool exhausts its GraphQL budget,
+commands that sound like plain REST operations fail too:
+
+```
+{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit",
+            "message":"API rate limit already exceeded for user ID 2991935."}]}
+```
+
+Confirmed down in run 180: `gh pr view`, `gh pr create`, `gh issue comment`. REST was **completely
+untouched at the same instant** (`core 5000/5000`) — the two budgets are independent.
+
+**`gh api rate_limit` cannot tell you this is happening.** It reported `graphql 4905/5000` during
+the outage and then `5000/5000` — a _full_ budget — while `{viewer{login}}` was still being refused.
+This is a secondary limit the endpoint does not expose. **The only reliable GraphQL health signal is
+one real GraphQL call:**
+
+```bash
+gh api graphql -f query='{viewer{login}}'   # costs 1 point; a refusal is the answer
+```
+
+Substitutes, all used successfully during the outage:
+
+| instead of                | use                                                                                                      |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `gh pr view <n> --json …` | `gh api repos/{owner}/{repo}/pulls/<n> --jq '…'`                                                         |
+| `gh pr create`            | `gh api repos/{owner}/{repo}/pulls --method POST --input f.json`                                         |
+| `gh issue comment <n>`    | `gh api repos/{owner}/{repo}/issues/<n>/comments --method POST --input f.json`                           |
+| `gh pr list`              | `gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100'`                                            |
+| adding one label          | `gh api repos/{owner}/{repo}/issues/<n>/labels --method POST -f 'labels[]=<name>'` (also the #1127 rule) |
+| merge-queue state         | `git ls-remote --heads origin 'gh-readonly-queue/*'` — not an API call at all                            |
+
+`--input` takes a JSON file, which is also how you send a body containing backticks, newlines or `$`
+without fighting the shell.
+
+**The cost worth knowing before you need it.** Runs 176/177 established GraphQL
+`pullRequest{isInMergeQueue mergeQueueEntry{position state}}` as _the_ authoritative merge-queue
+check, because `autoMergeRequest` reads null both for "never queued" and for "queued and
+progressing". There is no REST equivalent. During a GraphQL outage the best available signal is the
+weaker `gh-readonly-queue/main/pr-<n>-<sha>` branch, which appears only once the queue has built a
+merge group — so a PR sitting at position 2 is invisible. **Our most reliable check is also our
+least available one**; plan enqueues accordingly and verify by `merged` on the REST pull object
+afterwards.
+
+Cause and remedy are tracked on
+[#605](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/605): a PAT is
+**user-scoped**, so minting more of them does not partition the pool — every PAT, `gh` session,
+cloud worker and Conductor run draws on the same 5,000/hr. Only a GitHub App installation token has
+its own. Workflow **745** (board audit) failed to complete on this same limit while authenticating
+with `read-all-cbm-ffc-copilot-mcp-github-pat`; Projects v2 is GraphQL-only, so it has no fallback
+by construction.
+
 ## Running & authorizing GitHub Actions workflows (IMPORTANT)
 
 In a self-hosted/local remote environment the `gh` CLI is typically pre-authenticated — run

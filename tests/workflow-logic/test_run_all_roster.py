@@ -608,6 +608,198 @@ def test_the_runner_is_the_one_ci_invokes():
     )
 
 
+# --------------------------------------------------------------------------
+# Tests defined BELOW the roster line (L307, #1427's real defect).
+#
+# `TESTS = [... globals() ...]` is evaluated where it sits, so a test defined
+# after it never enters the list. Reported < declared, exactly as a mid-module
+# crash looks -- and the remedies are opposites, which is why the runner has to
+# name which one it is.
+# --------------------------------------------------------------------------
+
+# Two tests above the roster, two below. Exits 0 printing two clean PASSes.
+BELOW_ROSTER = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "def test_b():\n    assert True\n" + RUNNER + "\n\n"
+    "def test_c():\n    assert True\n\n"
+    "def test_d():\n    assert True\n"
+)
+
+# The same shape with an EXPLICIT roster. `TESTS = [test_a]` names its member,
+# so position cannot silently drop one: test_b's absence is a deliberate
+# exclusion, not the L307 accident, and the below-roster wording must not fire.
+EXPLICIT_ROSTER_BELOW = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "TESTS = [test_a]\n\n"
+    "if __name__ == '__main__':\n"
+    "    failures = 0\n"
+    "    for t in TESTS:\n"
+    "        try:\n"
+    "            t()\n"
+    "            print(f'  PASS {t.__name__}')\n"
+    "        except AssertionError as e:\n"
+    "            failures += 1\n"
+    "            print(f'  FAIL {t.__name__}: {e}')\n"
+    "    sys.exit(1 if failures else 0)\n\n"
+    "def test_b():\n    assert True\n"
+)
+
+
+def test_a_test_below_the_roster_line_is_caught():
+    """The defect #1427 shipped with, and the whole reason for this class."""
+    with tempfile.TemporaryDirectory(prefix="below-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_below_roster.py", BELOW_ROSTER)
+        code, out = _run_all_on(d)
+    assert code == 1, f"a module running 2 of its 4 tests must fail the sweep:\n{out}"
+    assert "truncated roster" in out, out
+
+
+def test_the_below_roster_diagnosis_names_the_cause_and_the_tests():
+    """A finding that misnames the cause sends the reader to the wrong remedy.
+
+    The shipped message asserted the module "died in the test after" the last
+    reporter. For this input nothing died: the list was built before test_c and
+    test_d existed. The message must say so, name them, and give the remedy.
+    """
+    with tempfile.TemporaryDirectory(prefix="below-msg-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_below_roster.py", BELOW_ROSTER)
+        _, out = _run_all_on(d)
+    assert "test_c" in out and "test_d" in out, f"must name the tests that never ran:\n{out}"
+    assert "Nothing crashed" in out, f"must not claim the module died:\n{out}"
+    assert "died in the test after it" not in out, (
+        f"the L82 wording is the OTHER cause and must not appear here:\n{out}"
+    )
+    assert "END of the module" in out, f"must state the remedy:\n{out}"
+
+
+def test_a_genuine_mid_module_crash_still_gets_the_l82_wording():
+    """The discriminator has to cut both ways or it has only moved the error."""
+    with tempfile.TemporaryDirectory(prefix="crash-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_truncated.py", TRUNCATED)
+        _, out = _run_all_on(d)
+    assert "died in the test after it" in out, (
+        f"a real crash must keep the L82 diagnosis:\n{out}"
+    )
+    assert "Nothing crashed" not in out, f"must not offer the L307 remedy here:\n{out}"
+
+
+def test_an_explicit_roster_is_not_position_sensitive():
+    """Only the `globals()` form can silently drop a test by position.
+
+    `TESTS = [test_a]` names its members, so a test below it was left out on
+    purpose. Reporting the L307 remedy ("move the roster to the end") would be
+    wrong advice, and a checker that gives wrong advice about correct code is
+    the one that gets switched off (the #1432 argument).
+    """
+    with tempfile.TemporaryDirectory(prefix="explicit-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_explicit.py", EXPLICIT_ROSTER_BELOW)
+        _, out = _run_all_on(d)
+    assert "Nothing crashed" not in out, (
+        f"an explicit roster must not get the below-roster wording:\n{out}"
+    )
+
+
+def test_the_real_tree_has_no_tests_below_a_roster_line():
+    """The control: 117 shipped modules, zero findings.
+
+    Without it this guard could be arbitrarily strict and CI would still be
+    green until the next module was written.
+    """
+    offenders = {}
+    for path in sorted(HERE.glob("test_*.py")):
+        below = run_all.tests_below_roster(path)
+        if below:
+            offenders[path.name] = below
+    assert not offenders, (
+        f"these modules define tests below their roster line, so those tests "
+        f"never run under run_all.py: {offenders}"
+    )
+
+
+def test_every_condition_in_the_position_check_is_load_bearing():
+    """Mutation pass: the helper must return nothing without a `globals()` roster.
+
+    Guards against the lazy generalisation -- treating ANY `TESTS = [...]` as
+    position-sensitive, which is what the explicit-roster case above forbids.
+    """
+    with tempfile.TemporaryDirectory(prefix="mutate-") as tmp:
+        d = pathlib.Path(tmp)
+        globals_form = _write(d, "test_globals.py", BELOW_ROSTER)
+        explicit_form = _write(d, "test_explicit.py", EXPLICIT_ROSTER_BELOW)
+        no_roster = _write(d, "test_none.py", SILENT)
+        assert run_all.tests_below_roster(globals_form) == ["test_c", "test_d"], (
+            "the globals() form must report exactly the tests below the line"
+        )
+        assert run_all.tests_below_roster(explicit_form) == [], (
+            "an explicit roster names its members; position is not a hazard"
+        )
+        assert run_all.tests_below_roster(no_roster) == [], (
+            "a module with no roster assignment has no line to be below"
+        )
+
+
+def test_an_unparseable_module_declares_nothing_rather_than_crashing_the_sweep():
+    """Same contract `declared_tests` already keeps: the traceback is the diagnosis."""
+    with tempfile.TemporaryDirectory(prefix="broken-") as tmp:
+        d = pathlib.Path(tmp)
+        broken = _write(d, "test_broken.py", "def test_a(:\n    pass\n")
+        assert run_all.tests_below_roster(broken) == []
+
+
+
+# A ListComp roster that does NOT read `globals()`. This is the case that
+# isolates the `globals()` sub-check: `EXPLICIT_ROSTER_BELOW` above is an
+# `ast.List`, so the `isinstance(..., ast.ListComp)` clause alone already
+# excludes it and the `globals()` walk is never reached. Here the ListComp
+# clause passes and only the `globals()` walk can decide -- and it must decide
+# "not position-sensitive", because this roster names its members too.
+COMPREHENSION_OVER_A_TUPLE = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "TESTS = [t for t in (test_a,)]\n\n"
+    "if __name__ == '__main__':\n"
+    "    failures = 0\n"
+    "    for t in TESTS:\n"
+    "        try:\n"
+    "            t()\n"
+    "            print(f'  PASS {t.__name__}')\n"
+    "        except AssertionError as e:\n"
+    "            failures += 1\n"
+    "            print(f'  FAIL {t.__name__}: {e}')\n"
+    "    sys.exit(1 if failures else 0)\n\n"
+    "def test_b():\n    assert True\n"
+)
+
+
+def test_the_globals_sub_check_is_what_narrows_listcomp_rosters():
+    """Isolates the `globals()` walk from the `ListComp` clause beside it.
+
+    Found by review, not by me: the first version of this module mutated both
+    conditions at once, so a suite that looked like it proved each condition
+    load-bearing actually left this one unexercised. That is precisely the
+    defect class this whole PR is about — a check present but not checking —
+    and the mutation that flatters you is the one you have to isolate.
+    """
+    with tempfile.TemporaryDirectory(prefix="listcomp-") as tmp:
+        d = pathlib.Path(tmp)
+        path = _write(d, "test_tuple_comp.py", COMPREHENSION_OVER_A_TUPLE)
+        assert run_all.tests_below_roster(path) == [], (
+            "a comprehension that does not read globals() names its members, "
+            "so a test below it was excluded on purpose"
+        )
+        _, out = _run_all_on(d)
+    assert "Nothing crashed" not in out, (
+        f"the below-roster remedy must not be offered for a non-globals() roster:\n{out}"
+    )
+
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -124,6 +124,9 @@ def _run(
     filler_workflows=0,
     runs_throw=None,
     extra_runs=None,
+    event="schedule",
+    last_green_event="schedule",
+    older_runs=None,
 ):
     """Drive one poll sweep in which `name` has `conclusion` as its latest run.
 
@@ -142,6 +145,13 @@ def _run(
     its run list behind the latest run (the API returns newest first). `None`
     means it has never gone green. It is what separates a gate declined once from
     a gate nobody has answered in weeks.
+
+    `event` / `last_green_event` are the triggering events of those two runs, and
+    `older_runs` seeds further run objects behind them, newest-first. All three
+    exist for #1440: the fixture has to be able to carry runs of MORE THAN ONE
+    event, because that is the only shape in which "which run does 740 judge?"
+    has a visible answer. Both default to `schedule`, which is what every fixture
+    written before #1440 meant — 740 watches cron-driven workflows only.
     """
     script = step_github_script(WORKFLOW, JOB, STEP)
     watched = _watched() if watched is None else watched
@@ -165,6 +175,7 @@ def _run(
                 "id": 30116967112,
                 "name": RUN_DISPLAY_NAME,
                 "conclusion": conclusion,
+                "event": event,
                 "run_number": 42,
                 "head_branch": head_branch,
                 "html_url": "https://github.com/x/y/actions/runs/999",
@@ -179,12 +190,14 @@ def _run(
                     "id": 30116960000,
                     "name": RUN_DISPLAY_NAME,
                     "conclusion": "success",
+                    "event": last_green_event,
                     "run_number": 41,
                     "head_branch": head_branch,
                     "updated_at": green_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "html_url": "https://github.com/x/y/actions/runs/998",
                 }
             )
+        runs[str(ids[name])].extend(older_runs or [])
     if jobs is None:
         jobs = [{"name": "audit", "conclusion": "failure"}]
 
@@ -1629,6 +1642,195 @@ def test_dry_run_is_a_dispatch_input_that_defaults_to_writing():
     # and the schedule is untouched — a dispatch-only alerter is a dead one
     assert load_workflow(WORKFLOW)[True].get("schedule"), "the poll must stay scheduled"
 
+
+# ---------------------------------------------------------------------------
+# #1440 — WHICH run 740 judges. The watch list is filtered to scheduled
+# workflows (test_watched_workflows_are_actually_scheduled, above, states the
+# reason: "the latest run" of a dispatch-only workflow means nothing). The run
+# LOOKUP was not filtered, so the guarantee stopped at the wrong boundary and a
+# hand-dispatched run decided the verdict for a scheduled lane.
+#
+# Both directions were live in production when this was filed, and they are not
+# symmetric in cost:
+#
+#   fail-OPEN  a dispatched SUCCESS closes an alert for a still-broken cron.
+#              735's latest completed run was dispatch/success 36448003123
+#              (2026-09-28T16:01:32Z) while its last four SCHEDULED runs all
+#              failed; alert #1033 was closed on it. A four-week-old weekly
+#              outage reported as healthy — the silence this workflow exists
+#              to end, reintroduced by its own lookup.
+#   fail-CLOSED a dispatched FAILURE opens a "Scheduled workflow failing" alert.
+#              745 exits 1 by design on board drift and the Conductor dispatches
+#              it every run; #1322 and #1439 were both opened by a dispatch.
+#              Noise, not silence — cosmetic next to the fail-open, same cause.
+#
+# Every run id and timestamp below was read back from the live API on
+# 2026-09-29 rather than invented, so these fixtures decay honestly: if GitHub
+# ever stops filtering `event` server-side, the shim's model of it is what has
+# to change, and it is documented in one place.
+FIXTURE_735_DISPATCH_SUCCESS = 36448003123  # 2026-09-28T16:01:32Z, event=workflow_dispatch
+FIXTURE_735_SCHEDULED_FAILURE = 36388695832  # 2026-09-28T06:53:13Z, event=schedule
+FIXTURE_745_DISPATCH_FAILURE = 36553924528  # 2026-09-29T10:11Z, event=workflow_dispatch
+FIXTURE_745_SCHEDULED_SUCCESS = 36539496147  # 2026-09-29T07:55:03Z, event=schedule
+
+
+def _real_run(run_id, conclusion, event, *, run_number, updated_at=None):
+    """A run object in the shape `listWorkflowRuns` returns, from a REAL run."""
+    obj = {
+        "id": run_id,
+        "name": RUN_DISPLAY_NAME,
+        "conclusion": conclusion,
+        "event": event,
+        "run_number": run_number,
+        "head_branch": "main",
+        "html_url": f"https://github.com/x/y/actions/runs/{run_id}",
+    }
+    if updated_at:
+        obj["updated_at"] = updated_at
+    return obj
+
+
+def test_both_run_lookups_filter_to_scheduled_runs():
+    # AC1. Asserted on the shipped YAML rather than only through behaviour, so
+    # that a future edit which drops the filter from ONE call is named as such
+    # instead of surfacing as an unrelated-looking behavioural test going red.
+    body = step_github_script(WORKFLOW, JOB, STEP)
+    # The ARGUMENT lines, not every line mentioning a status — the script also
+    # discusses `status: 'success'` in prose right above the probe, and a
+    # substring scan that swept those in would count three lookups and fail
+    # while naming a comment. Comment lines are dropped explicitly.
+    lookups = [
+        line.strip()
+        for line in body.splitlines()
+        if line.strip().startswith("branch,") and "status:" in line
+    ]
+    assert len(lookups) == 2, f"expected exactly two run-lookup argument lines, got {lookups}"
+    assert {"'completed'" in ln for ln in lookups} == {True, False}, (
+        f"expected one verdict lookup and one success probe, got {lookups}"
+    )
+    for line in lookups:
+        assert "event: 'schedule'" in line, f"lookup is not filtered to scheduled runs: {line}"
+    # And nothing else in the script reaches listWorkflowRuns by another route:
+    # a third lookup added later would be unfiltered and invisible to this test.
+    assert body.count("listWorkflowRuns(") == 2, "a run lookup was added without a filter"
+
+
+def test_each_run_lookup_says_which_direction_its_filter_closes():
+    # AC1's second half. The two filters look identical and close opposite
+    # failure modes; a reader who cannot tell them apart is the one who deletes
+    # the "redundant" one. #1440 is the ticket both must cite.
+    body = step_github_script(WORKFLOW, JOB, STEP)
+    assert body.count("#1440") >= 2, "each lookup's filter must carry its own rationale"
+    assert "RECOVERY direction" in body, body[:0] or "the greenAge filter must say what it closes"
+    assert "VERDICT direction" in body, "the poll filter must say what it closes"
+
+
+def test_a_dispatched_success_does_not_close_an_alert_for_a_failing_scheduled_lane():
+    # AC2 — the fail-open direction, on 735's real pair. The newest completed
+    # run is a dispatch that passed; the newest SCHEDULED run failed. 740 must
+    # judge the second one, so the open alert stays open and gains an entry.
+    #
+    # Without `event: 'schedule'` on the poll this closes the alert, which is
+    # exactly what happened to #1033 in production.
+    r = _run(
+        "success",
+        event="workflow_dispatch",
+        open_issues=[_alert_issue(1033)],
+        older_runs=[
+            _real_run(FIXTURE_735_SCHEDULED_FAILURE, "failure", "schedule", run_number=13)
+        ],
+    )
+    assert r["threw"] is None, r
+    assert _closes(r) == [], f"a dispatched success must not close a scheduled lane's alert: {r}"
+    assert len(r["comments"]) == 1, r
+    assert str(FIXTURE_735_SCHEDULED_FAILURE) in r["comments"][0]["body"], r["comments"]
+
+
+def test_the_dispatched_success_is_not_merely_ignored_it_is_never_fetched():
+    # Same fixture, one level down. "The alert stayed open" could also be true
+    # of a script that read the dispatch run and then filtered it client-side —
+    # which would still be wrong for the greenAge probe, and would still cost
+    # the call. Assert the filter is pushed to the API, where GitHub applies it.
+    r = _run(
+        "success",
+        event="workflow_dispatch",
+        open_issues=[_alert_issue(1033)],
+        older_runs=[
+            _real_run(FIXTURE_735_SCHEDULED_FAILURE, "failure", "schedule", run_number=13)
+        ],
+    )
+    polls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "completed"]
+    assert polls, r["listWorkflowRunsCalls"]
+    # `.get`, not `[...]`: an unfiltered call records NO `event` key at all
+    # (the shim serialises `args.event` and JSON drops `undefined`), so `[...]`
+    # raises KeyError — which this module's runner does not catch. Measured on
+    # the M1 mutant: it killed the module mid-roster, 71 tests reported instead
+    # of 102, and the 30 that never ran printed nothing at all. Same hazard the
+    # `_alert_issue` tests guard against by asserting before indexing, one
+    # method over.
+    assert all(c.get("event") == "schedule" for c in polls), polls
+
+
+def test_a_dispatched_failure_does_not_open_an_alert_for_a_green_scheduled_lane():
+    # AC3 — the fail-closed direction, on 745's real pair. 745 exits 1 by design
+    # when it finds board drift and the Conductor dispatches it every run, so its
+    # newest completed run is routinely a red dispatch sitting in front of a
+    # green scheduled run. An issue titled "🚨 Scheduled workflow failing" whose
+    # evidence is a hand-run read-only audit is the supervisor alerting on
+    # itself (#1322, #1439).
+    r = _run(
+        "failure",
+        event="workflow_dispatch",
+        open_issues=[],
+        older_runs=[
+            _real_run(FIXTURE_745_SCHEDULED_SUCCESS, "success", "schedule", run_number=75)
+        ],
+    )
+    assert r["threw"] is None, r
+    assert r["created"] == [], f"a dispatched failure must not open a scheduled-lane alert: {r}"
+
+
+def test_a_dispatch_only_success_history_is_not_read_as_a_recovery():
+    # AC4 — the greenAge probe. A workflow whose only successes are dispatches
+    # has never been shown to work on cron, so the escalation clock must not be
+    # reset by one. `last_green=3` is well inside STALE_SUCCESS_DAYS: if the
+    # dispatch counted, this sweep would be SUPPRESSED and say nothing at all.
+    r = _run(
+        "cancelled",
+        open_issues=[],
+        jobs=_declined_gate_jobs(),
+        last_green=3,
+        last_green_event="workflow_dispatch",
+    )
+    assert r["threw"] is None, r
+    assert len(r["created"]) == 1, f"a dispatched green must not buy a scheduled lane quiet: {r}"
+    body = r["created"][0]["body"]
+    # And it must say which kind of success it never had. A reader who watched
+    # this workflow pass by hand an hour ago will disbelieve a flat "it has
+    # never succeeded" — and disbelieving the alert is how the next outage gets
+    # ignored.
+    assert "never had a successful scheduled" in body, body
+
+
+def test_the_scheduled_green_control_still_suppresses():
+    # The negative control for the case above, and the whole of its value: with
+    # `last_green_event` left at its default the SAME fixture is suppressed. So
+    # the alert above is caused by the event of the green run and by nothing
+    # else in the fixture — without this the test could be passing because
+    # `cancelled` alerts for some unrelated reason.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=3)
+    assert r["created"] == [], f"a recent SCHEDULED green must still suppress: {r}"
+
+
+def test_the_success_probe_is_filtered_to_scheduled_runs_too():
+    # Paired with test_the_success_lookup_is_scoped_like_the_poll above, which
+    # pins branch and per_page. The event filter belongs to the same contract:
+    # a probe scoped to the right branch and the wrong event is still answering
+    # a question nobody asked.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
+    calls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
+    assert len(calls) == 1, r
+    assert calls[0].get("event") == "schedule", calls  # `.get` for the reason above
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

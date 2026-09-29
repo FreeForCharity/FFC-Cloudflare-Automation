@@ -753,6 +753,53 @@ def test_an_unparseable_module_declares_nothing_rather_than_crashing_the_sweep()
 
 
 
+# A ListComp roster that does NOT read `globals()`. This is the case that
+# isolates the `globals()` sub-check: `EXPLICIT_ROSTER_BELOW` above is an
+# `ast.List`, so the `isinstance(..., ast.ListComp)` clause alone already
+# excludes it and the `globals()` walk is never reached. Here the ListComp
+# clause passes and only the `globals()` walk can decide -- and it must decide
+# "not position-sensitive", because this roster names its members too.
+COMPREHENSION_OVER_A_TUPLE = (
+    "import sys\n\n"
+    "def test_a():\n    assert True\n\n"
+    "TESTS = [t for t in (test_a,)]\n\n"
+    "if __name__ == '__main__':\n"
+    "    failures = 0\n"
+    "    for t in TESTS:\n"
+    "        try:\n"
+    "            t()\n"
+    "            print(f'  PASS {t.__name__}')\n"
+    "        except AssertionError as e:\n"
+    "            failures += 1\n"
+    "            print(f'  FAIL {t.__name__}: {e}')\n"
+    "    sys.exit(1 if failures else 0)\n\n"
+    "def test_b():\n    assert True\n"
+)
+
+
+def test_the_globals_sub_check_is_what_narrows_listcomp_rosters():
+    """Isolates the `globals()` walk from the `ListComp` clause beside it.
+
+    Found by review, not by me: the first version of this module mutated both
+    conditions at once, so a suite that looked like it proved each condition
+    load-bearing actually left this one unexercised. That is precisely the
+    defect class this whole PR is about — a check present but not checking —
+    and the mutation that flatters you is the one you have to isolate.
+    """
+    with tempfile.TemporaryDirectory(prefix="listcomp-") as tmp:
+        d = pathlib.Path(tmp)
+        path = _write(d, "test_tuple_comp.py", COMPREHENSION_OVER_A_TUPLE)
+        assert run_all.tests_below_roster(path) == [], (
+            "a comprehension that does not read globals() names its members, "
+            "so a test below it was excluded on purpose"
+        )
+        _, out = _run_all_on(d)
+    assert "Nothing crashed" not in out, (
+        f"the below-roster remedy must not be offered for a non-globals() roster:\n{out}"
+    )
+
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

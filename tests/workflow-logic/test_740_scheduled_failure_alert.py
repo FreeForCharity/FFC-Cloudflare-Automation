@@ -1939,10 +1939,15 @@ def test_the_success_probe_selects_by_created_at_too():
     now = datetime.datetime.now(datetime.timezone.utc)
     stale_green = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%SZ")
     fresh_green = (now - datetime.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The cancelled run must carry the NEWEST `created_at` of the three, or the poll
+    # selects a green sibling and the run under test is never judged at all — the
+    # test would then pass because nothing alerted, which is the answer it expects
+    # for the wrong reason (L306). Caught by mutation B flipping nothing.
     r = _run(
         "cancelled",
         open_issues=[],
         jobs=_declined_gate_jobs(),
+        run_created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         older_runs=[
             {
                 "id": 30116960001,

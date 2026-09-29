@@ -45,6 +45,24 @@ jobs:
         shell: pwsh
         env:
           WHMCS_API_URL: ${{ inputs.api_url }}
+          # #1080 lane 27. `output_file` arrives as DATA in the process
+          # environment instead of being substituted into this script's TEXT.
+          #
+          # The site it replaces read `$out = "<interpolation>"` — DOUBLE
+          # quoted, where `$( )` expands, so no quote breakout was ever needed:
+          # a value ending `$(Set-Content -Path SENTINEL.txt -Value
+          # $env:WHMCS_API_SECRET)` runs where it stands, and because
+          # `Set-Content` emits nothing the path itself is unchanged, so the
+          # callee still binds the legitimate path and the step still exits 0.
+          # Every observable in the run — arguments, exit code, artifact —
+          # matches an ordinary aggregation.
+          #
+          # This job enters `whmcs-prod-read`, whose WHMCS credential the
+          # `whmcs-secrets-from-kv` step above exports through GITHUB_ENV, plus
+          # the `az` CLI session it leaves on disk (#1188/#1208) — none of which
+          # appears in this step's own `env:`, so an L213 read or a `secrets.`
+          # grep scores this step as holding nothing.
+          IN_OUTPUT_FILE: ${{ inputs.output_file }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -59,7 +77,115 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
             $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           }
-          $out = "${{ inputs.output_file }}"
+          # Fail closed, not default-fill (ledger L254), for the reason 201, 208
+          # and 218 already record: the `Upload metrics artifact (aggregate
+          # only)` step below consumes the same `output_file` input a SECOND
+          # time, directly, in its `path:`. That is an `@actions/glob` selector
+          # rather than a script body, so #1080's guard correctly does not judge
+          # it — but it makes this step one of two consumers of one value
+          # (ledger L298). A default supplied only here would write the JSON to
+          # the substituted path while the upload still looked at the blank one,
+          # turning a clear failure into an `if-no-files-found: error` two steps
+          # later that names neither cause.
+          #
+          # `-not IsNullOrWhiteSpace` rather than `-ne ''`: an explicitly blank
+          # override arrives as an env var set to the empty string, which pwsh
+          # reads back as `$null` rather than `''` (measured on 7.4.6: `$env:X =
+          # ''` then `$null -eq $env:X` is True). `-ne ''` is True for `$null`,
+          # so a comparison would pass the blank straight through, and it is
+          # also True for an all-whitespace value — the one blank form that
+          # reaches the callee as a path rather than dying on the way (#1213).
+          #
+          # HONEST SCOPE. An OMITTED input does not reach this guard at all: the
+          # input declares a default, so omitting it yields that path. The case
+          # this closes is an EXPLICIT blank or whitespace override. The shipped
+          # body already failed on one — `Test-Path $out` threw `Expected output
+          # file not found: ` with nothing after the colon — so what this adds
+          # is a failure that NAMES THE INPUT, at the input, instead of a
+          # downstream error that names neither cause. Stated rather than
+          # inherited from 208, whose step ends at `$LASTEXITCODE` and whose
+          # blank really was silent (ledger L260 — attribution is not evidence).
+          # The path guards below are the load-bearing half of this block.
+          if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {
+            throw "output_file is blank. It is consumed BOTH here and by the 'Upload metrics artifact (aggregate only)' step's path:, so this step does not substitute a default — re-dispatch with a path, or omit the input to get its declared default."
+          }
+
+          # FIRST of the path guards, and the two anchored ones below depend on
+          # it. `actions/upload-artifact` reads `path:` as a NEWLINE-DELIMITED
+          # LIST of patterns, so one input carrying a newline is several
+          # patterns to that consumer while still being one string here — ledger
+          # L298, two consumers with different grammars. It also defeats the
+          # anchored guards: `^` anchors at the start of the STRING, not of each
+          # line, so a payload on the second line walks straight past them.
+          # Forbidding the newline is the remedy rather than sprinkling `(?m)`,
+          # which would still leave the value meaning ONE path here and SEVERAL
+          # there. A newline is never legitimate in a JSON filename.
+          if ($env:IN_OUTPUT_FILE -match '[\r\n]') {
+            throw "output_file contains a carriage return or newline. The 'Upload metrics artifact (aggregate only)' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below — which anchor on the start of the value and therefore only ever see its first line."
+          }
+          # `*` and `?` are illegal in a Windows filename, so those die at the
+          # write and the upload never runs. `[` and `]` are NOT: they are legal
+          # filename characters AND character-class metacharacters to
+          # `@actions/glob`, so this step writes a literal `[m]sal….json`, exits
+          # 0, and the upload's glob then matches a different, real file. That
+          # is the shape with no self-block, and this job holds a WHMCS
+          # credential plus the `az` session on disk that neither appears in
+          # this step's `env:`.
+          #
+          # WHY THE SET STOPS AT `* ? [ ]`, and why it is deliberately NOT widened to
+          # `{ } ( ) !`. The reason is a fact about a THIRD-PARTY package, which is why
+          # it is written here instead of left to be re-derived by every reviewer
+          # (#1380 — raised as a High on #1361 on the theory that `{a,b}` and `!(x)`
+          # smuggle extra paths in, and it does not reproduce).
+          #
+          # `@actions/glob@0.7.0` builds its minimatch with brace expansion and
+          # extglobs DISABLED — `lib/internal-pattern.js`, `nobrace: true` (:58) and
+          # `noext: true` (:61) — so `{a,b}` and `!(x)` reach the globber as LITERAL
+          # TEXT, not as alternations. Measured against a fixture tree holding a
+          # legitimate artifact and a planted `.azure/msal_token_cache.json`, with
+          # `implicitDescendants: false`: every brace and extglob form 0 hits,
+          # `.azure/[m]sal_token_cache.json` **1 hit — the REAL file, via the
+          # character class**, and both controls 1 hit each, so no 0 above is read
+          # as evidence.
+          #
+          # So the set is not widened. `{ } ( ) !` are legal filename characters that
+          # expand to nothing at this consumer, so a guard rejecting them would refuse
+          # legitimate paths while STATING a hazard that does not exist — which is its
+          # own failure mode, and the one #1380 asks not to introduce. What would
+          # change this is the dependency, not the character list: if `@actions/glob`
+          # ever ships `nobrace: false` or `noext: false`, this set must widen with it.
+          #
+          # The one multi-path vector that DOES work is the newline, refused above.
+          # That is why the newline guard cannot be reordered below this one.
+          if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {
+            throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload metrics artifact (aggregate only)' step, whose path: is a glob selector, so a pattern can match files this job never wrote. Pass a plain relative path."
+          }
+          # `[A-Za-z]+:`, not `[A-Za-z]:` — a PSDrive qualifier is not limited
+          # to a single-letter filesystem drive (`Temp:/x.json`, `env:/x`), so
+          # the narrow spelling admits a workspace escape that looks nothing
+          # like `C:\`. An explicit regex rather than
+          # [System.IO.Path]::IsPathRooted, which is platform-DEPENDENT: a test
+          # on ubuntu CI would assert something the `windows-latest` runner does
+          # not do.
+          if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {
+            throw "output_file must be a workspace-relative path; got an absolute, UNC, drive- or PSDrive-qualified path. The 'Upload metrics artifact (aggregate only)' step uploads whatever its path: resolves to, so a path outside the workspace can put runner files into a downloadable artifact."
+          }
+          # `~` starts with neither a separator nor a qualifier, so the test
+          # above does not catch it. It is the sharpest instance of L298 rather
+          # than a repeat: PowerShell expands `~` and `@actions/glob` does not,
+          # so the two consumers do not merely apply different grammars — they
+          # disagree about WHICH FILE IS MEANT. This step would write into the
+          # user profile (where the `az` session lives) while the upload looked
+          # for a literal `~` directory under the workspace and failed at
+          # `if-no-files-found`, two steps from the damage.
+          if ($env:IN_OUTPUT_FILE -match '^~') {
+            throw "output_file must not begin with '~': PowerShell expands it to the user profile, so this job would write outside the workspace, while the 'Upload metrics artifact (aggregate only)' step's globber does not expand it — the two consumers would not even agree which file is meant."
+          }
+          if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {
+            throw "output_file must not contain a '..' segment: it escapes the workspace, and the 'Upload metrics artifact (aggregate only)' step uploads whatever its path: resolves to."
+          }
+
+          $out = $env:IN_OUTPUT_FILE
 
           & pwsh -NoProfile -File .\scripts\whmcs-clients-metrics.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $out
 

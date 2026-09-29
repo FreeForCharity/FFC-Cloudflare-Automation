@@ -390,13 +390,19 @@ def scan(paths=None) -> tuple[list, list]:
 #
 # An entry is an explicit, reasoned exception, not the normal state. Adding one
 # for a NEW workflow means writing down why the value cannot be constrained.
-KNOWN_UNGUARDED: dict = {
-    "214-whmcs-clients-metrics.yml": ["clients_metrics:output_file"],
-    "215-whmcs-nonprofit-clients-metrics.yml": ["nonprofit_clients_metrics:output_file"],
-    "216-whmcs-activity-metrics.yml": ["activity_metrics:output_file"],
-    "217-whmcs-client-fields-survey.yml": ["client_fields_survey:output_file"],
-    "220-whmcs-served-metrics.yml": ["served_metrics:output_file"],
-}
+# EMPTY, as of #1080 lane 27. The five entries this freeze shipped with -- 214,
+# 215, 216, 217 and 220, the WHMCS read-only metrics family -- were burned down
+# together and each carries the full six conditions, so every artifact-path site
+# in the tree is now guarded. That is the coupling working as designed: those
+# five could not leave `check-workflow-input-interpolation.py`'s freeze without
+# leaving this one in the same PR.
+#
+# An empty freeze is the strongest state this checker has, and also its most
+# fragile: from here, ANY new free-text input reaching an `upload-artifact`
+# `path:` is a finding on its first commit. That is the intent. Re-populating it
+# means writing down why a value cannot be constrained, not restoring a
+# convenience.
+KNOWN_UNGUARDED: dict = {}
 
 
 def current_map(sites: list) -> dict:

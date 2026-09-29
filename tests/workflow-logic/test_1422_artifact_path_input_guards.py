@@ -135,18 +135,29 @@ UNTOUCHED_GUARDED = (
     "203-whmcs-export-payment-methods.yml",
     "208-whmcs-tickets-export.yml",
     "601-wpmudev-export-sites.yml",
-)
-
-# The five open #1080 burn-down lanes. They still interpolate the input into the
-# `run:` body, so the interpolation guard already reports them and the artifact
-# guards belong in the PR that lands each lane.
-EXPECTED_FREEZE = (
+    # The five this freeze shipped holding, burned down together in #1080
+    # lane 27 and guarded here in the same PR — the coupling below working as
+    # designed. They join this tuple rather than merely leaving EXPECTED_FREEZE,
+    # because "no longer frozen" and "positively credited" are different claims
+    # and only the second one fails if a later change breaks a guard.
     "214-whmcs-clients-metrics.yml",
     "215-whmcs-nonprofit-clients-metrics.yml",
     "216-whmcs-activity-metrics.yml",
     "217-whmcs-client-fields-survey.yml",
     "220-whmcs-served-metrics.yml",
 )
+
+# EMPTY as of #1080 lane 27. The freeze shipped holding the five lanes above and
+# they were burned down together, so every artifact-path site in the tree is now
+# guarded.
+#
+# An empty expectation is not a weaker assertion than a populated one — it is
+# the strongest state this coupling has, because from here ANY new free-text
+# input reaching an `upload-artifact` `path:` is a finding on its first commit.
+# The assertion below is an equality for that reason: a lane that needs a freeze
+# entry has to add it HERE with a written reason, which is the review step the
+# equality exists to force.
+EXPECTED_FREEZE = ()
 
 
 def _step_body(workflow: str, job: str, step_substring: str) -> str:
@@ -642,13 +653,48 @@ def test_the_stale_detection_fires_on_a_freeze_entry_that_is_now_guarded():
     Without this, a lane could be guarded and left frozen, and the next reader
     would believe the tree still had a hole there — which is the inverse of
     #1422's failure and just as misleading.
+
+    Driven by a fabricated freeze passed through `known=`, not by the real one.
+    It used to key off a live entry (`214`), and #1080 lane 27 then guarded
+    every lane and emptied the freeze — which turned this case red for a reason
+    that had nothing to do with stale detection. A test whose fixture is the
+    thing being burned down expires on the burn-down, and it expires by failing
+    in the ALARMING direction, which costs a reader the time to establish that
+    nothing is wrong.
+
+    The workflow names must nonetheless be REAL. `compare` tests file existence
+    first and reports a missing file as its own kind of stale, so an invented
+    name short-circuits before the branch under test and the case passes for
+    the wrong reason — measured while writing this, with two invented names
+    both coming back "does not exist". Ledger L306, in miniature: a fixture
+    refused by the wrong check certifies the check it never reached.
     """
-    current = {"214-whmcs-clients-metrics.yml": ["clients_metrics:output_file"]}
-    new, stale = guard.compare(current)
-    assert not new, f"the frozen lane was reported as new: {new}"
-    assert len(stale) == len(EXPECTED_FREEZE) - 1, (
-        f"expected the other {len(EXPECTED_FREEZE) - 1} freeze entries to read "
-        f"stale when nothing is unguarded in them; got {stale}"
+    real = "201-whmcs-export-domains.yml"
+    assert (WORKFLOW_DIR / real).exists(), (
+        f"{real} is this case's fixture and is not in the tree — pick another "
+        f"real workflow rather than an invented name, or `compare` will take "
+        f"its does-not-exist branch and never reach the one under test"
+    )
+
+    # Branch 1: the whole entry is stale — nothing in that workflow is
+    # unguarded any more, which is the state a completed lane leaves behind.
+    new, stale = guard.compare({}, known={real: ["export_domains:output_file"]})
+    assert not new, f"an empty current map cannot contain a new instance: {new}"
+    assert len(stale) == 1 and "nothing is unguarded" in stale[0], (
+        f"a freeze entry whose workflow has no unguarded site left must read "
+        f"stale; got {stale}"
+    )
+
+    # Branch 2: the entry survives but one of its keys was guarded. A per-file
+    # check would miss this, and the freeze is per-site.
+    new, stale = guard.compare(
+        {real: ["export_domains:output_file"]},
+        known={real: ["export_domains:output_file", "export_domains:phantom_input"]},
+    )
+    assert not new, f"a narrowed entry is not a new instance: {new}"
+    assert len(stale) == 1 and "phantom_input" in stale[0], (
+        f"a freeze key that is now guarded must be named stale on its own, even "
+        f"while its workflow keeps another key; got {stale}"
     )
 
     missing_file = {"no-such-workflow.yml": ["j:x"]}

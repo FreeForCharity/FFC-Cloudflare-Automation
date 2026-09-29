@@ -261,6 +261,44 @@ jobs:
               return entry;
             };
 
+            // --- #1447: the runs API can serve a STALE PAGE, so position 0 is not a verdict --
+            // Measured in production on 2026-09-29. This alerter's sweep 36575514742 opened
+            // #1444 ("502. Google - Analytics Report failing") citing run 34450257554 — a
+            // run from 2026-09-10, nineteen days stale — while 502's real newest scheduled
+            // run was 36537865899 (2026-09-29T07:38:42Z, SUCCESS). The sweeps either side of
+            // it read 502 correctly and closed the alert. Five further sightings followed in
+            // one Conductor run, on five distinct reads, across three workflow ids.
+            //
+            // `per_page: 1` is what made it undetectable: with one element there is no
+            // sibling to disagree with the head, so a stale or mis-ordered page cannot be
+            // falsified by anything inside the response. Ask for a handful and select by
+            // `created_at` instead of trusting the API's ordering.
+            //
+            // THE FALLBACK IS DELIBERATE AND IS NOT A SOFTENING. A run object that carries
+            // no parseable `created_at` cannot participate in the comparison; if NO element
+            // carries one, there is nothing to sort by and array order is all that is left.
+            // Selecting on `updated_at` instead would be worse than useless here — a re-run
+            // or a cancellation bumps it, so the most recently TOUCHED run is not the most
+            // recently STARTED one, and a stale page's green run would outrank a fresh red.
+            //
+            // This defends against a stale element beside fresh siblings. It does NOT defend
+            // against a page that is stale in EVERY element (measured: five runs, all 18 days
+            // old, in correct descending order) — `max()` over that page returns the correct
+            // maximum of the wrong page. The watermark check in `evaluate` is what covers
+            // that shape, and the two are complementary rather than redundant.
+            const RUNS_PER_LOOKUP = 5;
+            const newestRun = (runs) => {
+              const list = Array.isArray(runs) ? runs : [];
+              if (!list.length) { return null; }
+              let best = null;
+              let bestAt = -Infinity;
+              for (const r of list) {
+                const at = Date.parse((r || {}).created_at || '');
+                if (!Number.isNaN(at) && at > bestAt) { bestAt = at; best = r; }
+              }
+              return best || list[0];
+            };
+
             // Age, in whole days, of the newest SUCCESSFUL default-branch run. Returns
             // Infinity when there is none and when the lookup fails, so both escalate: this
             // workflow's standing rule is that an unreadable history reads as an outage, not
@@ -295,9 +333,10 @@ jobs:
                   // dispatch this correctly returns Infinity — "never had a successful
                   // scheduled run" — which escalates, the same safe direction as the
                   // empty-list note above.
-                  branch, event: 'schedule', status: 'success', per_page: 1,
+                  // `per_page: RUNS_PER_LOOKUP` + `newestRun`, never index 0 (#1447).
+                  branch, event: 'schedule', status: 'success', per_page: RUNS_PER_LOOKUP,
                 });
-                const last = (((res.data || {}).workflow_runs) || [])[0];
+                const last = newestRun(((res.data || {}).workflow_runs) || []);
                 if (!last) {
                   // "scheduled" is load-bearing in this sentence, not decoration: with the
                   // event filter above, a workflow whose only successes are dispatches
@@ -382,7 +421,7 @@ jobs:
             // zero alerts. `checked` is what tells them apart, so it is reported either way.
             const stats = {
               repos: 0, checked: 0, failing: 0, benign: 0, unreadable: 0,
-              opened: 0, appended: 0, closed: 0, capped: 0,
+              opened: 0, appended: 0, closed: 0, capped: 0, stale: 0,
             };
             const unresolved = [];
             const unreadableRepos = [];
@@ -492,6 +531,33 @@ jobs:
               // what this selects — a PR quoting the (invisible, HTML-comment) marker would
               // be closed by the alerter, with a comment claiming a recovery. Refs #980.
               const existing = open.find(i => !i.pull_request && i.body && i.body.includes(marker));
+              // --- #1447: a WATERMARK, because `max(created_at)` cannot see a wholly stale page
+              // `newestRun` outvotes one stale element sitting beside fresh siblings. It is
+              // powerless against the shape that was actually measured most often: a page
+              // that is stale in EVERY element, arriving in correct descending order with
+              // plausible conclusions. Nothing inside such a response can falsify it.
+              //
+              // What CAN falsify it is a reading this sweep already holds. The rolling alert
+              // records the run it last judged, and run ids on this API increase over time,
+              // so a "newest" run with a SMALLER id than one already recorded for the same
+              // workflow is impossible on a live workflow — it means the page went backwards.
+              // The comparison costs no request: the issue list is already in hand.
+              //
+              // Refusing to act is the safe response in BOTH directions, which is why this
+              // sits ahead of the success/failure split rather than inside one branch. A
+              // stale FAILURE re-appends an outage that is over (#1444's shape); a stale
+              // SUCCESS closes an alert for an outage that is still running, which is the
+              // fail-open this workflow exists to prevent. The next sweep is 30 minutes away
+              // and re-reads from scratch, so nothing is lost by declining this one.
+              //
+              // Strictly-less-than, never equality: `recordedRun === run.id` is the ordinary
+              // "already logged this run" case and is handled below, on its own terms.
+              const recorded = existing ? recordedRun(existing.body) : null;
+              if (recorded && Number(run.id) < Number(recorded)) {
+                stats.stale++;
+                core.warning(`Stale runs read for ${where}: the API returned run ${run.id} as newest, but run ${recorded} was already recorded for this workflow. A newest-run id cannot go backwards, so this page is stale (#1447); not acting on it this sweep.`);
+                return;
+              }
               if (run.conclusion === 'success') {
                 if (existing) {
                   stats.closed++;
@@ -575,7 +641,8 @@ jobs:
                   // fail-CLOSED half too: 745 exits 1 by design on board drift and the
                   // Conductor dispatches it every run, which opened "Scheduled workflow
                   // failing" alerts (#1322, #1439) whose evidence was a hand-run audit.
-                  branch, event: 'schedule', status: 'completed', per_page: 1,
+                  // `per_page: RUNS_PER_LOOKUP` + `newestRun`, never index 0 (#1447).
+                  branch, event: 'schedule', status: 'completed', per_page: RUNS_PER_LOOKUP,
                 });
                 runs = ((res.data || {}).workflow_runs) || [];
               } catch (e) {
@@ -590,14 +657,14 @@ jobs:
                 core.info(`No completed scheduled ${branch} run for ${t.name} in ${t.slug} yet.`);
                 continue;
               }
-              await evaluate(t, wf.id, runs[0], branch);
+              await evaluate(t, wf.id, newestRun(runs), branch);
             }
             stats.repos = inventoryCache.size;
 
             // THE DENOMINATOR IS PART OF THE RESULT (L97). "0 failing" means nothing without
             // "out of N checked" — a sweep whose repo reads all 403'd reports zero failures
             // just as convincingly as a healthy fleet does.
-            const summary = `740 sweep: repos=${stats.repos} watched=${TARGETS.length} checked=${stats.checked} failing=${stats.failing} benign=${stats.benign} unreadable=${stats.unreadable} opened=${stats.opened} appended=${stats.appended} closed=${stats.closed} unresolved=${unresolved.length}${DRY_RUN ? ' [DRY RUN — no issue was written]' : ''}`;
+            const summary = `740 sweep: repos=${stats.repos} watched=${TARGETS.length} checked=${stats.checked} failing=${stats.failing} benign=${stats.benign} unreadable=${stats.unreadable} stale=${stats.stale} opened=${stats.opened} appended=${stats.appended} closed=${stats.closed} unresolved=${unresolved.length}${DRY_RUN ? ' [DRY RUN — no issue was written]' : ''}`;
             core.notice(summary);
             if (core.summary && core.summary.addRaw) {
               await core.summary.addRaw(`### 740 failure-alert sweep\n\n\`\`\`\n${summary}\n\`\`\`\n`).write();

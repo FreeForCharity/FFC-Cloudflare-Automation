@@ -147,11 +147,88 @@ EVENT_PAYLOAD_BASES = ("github.event", "context.payload", "event", "payload")
 # still scanned, which over-reports rather than under-reports.
 COMMENT_PREFIXES = ("#", "//")
 
+# Characters that open a string literal in the bodies this module reads -- YAML
+# scalars and the JavaScript of a `github-script` step alike.
+QUOTES = "'\"`"
+
+
+def block_comment_spans(text: str) -> list[tuple[int, int]]:
+    """Index pairs of every `/* ... */` that OPENS outside a string literal.
+
+    The quote tracking is the whole point, and skipping it is worse than doing
+    no block-comment handling at all: `'src/*'` is a glob, and a stripper that
+    cannot tell it from a comment opener blanks from the glob to the next `*/`
+    -- which may be hundreds of lines away, or absent, in which case the naive
+    form swallows the rest of the file and reports a clean workflow. That is a
+    silent pass, i.e. the exact L02 shape this module exists to catch.
+
+    For the same reason an UNCLOSED `/*` yields no span: the text after it is
+    left scannable. An over-report is a red run someone reads; an under-report
+    is a green one nobody does.
+    """
+    spans: list[tuple[int, int]] = []
+    i, n, quote = 0, len(text), ""
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            # An unterminated `'`/`"` ends at the newline rather than running on
+            # and swallowing every later quote's polarity. A backtick template
+            # literal legitimately spans lines, so it is exempt.
+            if ch == quote or (ch == "\n" and quote != "`"):
+                quote = ""
+            i += 1
+            continue
+        if ch in QUOTES:
+            quote = ch
+            i += 1
+            continue
+        pair = text[i : i + 2]
+        if pair == "/*":
+            end = text.find("*/", i + 2)
+            if end == -1:
+                break
+            spans.append((i, end + 2))
+            i = end + 2
+            continue
+        # A `//`- or `#`-led comment runs to the end of the line. Skipped whole
+        # so an apostrophe in prose ("the listing's shape") cannot open a
+        # phantom string and invert the polarity of everything after it.
+        if pair == "//" or ch == "#":
+            newline = text.find("\n", i)
+            i = n if newline == -1 else newline
+            continue
+        i += 1
+    return spans
+
 
 def strip_comments(body: str) -> str:
-    """Drop whole-line comments, keeping line count so reports stay locatable."""
+    """Blank prose, keeping line count so reports stay locatable.
+
+    Two forms are blanked and one is deliberately NOT:
+
+    * a `#`- or `//`-LED line, as before;
+    * a `/* ... */` block, wherever it opens outside a string literal -- found
+      by `block_comment_spans`. Blanked in place rather than deleted, so a
+      trailing `x = 1 /* ... */` keeps its code and every later line keeps its
+      number;
+    * a string literal's CONTENTS are left alone. `core.info('reads
+      i.pull_request')` is still reported, and that is a false positive with a
+      known remedy (reword, as FFC-IN-Footer_Only_Template#170 did). Blanking
+      quoted text is the one change in this area that converts this scanner
+      from over-reporting to potentially UNDER-reporting, and a scanner that
+      misses a read reports a workflow as correctly scoped when it is not --
+      which is the defect (L02) this module was written for. Pinned by
+      `test_a_read_inside_a_string_literal_is_still_reported`.
+    """
+    text = body
+    for start, end in reversed(block_comment_spans(text)):
+        blanked = "".join("\n" if c == "\n" else " " for c in text[start:end])
+        text = text[:start] + blanked + text[end:]
     out = []
-    for line in body.splitlines():
+    for line in text.splitlines():
         out.append("" if line.lstrip().startswith(COMMENT_PREFIXES) else line)
     return "\n".join(out)
 

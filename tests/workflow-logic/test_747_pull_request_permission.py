@@ -256,6 +256,129 @@ def test_a_comment_naming_the_token_is_not_a_finding():
     assert not findings, f"a comment line was reported: {findings}"
 
 
+def test_a_block_comment_naming_the_token_is_not_a_finding():
+    """The `/* */` half of #1019, which the first cut of this guard missed.
+
+    747's own inline script is heavily commented about `pull_request`. Today
+    those are `//`; an author who reaches for `/* */` -- or wraps a paragraph
+    of rationale in one -- would have reddened CI on correct code.
+    """
+    for label, prose in (
+        ("one line", "/* reads i.pull_request from the listing */\n"),
+        ("multi-line", "/*\n * reads i.pull_request\n * and github.rest.pulls.list\n */\n"),
+        ("trailing on a line of code", "core.info('x'); /* i.pull_request */\n"),
+    ):
+        findings, errors, _ = run_on({"p.yml": wf(prose + "core.info('nothing');\n")}, freeze={})
+        assert not errors, (label, errors)
+        assert not findings, f"a {label} block comment was reported: {findings}"
+
+
+def test_a_glob_in_a_string_does_not_open_a_block_comment():
+    """`'src/*'` is a glob, and mistaking it for a comment opener is fail-OPEN.
+
+    A quote-blind stripper blanks from the glob to the next `*/` -- here, past
+    the read -- and the workflow is then reported as correctly scoped. This is
+    the case that decides whether block-comment handling is an improvement or a
+    regression, so both quote styles are pinned.
+    """
+    for quote in ("'", '"'):
+        body = (
+            f"const pattern = {quote}src/*{quote};\n"
+            "if (i.pull_request) { skip() }\n"
+            f"const close = {quote}*/{quote};\n"
+        )
+        findings, errors, _ = run_on({"p.yml": wf(body)}, freeze={})
+        assert not errors, errors
+        assert findings, f"a read after a {quote}-quoted glob was LOST: {body!r}"
+
+
+def test_an_unclosed_block_comment_leaves_the_rest_scannable():
+    """No `*/` means no span, rather than swallowing the file to EOF."""
+    body = "/* opened and never closed\nif (i.pull_request) { skip() }\n"
+    findings, errors, _ = run_on({"p.yml": wf(body)}, freeze={})
+    assert not errors, errors
+    assert findings, "an unclosed `/*` swallowed the read that followed it"
+
+
+def test_an_apostrophe_in_a_comment_does_not_invert_the_polarity():
+    """`// the listing's shape` must not open a string that runs on.
+
+    A single quote inside prose is the commonest way a naive quote tracker
+    flips state for the remainder of the body, after which every `/*` and every
+    string boundary is read wrongly.
+    """
+    for lead in ("//", "#"):
+        body = f"{lead} the listing's shape\nif (i.pull_request) {{ skip() }}\n"
+        findings, errors, _ = run_on({"p.yml": wf(body)}, freeze={})
+        assert not errors, errors
+        assert findings, f"an apostrophe in a {lead} comment lost the read that followed"
+
+
+def test_a_backtick_in_a_line_comment_does_not_hide_a_later_block_comment():
+    """Why the scanner skips a `//`/`#` comment WHOLE rather than reading it.
+
+    A lone backtick is ordinary in FFC workflow comments (they quote code), and
+    a backtick template literal is exempt from the end-of-line close because it
+    legitimately spans lines. Read the comment character by character and that
+    backtick opens a string that never shuts, so every later `/*` looks quoted
+    and the block comment below goes unblanked.
+
+    The apostrophe case cannot see this: an unterminated `'` closes at the
+    newline, so the line skip and that rule mask each other there. Mutation
+    review found exactly that redundancy, which is why this case exists.
+
+    The backtick must come BEFORE any apostrophe on the line, and the first
+    draft of this case got that wrong: with the line skip dropped, an earlier
+    `'` opens a string the backtick then sits INSIDE, and the newline closes it
+    -- so the phantom never forms and the case passes under its own mutation.
+    """
+    body = (
+        "// a lone backtick ` in prose, quoting code\n"
+        "/* reads i.pull_request */\n"
+        "core.info('nothing');\n"
+    )
+    findings, errors, _ = run_on({"p.yml": wf(body)}, freeze={})
+    assert not errors, errors
+    assert not findings, f"a backtick in a line comment hid a block comment: {findings}"
+
+
+def test_an_unterminated_quote_does_not_run_past_its_line():
+    """Bounds the blast radius of a malformed body, pinned at the span level.
+
+    End to end this is masked by the line skip above, so it is asserted against
+    `block_comment_spans` directly: an unterminated `'` must not consume the
+    `/* ... */` two lines below it. A backtick may, and does -- that asymmetry
+    is the rule, so both halves are asserted here rather than only the one that
+    fails safe.
+    """
+    mod = load_checker()
+    apostrophe = "const s = 'unterminated\nconst t = 2\n/* c */\n"
+    assert mod.block_comment_spans(apostrophe), (
+        "an unterminated ' swallowed the block comment two lines below it"
+    )
+    backtick = "const s = `unterminated\nconst t = 2\n/* c */\n"
+    assert not mod.block_comment_spans(backtick), (
+        "a template literal must stay open across newlines"
+    )
+
+
+def test_a_read_inside_a_string_literal_is_still_reported():
+    """Declared behaviour, not an oversight -- and the reason is asymmetric.
+
+    Blanking a string literal's contents would silence `core.info('reads
+    i.pull_request')`, and it is the one change here that could convert this
+    scanner from over-reporting to UNDER-reporting: a read written inside a
+    string would then be invisible, and the workflow would be reported as
+    correctly scoped while its token cannot see pull requests -- the exact L02
+    fail-open this module exists to catch. The remedy for the false positive is
+    to reword the string, which costs a CI run someone reads.
+    """
+    body = "core.info('reads i.pull_request from the listing');\n"
+    findings, errors, _ = run_on({"p.yml": wf(body)}, freeze={})
+    assert not errors, errors
+    assert findings, "the over-report inside a string literal is deliberate and was lost"
+
+
 # --------------------------------------------------------------------------
 # Effective permissions
 # --------------------------------------------------------------------------
@@ -435,6 +558,13 @@ TESTS = [
     test_the_pulls_api_is_a_finding,
     test_the_event_payload_is_not_an_api_read,
     test_a_comment_naming_the_token_is_not_a_finding,
+    test_a_block_comment_naming_the_token_is_not_a_finding,
+    test_a_glob_in_a_string_does_not_open_a_block_comment,
+    test_an_unclosed_block_comment_leaves_the_rest_scannable,
+    test_an_apostrophe_in_a_comment_does_not_invert_the_polarity,
+    test_a_backtick_in_a_line_comment_does_not_hide_a_later_block_comment,
+    test_an_unterminated_quote_does_not_run_past_its_line,
+    test_a_read_inside_a_string_literal_is_still_reported,
     test_a_job_level_block_satisfies_the_rule,
     test_a_job_level_block_REPLACES_the_top_level_one,
     test_no_permissions_block_anywhere_is_out_of_scope,

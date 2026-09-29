@@ -111,11 +111,18 @@ CONVERTED_1148 = [
 #      (`if (-not IsNullOrWhiteSpace($env:X)) { $cliArgs += @('-Flag', $env:X) }`).
 #      Measured rather than inferred: against `origin/main` the scan saw 5
 #      references across 214/215/216/217/220 and it now sees 8, and the three
-#      added are exactly these — the five `WHMCS_API_URL` rows only changed
-#      FORM (direct -> array-splat, because the lane splats its arguments so an
-#      empty value cannot vanish as an argument at all, ledger L214), which
-#      moves no count. `output_file` adds none: the body reads it into `$out`
-#      and that local is what reaches the parameter position.
+#      added are exactly these. The five `WHMCS_API_URL` rows moved no count
+#      either way, but they did NOT all change form — only the three lanes
+#      with a secondary input did. 216, 217 and 220 build `$cliArgs` and splat
+#      it, so their rows read `array-splat`; 214 and 215 have nothing to gate
+#      and keep the direct `-ApiUrl $env:WHMCS_API_URL` invocation, so their
+#      rows still read `direct`. Splatting is what keeps a gated value from
+#      vanishing as an argument (ledger L214) — it is a consequence of having
+#      a gated append, not a property of the lane, and a later burn-down
+#      should not expect all five to be splat form. (The first draft of this
+#      note said all five changed form; caught in review on #1436.)
+#      `output_file` adds none at all: the body reads it into `$out` and that
+#      local is what reaches the parameter position.
 #
 # So the scan sees 23 references across these 14 workflows and 17 of them are
 # #1148's. If you are burning down one of these workflows and this assertion

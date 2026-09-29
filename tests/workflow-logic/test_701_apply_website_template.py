@@ -211,7 +211,7 @@ def test_writes_the_charity_identity_into_site_config():
         assert "description: 'We shelter families. Every night. Learn about" in cfg, cfg
         assert "contactEmail: 'info@helpinghands.org'," in cfg, cfg
         assert "ein: '12-3456789'," in cfg, cfg
-        assert "phone: { display: '(555) 123-4567', tel: '15551234567' }," in cfg, cfg
+        assert "phone: { display: '(555) 123-4567', tel: '5551234567' }," in cfg, cfg
         assert "lines: ['12 Main St', 'Springfield, IL 62701']," in cfg, cfg
         assert "twitterHandle: '@helpinghands'," in cfg, cfg
         assert "{ label: 'X (Twitter)', href: 'https://x.com/helpinghands' }," in cfg, cfg
@@ -244,19 +244,88 @@ def test_blank_mission_becomes_a_sentence_naming_the_charity():
         shutil.rmtree(td)
 
 
-def test_blank_candid_urls_derive_from_the_ein_for_a_recognized_501c3_not_ffc():
-    # Candid carries every IRS-recognized exempt org, so for a recognized
-    # 501(c)(3) the profile-by-EIN URL is the charity's own profile. FFC's own
-    # profile must never be left on the charity's footer. (Not recognized:
-    # blank, see test_a_pre_501c3_charity_without_candid_urls_gets_blank_guidestar.)
-    td, repo, proc = applied()
+def test_candid_urls_are_never_derived_from_the_ein():
+    # The footer seal's alt text claims a Candid "Platinum" level, so only a
+    # URL the charity provides is ever linked: not a profile-by-EIN URL (not
+    # even for a recognized 501(c)(3)), and never FFC's own profile.
+    for irs in ("501(c)(3) (approved)", "Not yet / pending (pre-501(c)(3))", ""):
+        td = pathlib.Path(tempfile.mkdtemp())
+        try:
+            repo = make_repo(td)
+            summary = td / "summary.json"
+            proc = run_apply(repo, {**FULL_ARGS, "IrsStatus": irs, "SummaryPath": str(summary)})
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, (irs, cfg)
+            assert "guidestar.org" not in cfg, (irs, cfg)
+            pending = json.loads(summary.read_text(encoding="utf-8"))["pendingFields"]
+            assert "guidestar" in pending, (irs, pending)
+        finally:
+            shutil.rmtree(td)
+
+
+def test_provided_candid_urls_are_used_as_given():
+    args = {
+        **FULL_ARGS,
+        "GuideStarProfileUrl": "https://www.guidestar.org/profile/12-3456789",
+        "GuideStarDirectProfileUrl": "https://www.guidestar.org/profile/shared/abc",
+    }
+    td, repo, proc = applied(args)
     try:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         cfg = read(repo, "src/lib/site.config.ts")
         assert "profileUrl: 'https://www.guidestar.org/profile/12-3456789'," in cfg, cfg
-        assert "directProfileUrl: 'https://www.guidestar.org/profile/12-3456789'," in cfg, cfg
+        assert "directProfileUrl: 'https://www.guidestar.org/profile/shared/abc'," in cfg, cfg
     finally:
         shutil.rmtree(td)
+
+
+def test_tel_is_the_published_numbers_digits_with_no_invented_country_code():
+    cases = {
+        "(555) 123-4567": "5551234567",
+        "555.123.4567": "5551234567",
+        "1-555-123-4567": "15551234567",
+        "+1 555 123 4567": "+15551234567",
+        "  +1 (555) 123-4567 ": "+15551234567",
+    }
+    for published, tel in cases.items():
+        td, repo, proc = applied({**FULL_ARGS, "FooterPhone": published})
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            want = f"phone: {{ display: '{published.strip()}', tel: '{tel}' }},"
+            assert want in cfg, (published, cfg)
+        finally:
+            shutil.rmtree(td)
+    # Not a usable US number: emptied and pending, never FFC's.
+    td, repo, proc = applied({**FULL_ARGS, "FooterPhone": "12345"})
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "phone: { display: '', tel: '' }," in read(repo, "src/lib/site.config.ts")
+    finally:
+        shutil.rmtree(td)
+
+
+def test_address_line_breaks_real_or_literal_but_never_commas():
+    cases = {
+        "12 Main St\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],
+        "12 Main St\r\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],
+        # What bash passes for '12 Main St\nSpringfield, IL 62701'.
+        "12 Main St\\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],
+        "12 Main St\\r\\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],
+        "Suite 2\\n 7 Rue des Artistes \\n\\nPortland, ME 04101": ["Suite 2", "7 Rue des Artistes", "Portland, ME 04101"],
+        "St. Petersburg, FL": ["St. Petersburg, FL"],
+    }
+    for given, lines in cases.items():
+        td, repo, proc = applied({**FULL_ARGS, "FooterAddress": given})
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            want = "lines: [" + ", ".join("'" + ln + "'" for ln in lines) + "],"
+            assert want in cfg, (given, cfg)
+            assert "\\n" not in cfg.split("addresses:")[1].split("]")[0], (given, cfg)
+        finally:
+            shutil.rmtree(td)
 
 
 def test_keeps_ffc_attribution_and_drops_the_parent_org():
@@ -349,21 +418,6 @@ def test_a_blank_ein_is_written_blank_not_ffcs():
         shutil.rmtree(td)
 
 
-def test_a_pre_501c3_charity_without_candid_urls_gets_blank_guidestar():
-    # A charity without IRS recognition has no Candid profile: a URL derived
-    # from its EIN would be a dead link behind a transparency seal, and FFC's
-    # own profile would be a false claim. Both are left blank.
-    args = {**FULL_ARGS, "IrsStatus": "Not yet / pending (pre-501(c)(3))"}
-    td, repo, proc = applied(args)
-    try:
-        assert proc.returncode == 0, proc.stdout + proc.stderr
-        cfg = read(repo, "src/lib/site.config.ts")
-        assert "guidestar: {\n    profileUrl: '',\n    directProfileUrl: '',\n  }," in cfg, cfg
-        assert "guidestar.org" not in cfg, cfg
-    finally:
-        shutil.rmtree(td)
-
-
 def test_a_direct_candid_link_alone_fills_both_urls():
     args = {**FULL_ARGS, "GuideStarDirectProfileUrl": "https://www.guidestar.org/profile/shared/abc"}
     td, repo, proc = applied({**args, "IrsStatus": ""})
@@ -439,6 +493,13 @@ SITE_CONFIG_WITH_PENDING = SITE_CONFIG.replace(
     "export type SiteConfig = {\n  name: string\n  pending?: readonly PendingField[]\n",
 )
 assert SITE_CONFIG_WITH_PENDING != SITE_CONFIG
+
+# Every footer-standard field provided, so nothing is pending.
+COMPLETE_ARGS = {
+    **FULL_ARGS,
+    "VolunteerUrl": "https://helpinghands.example/volunteer",
+    "GuideStarProfileUrl": "https://www.guidestar.org/profile/12-3456789",
+}
 
 # iwilf's missing fields, in the order the script checks them.
 SPARSE_PENDING = ["donationUrl", "volunteerUrl", "phone", "address", "guidestar"]
@@ -522,7 +583,7 @@ def test_a_sparse_charity_gets_its_own_details_and_none_of_ffcs():
 
 
 def test_a_complete_charity_has_nothing_pending():
-    args = {**FULL_ARGS, "VolunteerUrl": "https://helpinghands.example/volunteer"}
+    args = COMPLETE_ARGS
     td, repo, proc, summary = apply_with_summary(args, SITE_CONFIG_WITH_PENDING)
     try:
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -570,7 +631,7 @@ def test_pending_is_updated_and_then_removed_by_later_runs():
         assert cfg.count("pending:") == 1, cfg
         assert "pending: ['donationUrl', 'volunteerUrl', 'address', 'guidestar']," in cfg, cfg
         # Everything arrives: the key and its comment go.
-        done = run_apply(repo, {**FULL_ARGS, "VolunteerUrl": "https://helpinghands.example/volunteer"})
+        done = run_apply(repo, COMPLETE_ARGS)
         assert done.returncode == 0, done.stdout + done.stderr
         body = read(repo, "src/lib/site.config.ts").split("export const siteConfig")[1]
         assert "pending" not in body, body
@@ -609,6 +670,56 @@ def test_the_legacy_footer_path_refuses_to_keep_ffcs_values():
         out = proc.stdout + proc.stderr
         assert "Legacy hard-coded footer" in out and "phone" in out and "address" in out, out
         assert "(520) 222-8104" in footer.read_text(encoding="utf-8")  # untouched, not half-patched
+    finally:
+        shutil.rmtree(td)
+
+
+LEGACY_FOOTER = """<a href="mailto:clarkemoyer@freeforcharity.org">clarkemoyer@freeforcharity.org</a>
+<a href="tel:15202228104">(520) 222-8104</a>
+const socials = [
+  { href: 'https://www.facebook.com/freeforcharity' },
+  { href: 'https://x.com/freeforcharity1' },
+  { href: 'https://www.linkedin.com/company/freeforcharity/' },
+  { href: 'https://github.com/FreeForCharity' },
+]
+"""
+
+
+def make_legacy_repo(td: pathlib.Path) -> pathlib.Path:
+    repo = td / "repo"
+    (repo / "src" / "components" / "footer").mkdir(parents=True)
+    (repo / "src" / "components" / "home-page" / "TheFreeForCharityTeam").mkdir(parents=True)
+    (repo / "src" / "data" / "team").mkdir(parents=True)
+    (repo / "src" / "components" / "footer" / "index.tsx").write_text(LEGACY_FOOTER, encoding="utf-8")
+    (repo / "src" / "components" / "home-page" / "TheFreeForCharityTeam" / "index.tsx").write_text(
+        "export default null\n", encoding="utf-8"
+    )
+    (repo / "src" / "data" / "team.ts").write_text("export const team = []\n", encoding="utf-8")
+    return repo
+
+
+def test_the_legacy_path_accepts_the_same_social_labels_as_the_config_path():
+    # "X (Twitter)" is a label Get-SocialEntries accepts; the legacy guard used
+    # a stricter parse and refused it, and the legacy patch would not have
+    # replaced FFC's X link with it.
+    td = pathlib.Path(tempfile.mkdtemp())
+    try:
+        repo = make_legacy_repo(td)
+        args = {
+            **FULL_ARGS,
+            "FooterSocial": [
+                "Facebook: https://www.facebook.com/helpinghands",
+                "X (Twitter): https://x.com/helpinghands",
+                "LinkedIn: https://www.linkedin.com/company/helpinghands",
+                "GitHub: https://github.com/helpinghands",
+            ],
+        }
+        proc = run_apply(repo, args)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        footer = read(repo, "src/components/footer/index.tsx")
+        assert "href: 'https://x.com/helpinghands'" in footer, footer
+        for ffc in ("x.com/freeforcharity1", "facebook.com/freeforcharity'", "company/freeforcharity/"):
+            assert ffc not in footer, (ffc, footer)
     finally:
         shutil.rmtree(td)
 

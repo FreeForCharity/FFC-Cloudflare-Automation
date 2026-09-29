@@ -92,9 +92,8 @@ def test_the_dataset_covers_both_link_outcomes_and_both_candid_paths():
     expects = [c["expect"] for c in load()]
     assert {e["donate"] for e in expects} == {"url", "mailto"}, expects
     assert {e["volunteer"] for e in expects} == {"url", "mailto"}, expects
-    # "derived-from-ein" (a recognized 501(c)(3) with an EIN and no Candid URLs)
-    # is covered in test_701_apply_website_template.py; 701's resolve requires
-    # the URLs for a recognized 501(c)(3) on a full run, so no sample needs it.
+    # Candid URLs are only ever the ones a charity provides, never derived from
+    # its EIN, so "given" and "blank" (empty and pending) are the only paths.
     assert {e["candid"] for e in expects} == {"given", "blank"}, expects
 
 
@@ -158,10 +157,9 @@ def test_the_content_script_renders_every_charity_as_expected():
             assert f"taxStatusLabel: '{e['tax_status_label']}'," in cfg, (c["id"], cfg)
 
             profile = re.search(r"profileUrl: '([^']*)',", cfg).group(1)
-            if e["candid"] == "derived-from-ein":
-                assert profile == f"https://www.guidestar.org/profile/{i['footer_ein']}", profile
-            elif e["candid"] == "blank":
-                # No Candid profile given and none to derive: blank, never FFC's.
+            if e["candid"] == "blank":
+                # No Candid profile given: empty (and pending), never derived
+                # from the EIN and never FFC's.
                 assert profile == "" and "guidestar.org" not in cfg, (c["id"], cfg)
             else:
                 assert profile == i["guidestar_profile_url"], profile

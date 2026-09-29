@@ -1775,7 +1775,8 @@ jobs:
                 $bodyFile = Join-Path $workDir 'pending-issue.md'
                 ($lines -join "`n") | Out-File -FilePath $bodyFile -Encoding utf8
 
-                $existing = gh issue list -R $repoFull --state open --limit 100 --json number,title,url | ConvertFrom-Json
+                # Title search (not a first-N listing), then an exact-title match.
+                $existing = gh issue list -R $repoFull --state open --search 'in:title "Website details needed from"' --limit 20 --json number,title,url | ConvertFrom-Json
                 if ($LASTEXITCODE -ne 0) { throw "gh issue list failed (exit $LASTEXITCODE)." }
                 $match = @($existing | Where-Object { $_.title -eq $issueTitle }) | Select-Object -First 1
                 if ($match) {

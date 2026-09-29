@@ -168,6 +168,8 @@ def test_a_rerun_refreshes_the_open_issue_instead_of_opening_another():
     )
     r = run_tail(existing=existing, pending=["phone"])
     assert r["rc"] == 0, r["log"]
+    lookup = [c for c in r["gh"] if c.startswith("issue list")]
+    assert lookup and "--search in:title \"Website details needed from\"" in lookup[0], r["gh"]
     assert not [c for c in r["gh"] if c.startswith("issue create")], r["gh"]
     assert [c for c in r["gh"] if c.startswith("issue edit 7")], r["gh"]
     assert r["outputs"]["content_pending_issue_url"].endswith("/issues/7"), r["outputs"]

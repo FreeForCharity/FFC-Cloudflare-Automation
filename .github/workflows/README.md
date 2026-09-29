@@ -344,8 +344,9 @@ Provisions a charity website end-to-end after a website request issue is assigne
        placeholder (templates that declare `pending`; older templates get a warning and the fields
        are only emptied). The list is recorded in `ffc-content.json` (`pendingFields`) and the
        completion comment, and — with a technical POC username, on a non-dry run — a "Website
-       details needed from <charity>" issue on the new repo asks the POC for them. A recognized
-       501(c)(3) with an EIN but no Candid URLs gets its own profile-by-EIN link.
+       details needed from <charity>" issue on the new repo asks the POC for them. Candid/GuideStar
+       links are only ever URLs the charity provides — never derived from the EIN, because the
+       footer seal claims a transparency level.
    - Commits + pushes to the new repo’s `main` branch.
 
 7. **Comment completion (issue mode only)** with a marker for idempotency.

@@ -11,11 +11,11 @@ Each charity's `inputs` object uses 701's `workflow_dispatch` input names verbat
 string), so the same data drives the offline tests, workflow 748 and a live 701 run. Its `expect`
 block records what the content step must produce for it.
 
-| Charity            | Covers                                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `riverbend-pantry` | the happy path: recognized 501(c)(3), Candid links, donation and volunteer pages, five leaders                                                    |
-| `st-marys-shelter` | pre-501(c)(3) (no tax claims, no Candid link: left blank, never FFC's), no donation or volunteer page (both links email), `'` and `&` in the name |
-| `cafe-eclair-arts` | adversarial text: accents, non-Latin, `"`, `\`, `$`, a backtick, a multi-line mission, a `twitter.com` social URL, one leader                     |
+| Charity            | Covers                                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `riverbend-pantry` | the happy path: recognized 501(c)(3), Candid links, donation and volunteer pages, five leaders                                                                                   |
+| `st-marys-shelter` | pre-501(c)(3) (no tax claims, no Candid link: empty and pending, never derived from the EIN or FFC's), no donation or volunteer page (both links email), `'` and `&` in the name |
+| `cafe-eclair-arts` | adversarial text: accents, non-Latin, `"`, `\`, `$`, a backtick, a multi-line mission, a `twitter.com` social URL, one leader                                                    |
 
 Add a charity when you find a provisioning bug the three do not reach; give it an `id`, a `covers`
 line and an `expect` block.

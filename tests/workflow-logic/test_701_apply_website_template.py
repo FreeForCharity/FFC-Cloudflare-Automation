@@ -674,6 +674,61 @@ def test_the_legacy_footer_path_refuses_to_keep_ffcs_values():
         shutil.rmtree(td)
 
 
+INTEGRATIONS = """  sections: {
+    showEndowment: true,
+    showPrograms: true,
+  },
+  integrations: {
+    zeffyDonationUrl: 'https://www.zeffy.com/embed/donation-form/free-for-charity-endowment-fund',
+    idealistUrl:
+      'https://www.idealist.org/en/nonprofit/356bfc8e2ae64f83beea4a4e677e99d7-free-for-charity-state-college#opportunities',
+    eventsFacebookPageUrl: 'https://www.facebook.com/freeforcharity',
+    microsoftFormUrl: 'https://forms.office.com/r/vePxGq6JqG',
+  },
+}
+"""
+# An older Single Page shape (FFC-EX-vcof.org): integrations with no guard.
+SITE_CONFIG_UNGUARDED_INTEGRATIONS = SITE_CONFIG.replace(
+    "    hubUrl: 'https://freeforcharity.org/hub/',\n  },\n}\n",
+    "    hubUrl: 'https://freeforcharity.org/hub/',\n  },\n" + INTEGRATIONS,
+)
+assert SITE_CONFIG_UNGUARDED_INTEGRATIONS != SITE_CONFIG
+# The current shape: the same keys, used only on FFC's own site.
+SITE_CONFIG_GUARDED_INTEGRATIONS = SITE_CONFIG_UNGUARDED_INTEGRATIONS + (
+    "\nexport function isSupportingOrgSite(): boolean {\n"
+    "  return siteConfig.name.trim() === siteConfig.supportedBy.name.trim()\n}\n"
+)
+
+
+def test_unguarded_integrations_are_emptied_and_the_ffc_endowment_hidden():
+    # A pending donation / volunteer URL must never leave FFC's Zeffy and
+    # Idealist pages behind the charity's buttons on an older template.
+    td, repo, proc = applied(SPARSE_ARGS, SITE_CONFIG_UNGUARDED_INTEGRATIONS)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        body = cfg.split("export const siteConfig")[1]
+        for ffc in ("zeffy.com", "idealist.org", "facebook.com/freeforcharity", "forms.office.com"):
+            assert ffc not in body, (ffc, cfg)
+        assert "zeffyDonationUrl: ''," in body and "microsoftFormUrl: ''," in body, cfg
+        assert "idealistUrl: ''," in body or "idealistUrl:\n      ''," in body, cfg
+        assert "showEndowment: false," in body and "showPrograms: true," in body, cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_guarded_integrations_are_left_for_the_supporting_org_site():
+    # Current Single Page: rendered only when isSupportingOrgSite(), and the
+    # template's own tests read these values, so they stay as shipped.
+    td, repo, proc = applied(SPARSE_ARGS, SITE_CONFIG_GUARDED_INTEGRATIONS)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        body = read(repo, "src/lib/site.config.ts").split("export const siteConfig")[1]
+        assert "free-for-charity-endowment-fund" in body and "showEndowment: true," in body, body
+    finally:
+        shutil.rmtree(td)
+
+
 LEGACY_FOOTER = """<a href="mailto:clarkemoyer@freeforcharity.org">clarkemoyer@freeforcharity.org</a>
 <a href="tel:15202228104">(520) 222-8104</a>
 const socials = [

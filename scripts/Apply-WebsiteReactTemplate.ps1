@@ -684,6 +684,39 @@ function Get-SocialEntries {
     return , $entries
 }
 
+function Clear-UnguardedIntegration {
+    # Single Page template: `siteConfig.integrations` holds FREE FOR CHARITY's
+    # own third-party endpoints (its Zeffy endowment form, Idealist page,
+    # events Facebook page, application Microsoft Form). Current versions only
+    # use them on FFC's own site (`isSupportingOrgSite()`), so a charity's site
+    # never renders them and the values are left for the template's own tests.
+    # Older versions (e.g. FFC-EX-vcof.org) have no such guard and embed them
+    # on every page -- a charity's Donate / Volunteer buttons going to FFC's
+    # pages -- so there every integration URL is emptied, and the FFC
+    # endowment section ("Support Free For Charity", whose only content is
+    # that Zeffy form) is switched off.
+    param([Parameter(Mandatory = $true)][string]$Source)
+    $props = Get-SiteConfigProperties -Source $Source
+    if (-not $props.ContainsKey('integrations')) { return $Source }
+    if ($Source -match 'function\s+isSupportingOrgSite\s*\(') { return $Source }
+
+    $span = $props['integrations']
+    $value = $Source.Substring($span.Start, $span.End - $span.Start)
+    # Every property's string value -> '' (keys and non-string values kept).
+    $emptied = [regex]::Replace($value, "(:\s*)'(?:[^'\\]|\\.)*'", { param($m) $m.Groups[1].Value + "''" })
+    $Source = $Source.Substring(0, $span.Start) + $emptied + $Source.Substring($span.End)
+    Write-Warning "This template embeds siteConfig.integrations on every site (no isSupportingOrgSite guard); Free For Charity's integration URLs were emptied and the FFC endowment section switched off."
+
+    $props = Get-SiteConfigProperties -Source $Source
+    if ($props.ContainsKey('sections')) {
+        $span = $props['sections']
+        $value = $Source.Substring($span.Start, $span.End - $span.Start)
+        $value = [regex]::Replace($value, '(\bshowEndowment\s*:\s*)true\b', '${1}false')
+        $Source = $Source.Substring(0, $span.Start) + $value + $Source.Substring($span.End)
+    }
+    return $Source
+}
+
 function Get-LegacySocialMap {
     # The legacy footer's four networks, keyed facebook / x / linkedin / github,
     # from the same parse the config-driven path uses (Get-SocialEntries).
@@ -846,6 +879,8 @@ function Update-SiteConfig {
         '[]'
     }
     $text = Set-SiteConfigValue -Source $text -Key 'social' -ValueTs $socialTs
+
+    $text = Clear-UnguardedIntegration -Source $text
 
     $xLink = $socialEntries | Where-Object { $_.Label -eq 'X (Twitter)' } | Select-Object -First 1
     $handle = if ($xLink) { [regex]::Match($xLink.Href, '^https://(?:www\.)?(?:x|twitter)\.com/@?(?<h>[A-Za-z0-9_]{1,15})(?:[/?#]|$)').Groups['h'].Value } else { '' }
@@ -1048,8 +1083,8 @@ function Invoke-RepoPrettier {
     param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string[]]$Paths)
 
     $pkgFile = Join-Path $RepoRoot 'package.json'
-    if (-not (Get-Command npx -ErrorAction SilentlyContinue) -or -not (Test-Path -LiteralPath $pkgFile)) {
-        Write-Warning 'npx or package.json not available; generated files were not run through prettier.'
+    if (-not (Test-Path -LiteralPath $pkgFile)) {
+        Write-Warning 'No package.json; generated files were not run through prettier.'
         return
     }
     $pkg = Get-Content -LiteralPath $pkgFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -1057,11 +1092,32 @@ function Invoke-RepoPrettier {
     $version = ($version -replace '^[\^~>=\s]+', '')
     $spec = if ($version -match '^\d+\.\d+\.\d+$') { "prettier@$version" } else { 'prettier@3' }
 
+    # 1. The repo's own installed prettier, when node_modules exists (a local
+    #    re-run over an installed checkout): exactly the pinned version.
+    # 2. Otherwise npx. On Windows call npx.cmd, not the npx.ps1 shim that
+    #    pwsh resolves `npx` to: with `--yes <spec>` the shim fails with "npm
+    #    error could not determine executable to run" (measured locally, npm
+    #    10 / node 22), while npx.cmd runs the same command fine. Linux is
+    #    unaffected (plain `npx`).
+    $localBin = @('node_modules/.bin/prettier.cmd', 'node_modules/.bin/prettier') |
+        ForEach-Object { Join-Path $RepoRoot $_ } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    $isWin = $IsWindows -or $env:OS -eq 'Windows_NT'
+    $npx = if ($isWin -and (Get-Command npx.cmd -ErrorAction SilentlyContinue)) { 'npx.cmd' }
+    elseif (Get-Command npx -ErrorAction SilentlyContinue) { 'npx' }
+    else { $null }
+    if (-not $localBin -and -not $npx) {
+        Write-Warning ("Neither the repo's prettier nor npx is available; generated files were not formatted. Run: npx --yes {0} --write {1}" -f $spec, ($Paths -join ' '))
+        return
+    }
+
     Push-Location $RepoRoot
     try {
-        & npx --yes $spec --write @Paths 2>&1 | Out-Host
+        if ($localBin) { & $localBin --write @Paths 2>&1 | Out-Host }
+        else { & $npx --yes $spec --write @Paths 2>&1 | Out-Host }
         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "prettier exited $LASTEXITCODE; generated files may need formatting."
+            Write-Warning ("prettier exited {0}; generated files may need formatting. Run in the repo: npx --yes {1} --write {2}" -f $LASTEXITCODE, $spec, ($Paths -join ' '))
             # Best-effort by design: do not let npx's code become the script's
             # own exit status (a caller reading it would see a failed apply).
             $global:LASTEXITCODE = 0

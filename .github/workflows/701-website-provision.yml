@@ -1628,7 +1628,11 @@ jobs:
               $pinned = [string]((Get-Content -Raw 'package.json' | ConvertFrom-Json).devDependencies.prettier)
               $pinned = $pinned -replace '^[\^~>=\s]+', ''
               $spec = if ($pinned -match '^\d+\.\d+\.\d+$') { "prettier@$pinned" } else { 'prettier@3' }
-              & npx --yes $spec --write ffc-content.json | Out-Host
+              # npx.cmd, not the npx.ps1 shim pwsh resolves `npx` to on Windows:
+              # with `--yes <spec>` the shim fails ("could not determine
+              # executable to run"). This job runs on windows-latest.
+              $npx = if (Get-Command npx.cmd -ErrorAction SilentlyContinue) { 'npx.cmd' } else { 'npx' }
+              & $npx --yes $spec --write ffc-content.json | Out-Host
             } catch {
               Write-Warning "Could not format ffc-content.json: $_"
             }

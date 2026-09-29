@@ -385,13 +385,31 @@ def test_the_five_lanes_carry_byte_identical_guard_conditions():
             )
 
 
+def _locate(lane: Lane, body: str, condition: str) -> int:
+    """`body.index(condition)`, asserted first.
+
+    A bare `.index` raises ValueError, which is NOT an AssertionError, so the
+    module runner does not catch it — it aborts the whole roster and every case
+    sorted after the caller reports no outcome at all, which a reviewer counting
+    FAIL lines scores as passing (ledger L194). This module shipped without the
+    assertion and its own mutation pass caught it: deleting a lane's newline
+    guard took the roster down instead of failing three named cases.
+    """
+    assert condition in body, (
+        f"{lane.workflow} no longer contains the guard condition {condition!r}. "
+        f"If it was deliberately removed, that is the finding — this lane's "
+        f"artifact `path:` reads the same input raw and is unguarded without it."
+    )
+    return body.index(condition)
+
+
 def test_the_newline_guard_precedes_the_anchored_ones():
     """`^` is start-of-STRING, so the anchored guards only ever see line one."""
     for lane in LANES:
         body = _body(lane)
-        newline_at = body.index(NEWLINE_CONDITION)
+        newline_at = _locate(lane, body, NEWLINE_CONDITION)
         for anchored in ANCHORED_CONDITIONS:
-            assert newline_at < body.index(anchored), (
+            assert newline_at < _locate(lane, body, anchored), (
                 f"{lane.workflow}: the newline guard must run BEFORE {anchored!r}. "
                 f"`^` anchors at the start of the string, not of each line, so a "
                 f"multi-line value walks a later anchored guard past its payload."
@@ -410,7 +428,15 @@ def test_the_glob_rationale_sits_between_the_newline_and_glob_conditions():
     """
     for lane in LANES:
         body = _body(lane)
-        region = body[body.index(NEWLINE_CONDITION) : body.index(GLOB_CONDITION)]
+        start = _locate(lane, body, NEWLINE_CONDITION)
+        end = _locate(lane, body, GLOB_CONDITION)
+        assert start < end, (
+            f"{lane.workflow}: the newline guard now sits BELOW the glob guard, so "
+            f"the region this case reads is empty and it would report the "
+            f"rationale missing. The ordering itself is the finding — see "
+            f"test_the_newline_guard_precedes_the_anchored_ones."
+        )
+        region = body[start:end]
         for token in GLOB_RATIONALE:
             assert token in region, (
                 f"{lane.workflow}: {token!r} is not in the text between the newline "

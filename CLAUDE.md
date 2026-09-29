@@ -1535,3 +1535,79 @@ MSYS_NO_PATHCONV=1 git -C C:/…/wt164-1297 checkout -- .claude/hooks/test_hooks
 This section is appended at the end on purpose. `docs/lessons-ledger.md` cites `CLAUDE.md` by line
 number, and inserting it beside the earlier note shifted the `CLAUDE.md` line that ledger row L147
 (in `docs/lessons-ledger.md`, not a line number here) cites onto a blank one.
+
+## A background verification is bound to the working tree it started in (validated 2026-09-29, Conductor run 182)
+
+**Do not check out another ref in a tree that has a suite running against it.** Reviewing PR #1436,
+run 182 started `python tests/workflow-logic/run_all.py` on the PR branch, then — while it ran —
+`git checkout main` **in the same working tree** to read an unrelated workflow. The suite spent most
+of its ~8 minutes reading a mixed tree: some modules from the branch, some from `main`, with no
+boundary recorded anywhere.
+
+Nothing errored. No line of output looked unusual, and it exited **1**, which is what this host does
+anyway (27 modules fail here for platform reasons). So the result was not merely wrong, it was
+**indistinguishable from the branch genuinely failing** — and the natural reading of a red suite on
+a PR branch is "the PR is broken".
+
+The general form is worth more than the instance: **a background process holds a PATH, not a
+snapshot.** Anything that mutates the path invalidates the result without touching the process, so
+the usual tells — a non-zero exit, an error message, a crash — are all absent. Same family as L182
+(a restore defined against the wrong baseline) and as the parallel-`cd` rule above (state owned by
+something other than the command that reads it).
+
+The remedy is a dedicated tree, which costs one command:
+
+```bash
+git worktree add C:/…/scratch/wt<pr> pr<pr>          # detached copy; the main checkout is free
+( cd C:/…/scratch/wt<pr> && nohup python tests/workflow-logic/run_all.py > suite.txt 2>&1 & )
+git worktree remove C:/…/scratch/wt<pr>              # when the run is scored, not before
+```
+
+Two further notes from the same episode. Use `nohup … &` rather than the Bash tool's own
+backgrounding if you want the run to survive independently of the call that started it — a
+foreground call is capped at ten minutes and this suite does not fit. And **do not read a
+backgrounded suite's pass/fail by grepping `FAIL`**: score it from the
+`::error::workflow-logic tests failed:` line, which names the modules, because a truncated roster
+reports no `FAIL` at all (L194).
+
+## A wrong `gh api` query-parameter NAME is dropped in silence, and the answer looks plausible (validated 2026-09-29, Conductor run 182)
+
+**GitHub REST ignores a query parameter it does not recognise instead of rejecting it.** Counting
+the `agentic-os` backlog, run 182 wrote `?label=agentic-os` — the parameter is **`labels`**, plural.
+The filter was dropped, so every call returned the same unfiltered first page:
+
+```bash
+# WRONG -- `label=` is not a parameter; the filter silently does not happen
+for q in "label=agentic-os" "label=agentic-os,agent-ready" "label=agentic-os,blocked"; do
+  gh api "repos/$R/issues?state=open&per_page=100&$q" --jq '[.[]|select(.pull_request==null)]|length'
+done
+# → 94, 94, 94      (100 items minus 6 PRs, three times)
+
+# RIGHT
+gh api --paginate "repos/$R/issues?state=open&per_page=100&labels=agentic-os,agent-ready" \
+  --jq '.[]|select(.pull_request==null)|.number' | wc -l
+# → 62, against 137 for `agentic-os` alone
+```
+
+`94` is an entirely plausible count for that label, which is what makes this expensive: nothing in
+the value says the filter never ran. **The tell was not the number, it was that three queries which
+must differ agreed exactly.** Hit again in the same run with `?sort=created&direction=desc` on
+`issues/{n}/comments`, which is also unsupported and also ignored — it returned the **oldest**
+comments, and run 8's log very nearly got read as the newest entry on #719.
+
+This is the same family as the `--paginate`, `gh search` and `.auto_merge` rules above — an API
+answering a question you did not ask, in the reassuring direction — but the **remedy is different**,
+which is why it needs its own entry. Those are fixed by a flag, another page, or a different
+endpoint. A dropped filter is fixed only by getting the parameter's **name** right, and no amount of
+retrying, paginating or re-reading detects it.
+
+Two habits that do:
+
+- **Check the parameter name against the endpoint's docs whenever a filtered count feeds a
+  conclusion**, the same way `--paginate` is required for a negative one. `labels`, not `label`;
+  `state`, not `status`; the runs API wants `status`, the issues API wants `state`.
+- **Distrust agreement between queries that should differ.** Print every denominator side by side
+  (`agentic-os=137 agent-ready=62 blocked=6`) and read the _set_, not each number alone. Two filters
+  returning an identical count is the signature of neither filter running — the same reason
+  `audit-agentic-os-board.py` prints `expected=N board=M` rather than just reporting "0 missing"
+  (#966).

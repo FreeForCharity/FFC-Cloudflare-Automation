@@ -1761,7 +1761,14 @@ def test_the_dispatched_success_is_not_merely_ignored_it_is_never_fetched():
     )
     polls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "completed"]
     assert polls, r["listWorkflowRunsCalls"]
-    assert all(c["event"] == "schedule" for c in polls), polls
+    # `.get`, not `[...]`: an unfiltered call records NO `event` key at all
+    # (the shim serialises `args.event` and JSON drops `undefined`), so `[...]`
+    # raises KeyError — which this module's runner does not catch. Measured on
+    # the M1 mutant: it killed the module mid-roster, 71 tests reported instead
+    # of 102, and the 30 that never ran printed nothing at all. Same hazard the
+    # `_alert_issue` tests guard against by asserting before indexing, one
+    # method over.
+    assert all(c.get("event") == "schedule" for c in polls), polls
 
 
 def test_a_dispatched_failure_does_not_open_an_alert_for_a_green_scheduled_lane():
@@ -1823,7 +1830,7 @@ def test_the_success_probe_is_filtered_to_scheduled_runs_too():
     r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
     calls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
     assert len(calls) == 1, r
-    assert calls[0]["event"] == "schedule", calls
+    assert calls[0].get("event") == "schedule", calls  # `.get` for the reason above
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

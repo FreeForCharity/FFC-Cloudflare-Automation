@@ -314,6 +314,31 @@ def test_an_apostrophe_in_a_comment_does_not_invert_the_polarity():
         assert findings, f"an apostrophe in a {lead} comment lost the read that followed"
 
 
+def test_the_finding_states_the_consequence_that_is_TRUE_of_the_spelling_it_found():
+    """L307: a guard that fires correctly and explains wrongly misdirects its reader.
+
+    One message for three spellings was wrong for two of them. `issues.listForRepo`
+    is the silent one — the whole reason this guard exists — but a `rest.pulls.*`
+    call hits the pulls endpoint and is not "a listing that returns issues only",
+    and a single-number `issues.get` (the shape the 113 freeze rests on) may
+    refuse outright rather than return a short list. Only "its token cannot see
+    pull requests" is true of all three, so only that is unconditional.
+    """
+    key_only, errors, _ = run_on({"p.yml": wf("if (i.pull_request) { skip() }\n")}, freeze={})
+    assert not errors, errors
+    assert len(key_only) == 1, key_only
+    assert "cannot see pull requests" in key_only[0], key_only[0]
+    assert "will not raise" in key_only[0], "the silent-listing case must still say so"
+
+    pulls, errors, _ = run_on({"p.yml": wf("await github.rest.pulls.list({})\n")}, freeze={})
+    assert not errors, errors
+    assert len(pulls) == 1, pulls
+    assert "cannot see pull requests" in pulls[0], pulls[0]
+    assert "will not raise" not in pulls[0], (
+        "a rest.pulls.* read is not a listing that silently returns issues: " + pulls[0]
+    )
+
+
 def test_a_backtick_in_a_line_comment_does_not_hide_a_later_block_comment():
     """Why the scanner skips a `//`/`#` comment WHOLE rather than reading it.
 
@@ -562,6 +587,7 @@ TESTS = [
     test_a_glob_in_a_string_does_not_open_a_block_comment,
     test_an_unclosed_block_comment_leaves_the_rest_scannable,
     test_an_apostrophe_in_a_comment_does_not_invert_the_polarity,
+    test_the_finding_states_the_consequence_that_is_TRUE_of_the_spelling_it_found,
     test_a_backtick_in_a_line_comment_does_not_hide_a_later_block_comment,
     test_an_unterminated_quote_does_not_run_past_its_line,
     test_a_read_inside_a_string_literal_is_still_reported,

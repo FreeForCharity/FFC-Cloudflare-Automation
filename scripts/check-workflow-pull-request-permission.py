@@ -388,12 +388,31 @@ def scan_all() -> tuple[list[str], list[str], int]:
             if PR_SCOPE in effective:
                 continue
 
-            snippets = ", ".join(sorted(set(reads))[:4])
+            snippets = sorted(set(reads))
+            # The consequence is spelled per SPELLING, because one message for
+            # three of them is a guard that fires correctly and explains
+            # wrongly (L307), and the explanation is what the reader acts on.
+            # `issues.listForRepo` is the silent one and the reason this guard
+            # exists; a `rest.pulls.*` call hits the pulls endpoint and a
+            # single-number `issues.get` may refuse outright, so neither is
+            # "a listing that returns issues only". Only the first clause is
+            # true of all three, so only it is stated unconditionally.
+            if any(m.startswith("rest.pulls.") or ".rest.pulls." in m for m in snippets):
+                consequence = (
+                    "Those pull-request endpoints are not reachable with this "
+                    "scope; how each one fails is per call."
+                )
+            else:
+                consequence = (
+                    "An `issues.listForRepo` read will return issues only and "
+                    "will not raise, so a count taken from it is blindness "
+                    "wearing a number; a single-item read may refuse instead."
+                )
             findings.append(
-                f"{where}: reads pull requests ({snippets}) but its effective "
-                f"`permissions:` names {sorted(effective)} and omits "
-                f"`{PR_SCOPE}`. That listing will return issues only, and it "
-                f"will not raise."
+                f"{where}: reads pull requests ({', '.join(snippets[:4])}) but "
+                f"its effective `permissions:` names {sorted(effective)} and "
+                f"omits `{PR_SCOPE}`, so its token cannot see pull requests. "
+                f"{consequence}"
             )
 
     return findings, hard_errors, scanned

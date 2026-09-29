@@ -174,6 +174,21 @@ GUARD_BLOCKS = (
     ("if ([string]::IsNullOrWhiteSpace($env:IN_CLOUDFLARE_PID)) {", "'39'"),
     ("if ([string]::IsNullOrWhiteSpace($env:IN_GITHUB_PAGES_PID)) {", "'40'"),
     ("if ([string]::IsNullOrWhiteSpace($env:IN_OUTPUT_FILE)) {", "throw"),
+    # The five path guards #1422 added. They belong in this tuple for the same
+    # reason the blank guard does: they are part of the REMEDY, so a pre-fix
+    # control that left them in place would have its payload refused by the guard
+    # rather than executed, and would prove the opposite of what it claims.
+    #
+    # Their real subject is the SECOND consumer -- the `Upload reconciliation
+    # artifact` step reads the same input raw in its `path:`, which is an
+    # `@actions/glob` selector rather than a filename -- so the behavioural cases
+    # in this module (which exercise the pwsh body) do not cover what they are
+    # for. `test_1422_artifact_path_input_guards.py` owns that.
+    (r"if ($env:IN_OUTPUT_FILE -match '[\r\n]') {", "throw"),
+    (r"if ($env:IN_OUTPUT_FILE -match '[*?\[\]]') {", "throw"),
+    (r"if ($env:IN_OUTPUT_FILE -match '^([A-Za-z]+:|[\\/])') {", "throw"),
+    ("if ($env:IN_OUTPUT_FILE -match '^~') {", "throw"),
+    (r"if (($env:IN_OUTPUT_FILE -split '[\\/]') -contains '..') {", "throw"),
 )
 
 # The three shipped spellings the pre-fix control rewrites, and what each becomes

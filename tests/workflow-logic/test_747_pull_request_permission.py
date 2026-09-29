@@ -190,14 +190,23 @@ def test_a_negated_pull_request_key_is_not_a_finding():
 
 
 def test_the_negation_boundary_is_the_bang_and_not_the_word():
-    """Both spellings in one body: the positive one alone must be reported."""
-    findings, _errors, _ = run_on(
-        {"p.yml": wf("const a = list.find((i) => !i.pull_request);\n"
-                     "const b = list.filter((i) => i.pull_request);\n")},
-        freeze={},
+    """Both spellings in one body: only the positive one is a read.
+
+    Asserted on `positive_pr_reads` rather than on the finding count, because a
+    finding is emitted once PER JOB however many reads it holds — so a body
+    carrying both spellings yields one finding either way, and an assertion on
+    the count cannot tell the negation clause is working. Found by a mutation
+    that dropped the clause and flipped this case not at all.
+    """
+    mod = load_checker()
+    reads = mod.positive_pr_reads(
+        "const a = list.find((i) => !i.pull_request);\n"
+        "const b = list.filter((j) => j.pull_request);\n"
     )
-    assert len(findings) == 1, findings
-    assert "list.pull_request" in findings[0] or "i.pull_request" in findings[0]
+    assert reads == ["j.pull_request"], (
+        f"expected only the un-negated read, got {reads} -- the `!` is the "
+        f"boundary between excluding pull requests and depending on them"
+    )
 
 
 def test_the_pulls_api_is_a_finding():

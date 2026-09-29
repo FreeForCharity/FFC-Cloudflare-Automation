@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import subprocess
 import sys
 import tempfile
 
@@ -141,21 +140,38 @@ def test_the_conventional_pair_are_clean():
 
 
 def test_the_pre_fix_747_is_a_finding():
-    """The control, taken from `main`'s own text rather than hand-written (L47)."""
-    proc = subprocess.run(
-        ["git", "show", "main:.github/workflows/747-conductor-liveness.yml"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        env={**__import__("os").environ, "MSYS_NO_PATHCONV": "1"},
+    """The control, derived from the SHIPPED text by inverting the fix (L47).
+
+    NOT `git show main:…`, which is what this shipped as and what CI rejected:
+    the runner checks out a detached PR merge ref with no local `main`, so the
+    call died with `invalid object name 'main'`. It passed on the Conductor host,
+    where `main` exists. A control that cannot run is not a control — and this one
+    failed in the direction of looking like a defect in the guard rather than in
+    the test.
+
+    Inverting the fix — removing the single line it added — keeps the property
+    that matters: the control is real workflow text rather than a hand-written
+    fixture that could drift into a shape 747 never had. It is also
+    self-falsifying, because if the line is not there to remove it says so
+    instead of quietly passing over a tree where the fix was reverted.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / "747-conductor-liveness.yml").read_text(
+        encoding="utf-8"
     )
-    assert proc.returncode == 0, f"could not read the control from main: {proc.stderr[:200]}"
-    before = proc.stdout
+    head, sep, tail = text.partition("jobs:")
+    assert sep, "747 has no `jobs:` key; the file layout has changed"
+    assert "  pull-requests: read\n" in head, (
+        "747's top-level block does not declare `pull-requests: read`, so there is "
+        "nothing to invert -- either the fix was reverted (in which case the guard "
+        "should be failing on the real tree) or the scope moved to the job level "
+        "and this control needs rewriting"
+    )
+    before = head.replace("  pull-requests: read\n", "", 1) + sep + tail
     assert "pull-requests" not in before.split("jobs:", 1)[0], (
-        "the control fetched from `main` ALREADY declares the scope, so it cannot "
-        "demonstrate the defect -- the fix has merged and this control is stale"
+        "removing the declaration left another `pull-requests` mention in the "
+        "top-level block, so this control does not reproduce the pre-fix state"
     )
+
     findings, errors, _scanned = run_on({"747-conductor-liveness.yml": before}, freeze={})
     assert not errors, f"the control produced hard errors: {errors}"
     assert len(findings) == 1, f"expected exactly one finding, got {findings}"

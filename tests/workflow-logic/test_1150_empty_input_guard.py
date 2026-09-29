@@ -106,12 +106,22 @@ CONVERTED_1148 = [
 #      value in `env:` and then reads it as a direct argument, which is exactly
 #      the shape this guard scans — so every remaining lane over a 1xx/2xx/8xx
 #      workflow in the table above will add to this count too.
+#   3  216's and 220's `IN_CHARITY_GIDS` and 217's `IN_THROTTLE_MS`, converted
+#      by #1080 lane 27 and guarded by the gated append each step now builds
+#      (`if (-not IsNullOrWhiteSpace($env:X)) { $cliArgs += @('-Flag', $env:X) }`).
+#      Measured rather than inferred: against `origin/main` the scan saw 5
+#      references across 214/215/216/217/220 and it now sees 8, and the three
+#      added are exactly these — the five `WHMCS_API_URL` rows only changed
+#      FORM (direct -> array-splat, because the lane splats its arguments so an
+#      empty value cannot vanish as an argument at all, ledger L214), which
+#      moves no count. `output_file` adds none: the body reads it into `$out`
+#      and that local is what reaches the parameter position.
 #
-# So the scan sees 20 references across these 14 workflows and 17 of them are
+# So the scan sees 23 references across these 14 workflows and 17 of them are
 # #1148's. If you are burning down one of these workflows and this assertion
 # fails, the fix is to add your guarded sites here with a line saying which
 # issue converted them — never to relax the equality.
-EXTRA_GUARDED_IN_THE_SAME_STEPS = 3
+EXTRA_GUARDED_IN_THE_SAME_STEPS = 6
 
 # The two sites a form-blind matcher flags and this guard must not (#1150
 # criterion 3): both invoke through the PowerShell binder, so an empty value

@@ -363,6 +363,22 @@ BURNED_DOWN = (
     # PR count.
     "201-whmcs-export-domains.yml",
     "203-whmcs-export-payment-methods.yml",
+    # Lane 27 took FIVE — the whole WHMCS read-only metrics family, which are
+    # structural clones of one another (same runner, same environment, same
+    # `$out = "<interpolation>"`, same raw `path:` upload). Splitting them would
+    # have produced five PRs differing only in a callee name AND five
+    # independent copies of the path-guard set;
+    # `test_214_220_whmcs_metrics_wiring.py` couples them instead. Five lines,
+    # per the note above: the ledger is keyed by workflow.
+    #
+    # It also empties `check-workflow-artifact-path-input-guards.py`'s freeze,
+    # which held exactly these five (#1422), so the two freezes reach the WHMCS
+    # half of their burn-down together rather than one lagging the other.
+    "214-whmcs-clients-metrics.yml",
+    "215-whmcs-nonprofit-clients-metrics.yml",
+    "216-whmcs-activity-metrics.yml",
+    "217-whmcs-client-fields-survey.yml",
+    "220-whmcs-served-metrics.yml",
 )
 
 
@@ -773,9 +789,25 @@ def test_the_frozen_counts_are_what_1080_reconciles_to():
     # not expected to take is the cheapest way to make it survive one.
     #
     # Ten entries are still frozen as this lands.
+    #
+    # …and #1080 lane 27 burned down `217-whmcs-client-fields-survey.yml` along
+    # with the rest of the WHMCS metrics family, which retires this slot for the
+    # FIFTH consecutive lane. Filled by `117-domain-transfer-verify.yml`, and
+    # the selection rule above has to be restated rather than reapplied: with
+    # the WHMCS entries gone, the only three left — 107, 109 and 117 — are ALL
+    # Cloudflare read bodies, so "one Cloudflare and one WHMCS, therefore no
+    # single lane retires both" is no longer available. What still holds is the
+    # weaker and honest version: a lane takes a workflow, these are two
+    # different workflows, and 117 is not the entry lane 27's handoff nominates
+    # next (`107`, the widest of the three). Choosing an entry the next lane is
+    # not expected to take is the cheapest way to make this control survive one.
+    #
+    # Three entries are frozen as this lands. Per the note above, when one is
+    # left the honest move is to keep the single name and say so here, not to
+    # drop the control.
     for expected in (
         "107-audit-compliance.yml",
-        "217-whmcs-client-fields-survey.yml",
+        "117-domain-transfer-verify.yml",
     ):
         assert expected in current, (
             f"{expected} must be in the frozen set. If you have just burned it "

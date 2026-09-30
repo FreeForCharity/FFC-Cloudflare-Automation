@@ -286,11 +286,25 @@ jobs:
               try {
                 const res = await github.rest.actions.listWorkflowRuns({
                   owner: t.owner, repo: t.repo, workflow_id: workflowId,
-                  branch, status: 'success', per_page: 1,
+                  // `event: 'schedule'` closes the RECOVERY direction (#1440): without it a
+                  // hand-dispatched success is read as "this cron is green again" and the
+                  // escalation clock resets, so a scheduled lane that has never once
+                  // succeeded reports a recent green age. A dispatch proves the workflow
+                  // CAN pass; it says nothing about whether cron is still firing it, which
+                  // is the only thing this alerter watches. When every success is a
+                  // dispatch this correctly returns Infinity — "never had a successful
+                  // scheduled run" — which escalates, the same safe direction as the
+                  // empty-list note above.
+                  branch, event: 'schedule', status: 'success', per_page: 1,
                 });
                 const last = (((res.data || {}).workflow_runs) || [])[0];
                 if (!last) {
-                  return { days: Infinity, why: `it has never had a successful ${branch} run` };
+                  // "scheduled" is load-bearing in this sentence, not decoration: with the
+                  // event filter above, a workflow whose only successes are dispatches
+                  // reaches here, and a reader told "it has never succeeded" about a
+                  // workflow they watched pass by hand an hour ago will disbelieve the
+                  // alert rather than the cron.
+                  return { days: Infinity, why: `it has never had a successful scheduled ${branch} run` };
                 }
                 const at = Date.parse(last.updated_at || last.created_at || '');
                 if (Number.isNaN(at)) {
@@ -548,7 +562,20 @@ jobs:
               try {
                 const res = await github.rest.actions.listWorkflowRuns({
                   owner: t.owner, repo: t.repo, workflow_id: wf.id,
-                  branch, status: 'completed', per_page: 1,
+                  // `event: 'schedule'` closes the VERDICT direction (#1440), and it is the
+                  // fail-open half — the one that silences real outages. The watch list is
+                  // filtered to scheduled workflows (test_watched_workflows_are_actually_
+                  // scheduled) precisely because "the latest run" of a dispatch-only
+                  // workflow means nothing; without this filter the guarantee stopped at
+                  // the watch list and the run lookup happily judged a scheduled lane by
+                  // whatever a human last ran by hand. Measured 2026-09-29: 735's latest
+                  // completed run was a dispatch SUCCESS (36448003123) while its last four
+                  // scheduled runs all failed, and alert #1033 was closed on it — a
+                  // four-week-old weekly outage reported as healthy. It closes the
+                  // fail-CLOSED half too: 745 exits 1 by design on board drift and the
+                  // Conductor dispatches it every run, which opened "Scheduled workflow
+                  // failing" alerts (#1322, #1439) whose evidence was a hand-run audit.
+                  branch, event: 'schedule', status: 'completed', per_page: 1,
                 });
                 runs = ((res.data || {}).workflow_runs) || [];
               } catch (e) {
@@ -560,7 +587,7 @@ jobs:
               }
               stats.checked++;
               if (!runs.length) {
-                core.info(`No completed ${branch} run for ${t.name} in ${t.slug} yet.`);
+                core.info(`No completed scheduled ${branch} run for ${t.name} in ${t.slug} yet.`);
                 continue;
               }
               await evaluate(t, wf.id, runs[0], branch);

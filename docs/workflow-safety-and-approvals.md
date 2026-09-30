@@ -103,6 +103,23 @@ condition evaluates — `${{ inputs.dry_run || false }}`, matching its `inputs.d
 — rather than an expression that renders empty. Enforced at PR time by
 `tests/workflow-logic/test_dry_run_visible_in_run_name.py`.
 
+**Both halves of that convention are now enforced, because only the first one was (#1107, second
+occurrence).** The original guard asks whether `dry_run` _appears_ in `run-name`. Two workflows
+passed it while failing the sentence above: `228`'s weekday cron rendered `(dry_run=)` and `105`'s
+issue-label runs rendered `Manage Record:  ( ) (dry_run=)` — no domain, no record type, no record
+name, no state — because `${{ inputs.x }}` is empty on every trigger that is not a dispatch, and the
+literal string `dry_run` was present in a fragment that renders to nothing. Presence read as
+validity, one layer inside the guard written against presence read as validity.
+
+Neither was a gate-safety hole, and saying so is part of the record: `228` is ungated on both its
+lanes (`whmcs-prod-read`, `fraudlabspro-prod-read`), and `105`'s write job is
+`if: … dry_run == 'false'` while its resolver hard-codes `dry_run = 'true'` on the `issues` branch
+and never reassigns it — so `105`'s `cloudflare-prod-write` gate is **unreachable** from the trigger
+that renders blank. What was actually broken is the run list: an operator scanning `105` runs could
+not tell which record on which domain an issue-label run was about. `run_names_that_render_empty` in
+the same module now holds it, with the polarity proved against the fleet rather than a fixture —
+both files are named when the fixes are reverted.
+
 **Why credential scope is a necessary condition.** Safety level describes what a job's own steps are
 written to produce. It does not bound what the job _can_ do. Once a broad org-scoped writer token is
 in `GITHUB_ENV`, the blast radius is everything that token can reach — a `Reads` label does not

@@ -276,7 +276,7 @@ This repo includes a read-only WPMUDEV export workflow for domain inventory and 
 
 ### WPMUDEV domain/site inventory
 
-- Workflow: `.github/workflows/13-wpmudev-export-sites.yml`
+- Workflow: `.github/workflows/601-wpmudev-export-sites.yml`
 - Script: `scripts/wpmudev-sites-export.ps1`
 - Environment: `wpmudev-prod`
 - Required secret: `FFC_WPMUDEV_GA_API_Token`

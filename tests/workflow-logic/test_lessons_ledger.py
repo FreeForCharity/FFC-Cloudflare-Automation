@@ -447,6 +447,23 @@ def _has_content(line: str) -> bool:
     return any(ch.isalnum() for ch in line)
 
 
+def _anchor_sites(quoted: str, lines: list[str]) -> list[int]:
+    """Every 1-indexed line of `lines` that contains `quoted`.
+
+    #1334 AC1 asks the failure to name "where the anchor actually is", so that
+    fixing a drifted coordinate is a copy-paste rather than a grep. The guard
+    already holds both halves — the quote and the file — so doing the grep in
+    the message costs one pass and removes the step the author would otherwise
+    repeat by hand.
+
+    Returns all of them and lets the caller truncate, because the COUNT is the
+    part that changes the advice: one site is a re-point, several mean the quote
+    is a weak anchor (`}`, `try {`) and wants replacing, and none means the
+    coordinate is not what drifted.
+    """
+    return [n for n, line in enumerate(lines, 1) if quoted in line]
+
+
 def citation_problems(
     text: str,
     files: dict[str, list[str]] | None = None,
@@ -555,13 +572,39 @@ def citation_problems(
                         )
                 if quoted is not None and covered:
                     if not any(quoted in line for line in covered):
+                        sites = _anchor_sites(quoted, lines)
+                        # Which of the two explanations applies is decidable, and
+                        # the old message left it to the author (#1334 AC1). If
+                        # the quote is somewhere in the file the coordinate
+                        # drifted and the fix is the line number below; if it is
+                        # nowhere, "re-derive it from the quote" is impossible
+                        # advice and the line was reworded or the quote is prose.
+                        if not sites:
+                            fix = (
+                                "It appears nowhere in that file, so the "
+                                "coordinate is not what drifted: the line was "
+                                "reworded, or the token is ordinary prose — put a "
+                                "word between it and the citation so it stops "
+                                "reading as a claim about the line"
+                            )
+                        elif len(sites) == 1:
+                            fix = (
+                                f"It is on line {sites[0]}, so the coordinate "
+                                f"drifted — re-point the citation to `:{sites[0]}`"
+                            )
+                        else:
+                            shown = ", ".join(str(n) for n in sites[:5])
+                            more = "" if len(sites) <= 5 else ", …"
+                            fix = (
+                                f"It is on {len(sites)} lines ({shown}{more}), so "
+                                "re-point the citation to the one the row means — "
+                                "and prefer a quote that occurs once, or the anchor "
+                                "pins a shape rather than a line"
+                            )
                         problems.append(
                             f"{where} -> {resolved}, and the row quotes "
                             f"`{quoted}` beside it — which none of the cited lines "
-                            "contains. Either the coordinate drifted onto a "
-                            "different line (re-derive it from the quote) or the "
-                            "quote is not an anchor, in which case put a word "
-                            "between it and the citation"
+                            f"contains. {fix}"
                         )
     return problems
 
@@ -865,6 +908,106 @@ def test_a_quoted_anchor_beside_a_citation_must_appear_on_a_cited_line():
     assert not citation_problems(span, _BARE_FILES, label="planted.md"), (
         "an anchor on the last line of a cited range must satisfy it"
     )
+
+
+# ---------------------------------------------------------------------------
+# #1334 AC1 — the failure names where the anchor actually is
+# ---------------------------------------------------------------------------
+#
+# The rule above was already the load-bearing half; what #1334 asks for on top
+# is that the message state "the found value" so the repair is a copy-paste.
+# Worth more than ergonomics: the pre-#1334 text offered the author two
+# explanations — "the coordinate drifted" or "the quote is not an anchor" — and
+# made them work out which. That is decidable from what the guard already holds,
+# and the two need OPPOSITE fixes, so a message that names both points half the
+# readers at the wrong one. Grepping the resolved file settles it.
+_DRIFT_FILES = {
+    "scripts/thing.py": [
+        "import os",
+        "",
+        "def main():",
+        "    return 1",
+        "    # once: the anchor moved here",
+        "}",
+        "}",
+    ],
+}
+
+
+def test_a_drifted_anchor_is_reported_with_the_line_it_moved_to():
+    """One occurrence: the message must hand back the coordinate to paste."""
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` (`the anchor moved here`)", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _DRIFT_FILES, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "It is on line 5" in problems[0] and "`:5`" in problems[0], (
+        "a drifted anchor with one site must name that line and offer it as the "
+        f"replacement coordinate: {problems}"
+    )
+    # The discriminator: the SAME row citing the line the anchor is on passes,
+    # so the assertion above is about drift and not about the quote's presence.
+    good = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:5` (`the anchor moved here`)", "#1", "`doc — why`"
+    )
+    assert not citation_problems(good, _DRIFT_FILES, label="planted.md"), (
+        "citing the line the anchor is on must pass"
+    )
+
+
+def test_an_anchor_that_is_nowhere_in_the_file_says_so_instead_of_advising_a_re_derive():
+    """The branch whose old advice was impossible to follow.
+
+    "Re-derive the coordinate from the quote" cannot be done when the quote is
+    not in the file at all — the line was reworded, or the token was never an
+    anchor. Naming that is the difference between a fixable failure and one the
+    author argues with.
+    """
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` (`def teardown():`)", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _DRIFT_FILES, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "appears nowhere in that file" in problems[0], (
+        f"a quote absent from the file must be reported as absent: {problems}"
+    )
+    assert "re-point" not in problems[0], (
+        "and it must NOT offer a coordinate to re-point to — there is none, and "
+        f"advising one is what sends the author looking for a line: {problems}"
+    )
+
+
+def test_a_weak_anchor_is_reported_with_its_count_not_a_single_coordinate():
+    """Several occurrences: naming one of them would be a guess.
+
+    `}` is the shape that produces this, and it is worth saying out loud rather
+    than picking the first hit — a quote occurring many times pins a shape, not
+    a line, so the anchor is weak even once the coordinate is corrected.
+    """
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` (`}`)", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _DRIFT_FILES, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "on 2 lines (6, 7)" in problems[0], (
+        f"a multi-site anchor must name the count and the lines: {problems}"
+    )
+    assert "occurs once" in problems[0], (
+        f"and must say the quote itself wants replacing: {problems}"
+    )
+
+
+def test_the_anchor_site_scan_is_one_indexed_and_finds_every_occurrence():
+    """The helper under all three branches, pinned directly.
+
+    An off-by-one here is invisible through the messages — every branch would
+    still fire, just naming a neighbouring line — so it is asserted rather than
+    inferred. `:5` is the coordinate the ledger would be told to paste.
+    """
+    lines = _DRIFT_FILES["scripts/thing.py"]
+    assert _anchor_sites("the anchor moved here", lines) == [5]
+    assert _anchor_sites("}", lines) == [6, 7]
+    assert _anchor_sites("nothing here", lines) == []
 
 
 def test_a_backticked_token_separated_by_a_word_is_not_read_as_an_anchor():

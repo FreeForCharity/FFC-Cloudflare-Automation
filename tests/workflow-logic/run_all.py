@@ -39,6 +39,11 @@ WHOLE_MODULE_SKIP = "all"
 # that quietly STOPS following the convention must be caught, not excused.
 EXEMPT_NAME = "RUN_ALL_ROSTER_EXEMPT"
 
+# The module-level roster list. 116 of the 117 modules build it as a
+# comprehension over `globals()`, which makes it POSITION-SENSITIVE: a test
+# defined below this line is not yet in `globals()` and never enters the list.
+ROSTER_NAME = "TESTS"
+
 # --------------------------------------------------------------------------
 # Failure classification (#1290)
 #
@@ -217,6 +222,55 @@ def declared_tests(path: pathlib.Path) -> list[str]:
     ]
 
 
+def tests_below_roster(path: pathlib.Path) -> list[str]:
+    """Top-level `def test_*` functions defined BELOW the module's roster line.
+
+    116 of the modules build their roster as
+    `TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]`,
+    which is evaluated once, at that point in the module body. A test defined
+    after it is simply not in `globals()` yet, so it is never in `TESTS` and
+    never runs -- while every test above the line reports a clean PASS.
+
+    This is why the truncation branch below must ask this question first. The
+    two causes present identically (reported < declared, exit 0 or 1) and the
+    remedies are opposites: "read the traceback for the test after the last one
+    that reported" versus "move the roster line to the end of the module".
+
+    Only the `globals()` comprehension form is load-bearing here. An explicit
+    `TESTS = [test_static]` names its members, so position cannot silently drop
+    one, and this returns nothing for it rather than guessing.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, ValueError, OSError):
+        return []
+    roster_line = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == ROSTER_NAME for t in node.targets):
+            continue
+        if not isinstance(node.value, ast.ListComp):
+            continue
+        # Only the `globals()`-derived form is position-sensitive.
+        if any(
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "globals"
+            for sub in ast.walk(node.value)
+        ):
+            roster_line = node.lineno
+    if roster_line is None:
+        return []
+    return [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+        and node.lineno > roster_line
+    ]
+
+
 def roster_exemption(path: pathlib.Path) -> str | None:
     """The module's `RUN_ALL_ROSTER_EXEMPT = "<why>"` reason, or None.
 
@@ -255,6 +309,7 @@ def roster_finding(
     declared: list[str],
     reported: list[str],
     exemption: str | None,
+    below_roster: list[str] | None = None,
 ) -> str | None:
     """Describe how a module's reported roster falls short of what it defines.
 
@@ -292,6 +347,21 @@ def roster_finding(
             f"during, or at the end of its first test. Its output above is the diagnosis."
         )
     if len(reported) < len(declared):
+        # Two causes produce an identical count, and naming the wrong one sends
+        # the reader to the wrong remedy (L307). Ask the cheap, certain question
+        # first: are any tests defined BELOW the roster line? If so nothing died
+        # -- those tests were never in `TESTS` and never ran.
+        if below_roster:
+            missing = ", ".join(below_roster)
+            return (
+                f"{name}: truncated roster -- defines {len(declared)} tests but reported "
+                f"{len(reported)}. {len(below_roster)} of them are defined BELOW the "
+                f"`{ROSTER_NAME} = [... globals() ...]` line and so were never in the "
+                f"roster: {missing}. Nothing crashed; the list was built before these "
+                f"existed. Move the `{ROSTER_NAME}` assignment and the `__main__` runner "
+                f"to the END of the module. Note that `pytest` collects these by module "
+                f"attribute and reports them passing, so it cannot see this (L307)."
+            )
         return (
             f"{name}: truncated roster -- defines {len(declared)} tests but reported "
             f"{len(reported)}. The last test to report was {reported[-1]}, so the module "
@@ -392,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             declared_tests(mod),
             reported_outcomes(proc.stdout),
             roster_exemption(mod),
+            tests_below_roster(mod),
         )
         if finding:
             print(f"::error::{finding}")

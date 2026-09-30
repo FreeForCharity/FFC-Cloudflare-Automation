@@ -284,6 +284,35 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-empty-string-input-gate.py
 
+      - name: Validate artifact-selector inputs are constrained
+        shell: bash
+        run: |
+          # The fourth half of the same remedy, and the consumer the other three
+          # do not look at. The guards above ask whether a free-text dispatch
+          # input still reaches a `run:` body's TEXT, and whether the resulting
+          # `env:` mapping fails closed when empty. The SAME input is usually
+          # re-read, RAW, by an `actions/upload-artifact` step's `path:` — which
+          # is an `@actions/glob` SELECTOR, not a filename, so the two consumers
+          # have different grammars (ledger L298) and moving the value into
+          # `env:` closes one door of two.
+          #
+          # Measured on 3d0d68f: 213 and 218 carried one of six hazard classes
+          # and 801/802 four of six, while all four were OFF the interpolation
+          # freeze — i.e. scored finished (#1422). `[` and `]` are the sharp case:
+          # legal Windows filename characters AND character-class metacharacters,
+          # so the export writes a literal `[m]sal…json`, exits 0, and the
+          # upload's glob then matches a different, real file.
+          #
+          # Permissive about the SHAPE of the guard and strict about the HAZARDS
+          # covered: the inline (201/203/208/218), loop (202/213) and
+          # \A-anchored-allowlist (601) forms are all credited, because a checker
+          # that reports correct code is the one that gets switched off. Freezes
+          # the five OPEN burn-down lanes (214-217, 220) and fails on a new
+          # instance, a stale entry, or anything it cannot parse. Needs NO
+          # PowerShell host.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-artifact-path-input-guards.py
+
       - name: Validate text-mode subprocess calls pin an encoding
         shell: bash
         run: |
@@ -336,6 +365,23 @@ jobs:
           # stale freeze entry, or on a workflow it cannot parse.
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-fixed-tmp-paths.py
+
+      - name: Validate a pull-request read declares the permission it needs
+        shell: bash
+        run: |
+          # Issues and pull requests are one object in the REST model, so
+          # `issues.listForRepo` returns both -- and an explicit `permissions:` block
+          # sets every scope it does not name to `none`. 747 declared `contents: read`
+          # + `issues: write`, so its listing returned issues ONLY, and nothing raised:
+          # `open-pr-cap` scored the filtered result as a healthy `0 open` against a
+          # ground truth of 3, while `merge-silence` called the same emptiness UNKNOWN.
+          # A count produced by blindness is still a number, so no downstream check can
+          # catch it -- the guard has to be on the declaration (#1417, ledger L310).
+          # Reads EFFECTIVE permissions, because a job block replaces the top-level one.
+          # `!item.pull_request` is deliberately NOT a finding: that spelling excludes
+          # PRs, so the missing scope makes it more correct rather than less.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-workflow-pull-request-permission.py
 
       - name: Validate a downgraded exit code ends with an explicit exit
         shell: bash

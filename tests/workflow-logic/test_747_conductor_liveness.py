@@ -946,9 +946,27 @@ def test_the_monitor_is_never_gated():
     assert "environment" not in job, job.get("environment")
 
 
-def test_the_permissions_are_read_plus_issues_only():
+def test_the_permissions_are_read_plus_issues_and_pull_requests_only():
+    """Exactly three scopes, and `pull-requests` is load-bearing (#1417, L310).
+
+    This asserted `{contents: read, issues: write}` and was correct about the
+    intent — the minimum this workflow needs — while being wrong about what that
+    minimum IS. `merge-silence` and `open-pr-cap` read pull requests out of
+    `issues.listForRepo`, and an explicit block sets every unnamed scope to
+    `none`, so the listing returned issues only. Nothing raised: `open-pr-cap`
+    scored the filtered result as a healthy `0 open` against a ground truth of 3.
+
+    So `pull-requests: read` is not an addition to be tidied away later — the two
+    signals are blind without it, silently. Kept as exact equality rather than a
+    subset check so a FOURTH scope still fails: this job holds the ambient token
+    only and needs nothing more.
+    """
     perms = load_workflow(WF_FILE)["permissions"]
-    assert perms == {"contents": "read", "issues": "write"}, perms
+    assert perms == {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read",
+    }, perms
 
 
 def test_the_workflow_is_scheduled_and_dispatchable():

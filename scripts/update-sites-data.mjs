@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
+import { compareRows } from './sites-list-order.mjs';
 
 // Source of truth lives in this repo (the one that owns the WHMCS / Cloudflare /
 // WPMUDEV environments). The export workflows produce per-source CSV artifacts;
@@ -495,21 +496,9 @@ async function main() {
     }
   });
 
-  // Order by Work Tier (most actionable first), then most-recent activity, then
-  // keep .org/.com pairs together by lead domain.
-  const tierNum = (d) => parseInt(d['Work Tier'], 10) || 9;
-  mergedData.sort((a, b) => {
-    const tA = tierNum(a);
-    const tB = tierNum(b);
-    if (tA !== tB) return tA - tB;
-    const rA = a['Last PR Closed'] || '';
-    const rB = b['Last PR Closed'] || '';
-    if (rA !== rB) return rB.localeCompare(rA); // newer PR date first
-    if (a._leadDomain < b._leadDomain) return -1;
-    if (a._leadDomain > b._leadDomain) return 1;
-    if (a._isFollower !== b._isFollower) return a._isFollower ? 1 : -1;
-    return 0;
-  });
+  // Primary grouping (live GitHub Pages first, departed/unidentified last),
+  // then Work Tier, recency and .org/.com pairing -- see sites-list-order.mjs.
+  mergedData.sort(compareRows);
 
   mergedData.forEach((d) => {
     delete d._isFollower;

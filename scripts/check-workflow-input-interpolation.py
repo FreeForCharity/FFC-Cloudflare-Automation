@@ -1162,10 +1162,75 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # of this comment cited `:453`/`:640` and was already wrong when written,
     # because an unrelated comment I added higher in the workflow had shifted every
     # line below it. Re-derive rather than trusting them.
-    "214-whmcs-clients-metrics.yml": ("output_file",),
-    "215-whmcs-nonprofit-clients-metrics.yml": ("output_file",),
-    "216-whmcs-activity-metrics.yml": ("charity_gids", "output_file"),
-    "217-whmcs-client-fields-survey.yml": ("output_file", "throttle_ms"),
+    # 214, 215, 216, 217 and 220 burned down together (#1080 lane 27) -- the
+    # whole WHMCS read-only metrics family, and the last WHMCS entries in this
+    # freeze. Seven inputs across five workflows now reach their one
+    # `whmcs-prod-read` pwsh body through step-level `env:`: `output_file` in
+    # all five, `charity_gids` in 216 and 220, `throttle_ms` in 217. 220's
+    # former entry sits below 218's note; this comment covers it.
+    #
+    # WHY ONE LANE AND NOT FIVE. The five are structural clones -- same runner,
+    # same environment, same `whmcs-secrets-from-kv` step, the same
+    # `$out = "<interpolation>"` assignment and the same
+    # `path: ${{ inputs.output_file }}` upload. Splitting them would have
+    # produced five PRs differing only in a callee name, and -- the reason that
+    # matters -- the guard set would then be five INDEPENDENT copies. Landed
+    # together, `test_214_220_whmcs_metrics_wiring.py` asserts the five guard
+    # CONDITIONS are byte-identical across all five lanes, so a later edit to
+    # one is a failure rather than a drift. That is 202's and #1361's coupling
+    # extended, which is what #1380 AC4 asks for.
+    #
+    # THE SECOND CONSUMER WAS THE POINT. Every one of the five also read the
+    # same `output_file`, raw, in an `actions/upload-artifact` `path:` -- an
+    # `@actions/glob` SELECTOR, not a filename (ledger L298). #1422 found two
+    # workflows scored "burned down" while that consumer was unguarded, and
+    # froze exactly these five in
+    # `scripts/check-workflow-artifact-path-input-guards.py` so a lane could not
+    # leave one freeze and stay in the other. This lane empties that freeze:
+    # each of the five gained the full six conditions -- blank, newline, glob,
+    # rooted/PSDrive, `~`, `..` -- with the newline FIRST, because `^` anchors
+    # at the start of the STRING and so examines only the first line of a
+    # multi-line value.
+    #
+    # THREE PAYLOAD SHAPES, one per quoting context, all measured on pwsh 7.4.6
+    # against the bodies as they shipped:
+    #
+    #   $out = "${{ inputs.output_file }}"          DOUBLE-quoted, so `$( )`
+    #                                               expands in place -- no
+    #                                               breakout needed, and
+    #                                               `$null =` keeps `$out` legal
+    #                                               so the run looks ordinary.
+    #   -CharityGids '${{ ... }}'   (216, 220)      SINGLE-quoted and TRAILING:
+    #                                               `2,5'; <payload>; #` lets the
+    #                                               legitimate call complete
+    #                                               first, so `$LASTEXITCODE` is
+    #                                               the legitimate call's and the
+    #                                               step exits 0.
+    #   -ThrottleMs ([int]'${{ ... }}')  (217)      SINGLE-quoted INSIDE a cast.
+    #                                               The cast is not a guard:
+    #                                               `150'); <payload>; ([int]'1`
+    #                                               closes the quote and the
+    #                                               sub-expression and reopens
+    #                                               both, so the line still
+    #                                               parses.
+    #
+    # BLANK HANDLING SPLITS BY CONSUMER COUNT, which is the rule a later lane
+    # should copy rather than the shapes. `output_file` FAILS CLOSED in all
+    # five, because the upload step reads the same raw input and a body-side
+    # default would desync the two consumers (L254's exception, as 201/208/218
+    # already record). `charity_gids` and `throttle_ms` take a GATED APPEND,
+    # because each callee declares the same default the dispatch form does, so
+    # omitting the argument yields it from one place instead of two that drift.
+    #
+    # 217's cast is the one behavioural change in the lane and it is stated
+    # rather than inferred: dropping `([int]…)` moves a non-numeric value's
+    # refusal from this body to the callee's `[ValidateRange(0, 5000)]
+    # [int]$ThrottleMs` binder. Both are non-zero and both name the parameter;
+    # the module pins both halves so "equivalent" is a measurement.
+    #
+    # `api_url` already travelled in `env:` from an earlier lane in all five and
+    # is untouched here (`test_1146` and `test_1150` pin that mapping and its
+    # default fill).
     # 218-whmcs-siteslist-reconciliation.yml burned down (#1080 lane 23): all three
     # of its free-text inputs now reach the one `whmcs-prod-read` pwsh body through
     # step-level `env:`.
@@ -1204,7 +1269,9 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # behaviour (a blank already exited 1 at `Test-Path`) with a message that names
     # the cause. That `path:` is not a script body, this guard correctly does not
     # judge it, and the lane did not widen to cover it.
-    "220-whmcs-served-metrics.yml": ("charity_gids", "output_file"),
+    # 220-whmcs-served-metrics.yml burned down with the rest of the metrics
+    # family in #1080 lane 27 -- see that note above 218's, where all five are
+    # covered together. Its `charity_gids` site is 216's, to the character.
     # 222-whmcs-product-alignment.yml and
     # 224-whmcs-github-pages-product-alignment.yml burned down together: they are
     # the same engine (`whmcs-product-alignment.ps1`) over two source lists, one

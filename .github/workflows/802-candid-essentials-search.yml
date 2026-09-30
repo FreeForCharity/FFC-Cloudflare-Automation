@@ -95,11 +95,67 @@ jobs:
             throw "Invalid size '$($env:INPUT_SIZE)': expected an integer 1-25."
           }
 
-          # The output path is uploaded as an artifact, so keep it inside the workspace: no
-          # absolute/rooted paths and no '..' traversal (which could exfiltrate runner files).
+          # The output path is consumed TWICE: here, and RAW by the 'Upload JSON Artifact'
+          # step's `path:`. A `path:` is an `@actions/glob` SELECTOR, not a
+          # filename, so the second consumer has a different grammar from the
+          # first (ledger L298) and a value legal for one can mean something else
+          # to the other. #1422 found this lane scored finished with four of the
+          # six conditions 201/202/203/208 ship; the three added below are the
+          # ones that were missing, MEASURED on pwsh 7.4.6 against the combined
+          # condition this block keeps:
+          #
+          #   ~/.azure/x.json                        IsPathRooted false, no
+          #                                          colon -> PASSED
+          #   artifacts/[m]sal_token_cache.json      -> PASSED
+          #   a.json<LF>.azure/msal_token_cache.json -> PASSED
+          #
+          # (A newline payload that also carries a colon was refused, by the
+          # colon test rather than by anything about the newline -- which is why
+          # the measurement above uses a colon-free one.)
           $out = $env:INPUT_OUTPUT_FILE
+
+          # FIRST, and the checks below depend on it. `actions/upload-artifact`
+          # reads `path:` as a NEWLINE-DELIMITED LIST of patterns, so one input
+          # carrying a newline is several patterns to that consumer while still
+          # being one string here.
+          if ($out -match '[\r\n]') {
+            throw "output_file contains a carriage return or newline. The 'Upload JSON Artifact' step reads its path: as a newline-delimited list of patterns, so a newline here smuggles extra patterns past the checks below."
+          }
+
+          # `path:` is glob-capable, so the junior consumer can be pointed at
+          # files this search never wrote. Not every payload self-blocks
+          # first: `*` and `?` are illegal in a Windows filename, but `[` and `]`
+          # are legal filename characters AND character-class metacharacters --
+          # the run writes a literal `[m]sal...json` and exits 0, and the
+          # upload's glob then matches a different, real file.
+          #
+          # The set stops at `* ? [ ]` deliberately. `@actions/glob@0.7.0` builds
+          # its minimatch with `nobrace: true` and `noext: true`
+          # (`lib/internal-pattern.js`), so `{a,b}` and `!(x)` reach the globber
+          # as LITERAL TEXT and expand to nothing -- a guard rejecting them would
+          # refuse legitimate paths while stating a hazard that does not exist
+          # (#1380). If that dependency ever ships `nobrace: false` or
+          # `noext: false`, re-measure and widen the set with it.
+          if ($out -match '[*?\[\]]') {
+            throw "output_file contains a glob metacharacter (one of * ? [ ]). It is passed unchanged to the 'Upload JSON Artifact' step, whose path: is a glob selector, so a pattern can match files this run never wrote. Pass a plain relative path such as artifacts/candid/essentials_search.json."
+          }
+
+          # The combined condition, kept as measured: `Contains(':')` catches a
+          # drive AND a PSDrive qualifier (`Temp:/x`), and `IsPathRooted` is
+          # correct for `\x` and `C:\x` on the `windows-latest` runner this job
+          # declares. It is platform-DEPENDENT, which is why it is paired with
+          # the colon test rather than relied on alone.
           if ([string]::IsNullOrWhiteSpace($out) -or $out.Contains(':') -or [System.IO.Path]::IsPathRooted($out) -or (($out -split '[\\/]') -contains '..')) {
-            throw "Invalid output_file '$out': must be a relative path inside the workspace without '..'."
+            throw "Invalid output_file '$out': must be a relative path inside the workspace without '..'. It is also the 'Upload JSON Artifact' step's path:, so a path outside the workspace can put runner files into a downloadable artifact."
+          }
+
+          # `~` begins with neither a separator nor a qualifier, so neither the
+          # colon test nor IsPathRooted catches it. PowerShell expands `~` and
+          # `@actions/glob` does not, so the two consumers would not even agree
+          # which file is meant -- and `~/.azure` is where the `az` session this
+          # job's OIDC login leaves behind actually lives (#1188/#1208).
+          if ($out -match '^~') {
+            throw "output_file must not begin with '~': PowerShell expands it to the user profile, so this run would write outside the workspace, while the 'Upload JSON Artifact' step's globber does not expand it."
           }
 
           & pwsh -NoProfile -File .\scripts\candid-essentials-search.ps1 -SearchTerms $env:INPUT_SEARCH_TERMS -Size $size -OutputFile $out

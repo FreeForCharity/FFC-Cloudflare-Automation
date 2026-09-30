@@ -324,7 +324,17 @@ def _skip_word(text, i):
         if ch == "(":
             depth += 1
         elif ch == ")":
-            depth = max(0, depth - 1)
+            # A `)` with nothing open ENDS the word, exactly as whitespace
+            # does -- it is an operator, not text. Decrementing to zero and
+            # walking on glued it to the word instead, so the payload of
+            # `(bash -c "gh api /markdown")` came out as `"gh api /markdown")`
+            # -- first and last characters no longer a matching quote pair, so
+            # the unwrap below declined it and rule 8 saw only a blanked span.
+            # That was the one subshell form still reaching gh after round 10
+            # (#1313); `main` blocks it.
+            if depth == 0:
+                break
+            depth -= 1
         elif ch.isspace() and depth == 0:
             break
         i += 1
@@ -359,7 +369,8 @@ def _is_shell_word(word):
 def _command_starts(text):
     """Index of every word in `text` that begins OUTSIDE a quoted span.
 
-    The test that matters is quoted-ness, not position. A shell name inside a
+    A word begins after whitespace or after an unquoted, unescaped command
+    separator. The test that matters is quoted-ness, not position. A shell name inside a
     quoted ARGUMENT is data -- `-f body='bash -c "gh api /markdown"'` is prose
     about a shell and must stay allowed, which is the false-positive class this
     branch exists to remove. A shell name anywhere in a command's own words is
@@ -389,16 +400,34 @@ def _command_starts(text):
     command.
     """
     bare = _strip_quoted(text)
-    prev_blank = True
+    prev_boundary = True
     for i, ch in enumerate(text):
-        # A word STARTS where a non-space follows a space. Quoted-ness is read
-        # off `bare`: inside a quoted span every character is blanked, so a
-        # word that opens there is data and is never yielded. A quoted word's
-        # own opening quote IS blanked, so `"` is allowed to start a word.
-        at_word_start = prev_blank and ch not in " \t"
-        prev_blank = ch in " \t"
+        # A word STARTS after whitespace OR after a command separator, and the
+        # separator half is not optional: `echo hi;bash -c "gh api /markdown"`
+        # has no space after the `;`, and a whitespace-only test read `;bash`
+        # as a continuation of `hi` and never offered `bash` as a start. Six
+        # separators reached gh that way -- `;` `|` `&&` `||` `(` and a bare
+        # newline -- every one of them blocked on `main` (#1313 round 10).
+        #
+        # The separator is read off `bare`, never off `text`, and that is the
+        # whole discrimination. A separator survives into `bare` only when it
+        # is unquoted AND unescaped, which is exactly when the shell treats it
+        # as syntax: `echo hi\;bash -c '...'` passes `hi;bash` as an argument
+        # and never runs a shell, and a `;` inside a `-f body=` value is prose.
+        # Both are blanked, so neither opens a word here.
+        #
+        # `<` and `>` are deliberately NOT separators. A redirection does not
+        # end a command -- `echo hi >out bash -c '...'` passes `bash -c ...`
+        # to `echo` -- so treating one as a boundary would add a false
+        # positive rather than close a bypass.
+        at_word_start = prev_boundary and ch not in " \t"
+        prev_boundary = ch in " \t" or bare[i] in ";|&()\n"
         if not at_word_start:
             continue
+        # Quoted-ness is read off `bare` too: inside a quoted span every
+        # character is blanked, so a word that opens there is data and is never
+        # yielded. A quoted word's own opening quote IS blanked, so `"` is
+        # allowed to start a word.
         if bare[i] in " \t" and ch not in "'\"":
             continue
         yield i

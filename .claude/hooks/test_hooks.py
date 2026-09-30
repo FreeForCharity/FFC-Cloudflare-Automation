@@ -610,6 +610,35 @@ RULES = [
          r'/c/Program\ Files/Git/bin/bash.exe -c "gh api /markdown"', BLOCK),
         ("bare bash.exe",
          'bash.exe -c "gh api /markdown"', BLOCK),
+        # A word also starts after a SEPARATOR, and dropping the space after
+        # one hid the wrapper from a scanner that only looked after
+        # whitespace. Copilot reported the `;` form on #1313 round 10; the
+        # other five are the same shape and were not reported. All six reach
+        # gh with `/markdown` under the shim, and `main` blocks every one, so
+        # these are regression pins rather than new coverage.
+        ("semicolon with no space",
+         'echo hi;bash -c "gh api /markdown"', BLOCK),
+        ("pipe with no space",
+         'echo hi|bash -c "gh api /markdown"', BLOCK),
+        ("and-and with no space",
+         'echo hi&&bash -c "gh api /markdown"', BLOCK),
+        ("or-or with no space",
+         'false||bash -c "gh api /markdown"', BLOCK),
+        # The subshell form needed a second fix, in `_skip_word`: a `)` with
+        # nothing open used to be absorbed into the word, so the payload came
+        # out as `"gh api /markdown")` -- no longer a matched quote pair, so
+        # the unwrap declined it and the endpoint stayed inside a blanked span.
+        ("subshell around the wrapper",
+         '(bash -c "gh api /markdown")', BLOCK),
+        ("bare newline separator",
+         'echo hi\nbash -c "gh api /markdown"', BLOCK),
+        # ...and the discrimination that keeps that from being a blanket
+        # "anything after a `;`" rule. An ESCAPED separator is a literal
+        # character: `hi;bash` is one argument to `echo`, no shell is invoked,
+        # and the shim confirms gh is never reached. `main` blocks this one, so
+        # the row also records a false positive this PR removes.
+        ("an escaped separator is data, not a boundary",
+         'echo hi\\;bash -c "gh api /markdown"', ALLOW),
         # ...and the over-block direction, which the same review raised as a
         # caution. A shell name inside a quoted ARGUMENT is prose carried as
         # data, not an invocation.

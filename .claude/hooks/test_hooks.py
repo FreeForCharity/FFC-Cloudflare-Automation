@@ -577,6 +577,27 @@ RULES = [
          "bash -c $'gh api /markdown'", BLOCK),
         ("sh -c ANSI-C quoted endpoint",
          "sh -c $'gh api /markdown'", BLOCK),
+        # The shell is often not the FIRST word of its command. A simple
+        # command is `[assignments] [redirections] word...`, and something may
+        # exec the shell instead of being it. Reported on #1313; all four block
+        # on `main` and all four reach gh with `/markdown` via the shim, so all
+        # four were regressions of the command-position anchor.
+        ("assignment before the shell",
+         "VAR=1 bash -c 'gh api /markdown'", BLOCK),
+        ("two assignments before the shell",
+         "A=1 B=2 bash -c 'gh api /markdown'", BLOCK),
+        ("redirection before the shell",
+         "> /tmp/out bash -c 'gh api /markdown'", BLOCK),
+        ("env(1) execs the shell",
+         "env VAR=1 bash -c 'gh api /markdown'", BLOCK),
+        # These two were NOT reported. They are here because the fix is a
+        # quoted-ness test rather than a list of prefixes: had it been a list,
+        # `env` would have been fixed and these would have been the next
+        # round's finding. They pass without being enumerated anywhere.
+        ("nohup execs the shell",
+         "nohup bash -c 'gh api /markdown'", BLOCK),
+        ("timeout execs the shell",
+         "timeout 5 bash -c 'gh api /markdown'", BLOCK),
         # A shell is usually not spelled `bash` on this host. The first
         # wrapper scanner matched a bare name only, so every path-qualified
         # spelling walked past it -- reported on #1313, and `/bin/bash -c` is

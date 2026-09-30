@@ -357,31 +357,51 @@ def _is_shell_word(word):
 
 
 def _command_starts(text):
-    """Index of the first word of every command in `text`.
+    """Index of every word in `text` that begins OUTSIDE a quoted span.
 
-    Separators are read off the BLANKED copy, so a `;` or `|` inside quotes is
-    not a separator -- and, the property that matters here, a shell name inside
-    a quoted ARGUMENT is never a command start. `-f body='bash -c "gh api
-    /markdown"'` is prose about a shell carried as data, and must stay allowed;
-    the reviewer raised it as a caution on #1313 and it is the same
-    false-positive class this branch exists to remove.
+    The test that matters is quoted-ness, not position. A shell name inside a
+    quoted ARGUMENT is data -- `-f body='bash -c "gh api /markdown"'` is prose
+    about a shell and must stay allowed, which is the false-positive class this
+    branch exists to remove. A shell name anywhere in a command's own words is
+    an invocation.
 
-    The word itself is read off the ORIGINAL text, because `_strip_quoted`
-    blanks a quoted command NAME too -- scanning the blanked copy for the word
-    would skip `"/c/Program Files/Git/bin/bash.exe"` entirely and then mistake
-    its `-c` for the command.
+    This used to yield only the FIRST word of each command, and that was wrong
+    in a way `main` was not. A simple command is `[assignments] [redirections]
+    word...`, so the shell is routinely not the first word, and it need not be
+    the command at all when something execs it. Measured on #1313, all four
+    reaching gh with `/markdown` and all four blocked on `main`:
+
+        VAR=1 bash -c 'gh api /markdown'
+        A=1 B=2 bash -c 'gh api /markdown'
+        > /tmp/out bash -c 'gh api /markdown'
+        env VAR=1 bash -c 'gh api /markdown'
+
+    Skipping assignments and redirections would have fixed three of those and
+    left `env`, and then `nohup`, `timeout 5`, `stdbuf -o0` and every other
+    exec-wrapper after it -- an unbounded list, which is the shape this rule
+    has already been round-tripped on six times. Testing quoted-ness instead
+    has no list in it.
+
+    The word is read off the ORIGINAL text while the QUOTED-ness comes from the
+    blanked copy, because `_strip_quoted` blanks a quoted command name too:
+    scanning the blanked copy for the word would skip
+    `"/c/Program Files/Git/bin/bash.exe"` and then mistake its `-c` for the
+    command.
     """
     bare = _strip_quoted(text)
-    at_start = True
+    prev_blank = True
     for i, ch in enumerate(text):
-        if bare[i] in ";|&\n(":
-            at_start = True
+        # A word STARTS where a non-space follows a space. Quoted-ness is read
+        # off `bare`: inside a quoted span every character is blanked, so a
+        # word that opens there is data and is never yielded. A quoted word's
+        # own opening quote IS blanked, so `"` is allowed to start a word.
+        at_word_start = prev_blank and ch not in " \t"
+        prev_blank = ch in " \t"
+        if not at_word_start:
             continue
-        if ch in " \t":
+        if bare[i] in " \t" and ch not in "'\"":
             continue
-        if at_start:
-            yield i
-            at_start = False
+        yield i
 
 
 def _shell_c_payloads(cmd, depth=3):

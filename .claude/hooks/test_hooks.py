@@ -639,6 +639,26 @@ RULES = [
         # the row also records a false positive this PR removes.
         ("an escaped separator is data, not a boundary",
          'echo hi\\;bash -c "gh api /markdown"', ALLOW),
+        # A backslash-NEWLINE is a line continuation, not an escaped operator:
+        # the shell deletes it and runs one command. Rule 8's span stops at a
+        # newline, so leaving the newline in the blanked copy hid everything
+        # after it. `main` has this hole too -- the only finding on this branch
+        # that is not a regression of its own making (#1313 round 11), which is
+        # why these rows say `main` was never a safe fallback for it either.
+        ("line continuation before the endpoint",
+         "gh api \\\n/markdown", BLOCK),
+        ("line continuation with a flag between",
+         "gh api --paginate \\\n/repos/o/r/issues", BLOCK),
+        ("line continuation inside a nested shell",
+         "bash -c 'gh api \\\n/markdown'", BLOCK),
+        # ...and the two ways that must NOT start blocking. A continued line
+        # whose endpoint has no leading slash is an ordinary read call, and a
+        # BARE newline really is a statement boundary -- `/bin/true` on its own
+        # line is a command, not an endpoint.
+        ("line continuation, slash-less endpoint allowed",
+         "gh api \\\nrepos/o/r/issues", ALLOW),
+        ("a bare newline stays a statement boundary",
+         "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a
         # caution. A shell name inside a quoted ARGUMENT is prose carried as
         # data, not an invocation.
@@ -1273,7 +1293,12 @@ def test_strip_quoted_matches_a_bash_accurate_scanner():
     # ordinary letter to stand for inert text. `/` and `<` were missing here
     # while the docstring claimed them (#1313 review), which is the drift the
     # count check below now makes impossible.
-    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", "/", "<", ">"]
+    # The NEWLINE joined this list in round 11 by the same argument that put
+    # `/` and `<` in it: a backslash-newline is a line CONTINUATION, the shell
+    # deletes it, and rule 8's span stops at a newline -- so it is precisely a
+    # character whose escaping moves where a span ends. Without it here, the
+    # corpus could not express the bypass at all.
+    alphabet = ["a", bs, dq, sq, "|", ";", "&", "$", "`", "/", "<", ">", chr(10)]
     max_length = 5
 
     # The docstring states this measurement as a number, and a number in prose

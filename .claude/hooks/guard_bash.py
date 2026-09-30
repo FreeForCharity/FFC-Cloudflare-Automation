@@ -108,11 +108,19 @@ def _strip_quoted(text):
     double quotes the backslash survives into the argument, so
     `-f body="see \/markdown"` is field data and not an endpoint.
 
+    A backslash-NEWLINE is in that set for a reason worth stating: it is not an
+    escaped operator, it is a line continuation, and the shell removes it
+    entirely. Leaving the newline in place let `gh api \` + newline +
+    `/markdown` -- which really does reach gh as `/markdown`, shim-confirmed --
+    slip past rule 8, whose span stops at a newline. Reported on #1313 round 11;
+    `main` has this hole too, so it is the one finding on this branch that is
+    not a regression of its own making.
+
     Over the alphabet that reaches here (`a`, backslash, `"`, `'`, `|`, `;`,
-    `&`, `$`, backtick, `/`, `<`, `>`) to length 5 -- 271,452 strings, the two
-    scanners agree at every operator and quote position, which is the property
-    this function exists for, and differ ONLY where the shipped one reveals an
-    escaped ordinary character.
+    `&`, `$`, backtick, `/`, `<`, `>`, newline) to length 5 -- 402,233 strings,
+    the two scanners agree at every operator and quote position, which is the
+    property this function exists for, and differ ONLY where the shipped one
+    reveals an escaped ordinary character.
 
     `test_strip_quoted_matches_a_bash_accurate_scanner` pins both halves --
     the agreement and the shape of the intended divergence -- so a later "fix"
@@ -164,7 +172,7 @@ def _strip_quoted(text):
             # a blank and block a correct command -- the over-block direction
             # this rule has already been fixed for once (run 161).
             out[i] = " "
-            if text[i + 1] in "|;&<>\"'`\\":
+            if text[i + 1] in "|;&<>\"'`\\\n":
                 out[i + 1] = " "
             i += 2
             continue

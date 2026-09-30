@@ -17,11 +17,16 @@ host/age/cost signals, and the volunteer-persona priority scores (Migration, Mai
 
 ## How it is generated
 
-`.github/workflows/sites-list-generate.yml` (weekly + manual) dispatches the read-only export
-workflows — WHMCS (`7-whmcs-export-domains.yml`), Cloudflare DNS (`4-export-summary.yml`), WPMUDEV
-(`13-wpmudev-export-sites.yml`) — merges their artifacts with the curated base list via
-`scripts/update-sites-data.mjs`, runs per-domain HTTPS health checks, and commits the regenerated
-files.
+`.github/workflows/703-sites-list-generate.yml` (weekly Mon 08:00Z + manual, gated on the
+`github-prod` environment) dispatches the read-only export workflows — WHMCS
+(`201-whmcs-export-domains.yml`) and Cloudflare DNS (`108-export-summary.yml`) — and reuses the
+newest successful WPMUDEV export (`601-wpmudev-export-sites.yml`, which is on its own gate). It
+merges their artifacts with the curated base list via `scripts/update-sites-data.mjs`, runs
+per-domain HTTPS health checks, and opens a data PR (`data/sites-list-auto`) with the regenerated
+files; `main` is protected, so it never pushes directly.
+
+To run the whole chain through to ffcadmin.org, use the `sites-list-refresh` skill
+(`.claude/skills/sites-list-refresh/SKILL.md`).
 
 Curated columns (`Section`, `Server In Use`, `Notes`, `Priority`, …) are preserved from the existing
 `sites_list.csv`; edit them there. If an export is unavailable, the matching membership flags are

@@ -71,6 +71,26 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  # REQUIRED, and its absence is silent. `merge-silence` and `open-pr-cap` both
+  # read PULL REQUESTS out of `issues.listForRepo` — the two are one object in
+  # the REST model, told apart only by a `pull_request` key (see the note at the
+  # listing itself). An explicit `permissions:` block sets everything it does not
+  # name to `none`, so without this key the token cannot see pull requests and
+  # that listing returns ISSUES ONLY. Nothing throws: the call succeeds and the
+  # PRs are simply absent, so `open-pr-cap` scores a filtered listing as a
+  # healthy `0 open` and `merge-silence` finds no `merged_at` and reports
+  # UNKNOWN. Measured at the `2026-09-29T04:34:31Z` tick, where ground truth was
+  # 3 open and 3 merged inside 3h: `conductor-silence` (issue comments) was
+  # correct on the same token and the same tick, and ONLY the two reads whose
+  # results are pull requests came back empty.
+  #
+  # That is ledger L02's fail-open — "could not check" rendered as "checked,
+  # fine" — inside the workflow whose header declares closing L02 its purpose.
+  # A count that can be produced by blindness needs the permission that makes
+  # blindness impossible, not a downstream check. `read` is sufficient: this
+  # workflow only counts PRs and never writes one (737 needs `write` for a
+  # different reason — posting a comment ON a PR — and says so at its own block).
+  pull-requests: read
 
 jobs:
   check:

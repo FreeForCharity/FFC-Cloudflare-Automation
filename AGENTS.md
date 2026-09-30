@@ -927,6 +927,36 @@ gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id> \
 `head_branch != main` is not a reason to refuse — it is a reason to read the diff at that SHA before
 approving, using the commands above.
 
+**When you read the run's logs to judge it, read the EMITTED annotations — never grep the log for
+the annotation syntax (L178-B).** A step's `run:` body is echoed back into the log inside its
+`##[group]Run …` block, so every `echo "::error::…"` the author wrote as a _fail-closed branch that
+did not fire_ appears in the log as the literal text `::error::`. Grepping for that string returns
+the script's source, not its output, and the two read identically:
+
+```bash
+# WRONG — returns the fail-closed branches the step never took
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/jobs/<job_id>/logs | grep '::error::'
+
+# RIGHT — the runner renders an emitted annotation with a different prefix
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/jobs/<job_id>/logs > log.txt
+grep -E '^\S+Z ##\[error\]' log.txt
+
+# BEST for "did this step pass" — ask the jobs API, which has no prose in it at all
+# `.steps[]?` (not `.steps[]`): a job that has not started yet carries `steps: null`,
+# and the bare iterator dies on it with `jq: error … Cannot iterate over null`, rc=5,
+# AFTER printing some job lines — a partial read that looks like a completed one.
+gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/runs/<id>/jobs   --jq '.jobs[] | "\(.name) \(.conclusion)", (.steps[]? | select(.conclusion=="failure") | "   FAILED \(.number): \(.name)")'
+```
+
+The discriminator is the **channel**, not the text: script source is `::error::` inside a `Run`
+group, an emitted annotation is `##[error]`. Reading source as output inverts the finding in
+whichever direction is worse for the run. On 2026-09-28 the same grep, twice in one run, reported
+nine `::error::` lines in `706`'s `convert` job — a job that was **24/24 success with every gate
+passed**, the nine being branches it never entered — and then returned `727`'s entire decision tree
+while hiding the one line that was actually emitted
+(`branch has untouched updates in critical paths`). A gate review is exactly where that matters: the
+rehearsal log is the evidence the approval rests on.
+
 **A held gate also stops the schedule behind it, and `status=waiting` will not show you that
 (L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
 scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.

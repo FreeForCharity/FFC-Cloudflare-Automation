@@ -2084,6 +2084,37 @@ def test_the_watermark_is_strictly_less_than_never_equality():
     assert "stale=0" in _summary(r), _summary(r)
     assert any("already recorded" in i for i in r["infos"]), r["infos"]
 
+def test_the_watermark_is_only_armed_once_an_alert_is_open():
+    """The watermark's BOUND, asserted so it cannot be inherited silently.
+
+    `const recorded = existing ? recordedRun(existing.body) : null;` — with no
+    open rolling alert there is nothing to compare against, so a first alert
+    opened off a wholly-stale page is NOT refused. That uncovered case is
+    #1444's own situation: 502 was healthy, with no open alert, when the false
+    alert was published.
+
+    This pins the limitation rather than the fix. It is deliberately written so
+    that CLOSING the gap breaks it — a future change that refuses this read must
+    update this case, which is the point: the bound becomes discoverable from
+    the test suite instead of only from a review comment on #1452.
+    """
+    # A page stale in EVERY element (both runs old, newest-first), a `failure` at
+    # the head, and NO open alert. `newestRun` has no fresh sibling to prefer, so
+    # it correctly returns the stale head, and the watermark cannot arm.
+    r = _run(
+        "failure",
+        open_issues=[],
+        run_created_at=STALE_RUN_AT,
+        older_runs=[
+            _sibling("failure", run_id=30000000000, created_at="2026-09-01T00:00:00Z")
+        ],
+    )
+    assert r["threw"] is None, r
+    # Today's behaviour: the alert opens. Asserted as the known bound, not endorsed.
+    assert len(r["created"]) == 1, f"the bound is that this is NOT refused: {r}"
+    assert not any("stale" in w.lower() for w in r["warnings"]), r["warnings"]
+    assert "stale=0" in _summary(r), _summary(r)
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

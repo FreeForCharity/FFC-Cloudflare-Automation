@@ -899,22 +899,26 @@ def test_the_1441_regression_a_shifted_bare_citation_is_reported():
     to its pre-shift value, so the test decays with the ledger instead of
     asserting against a frozen copy of it.
 
-    #1447 shifted the same file by +39 and reproduced the split precisely: the
-    anchored `:515` landed on a blank line and CI caught it, while the bare
-    `:468` landed on a lone `}` — real content, so the blank rule stayed silent.
-    The pre-shift coordinate below is therefore that PR's own, not a number
-    chosen to make the test pass.
+    #1447 shifted the same file twice and reproduced the split precisely both
+    times. First by +39: the anchored `:515` landed on a blank line and CI
+    caught it, while the bare `:468` landed on a lone `}`. Then a review fix
+    added comments and shifted it again by +11, landing the anchored `:581` on
+    a blank line and the bare `:507` on a lone `try {`. Both bare coordinates
+    were real content, so the blank rule stayed silent for both and only the
+    quoted anchor caught them. The pre-shift coordinate below is therefore that
+    PR's own latest shift, not a number chosen to make the test pass — and the
+    fact that it recurred within one PR is the argument for the anchor rule.
     """
     row = next(
         line
         for line in LEDGER.read_text(encoding="utf-8").splitlines()
         if line.strip().startswith("| L222 ")
     )
-    assert "`:507`" in row, (
+    assert "`:518`" in row, (
         "L222 no longer carries the bare citation this regression is about — "
         "re-derive the fixture from whichever row does, or drop this test"
     )
-    shifted = _FIXTURE_HEADER + row.replace("`:507`", "`:468`") + "\n"
+    shifted = _FIXTURE_HEADER + row.replace("`:518`", "`:507`") + "\n"
     problems = citation_problems(shifted, label="planted.md")
     assert problems, (
         "the pre-#1441 coordinate must be reported; it is real code, so only "

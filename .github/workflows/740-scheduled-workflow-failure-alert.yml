@@ -284,8 +284,19 @@ jobs:
             // This defends against a stale element beside fresh siblings. It does NOT defend
             // against a page that is stale in EVERY element (measured: five runs, all 18 days
             // old, in correct descending order) — `max()` over that page returns the correct
-            // maximum of the wrong page. The watermark check in `evaluate` is what covers
-            // that shape, and the two are complementary rather than redundant.
+            // maximum of the wrong page.
+            //
+            // The watermark in `evaluate` covers that shape, but ONLY ONCE AN ALERT IS OPEN:
+            // it compares against `last-recorded-run` in the rolling issue, so a workflow with
+            // no open alert has no watermark to compare against and this selection is the only
+            // defence it has. Stated here rather than left to be inferred, because the
+            // uncovered case is #1444's OWN situation — 502 was healthy with no open alert when
+            // the false alert was published. So: this PR closes #1444's measured page (a stale
+            // head beside fresh siblings, pinned on the real id pair) in all cases, and closes
+            // the wholly-stale page only for a workflow already alerting. Pinned by
+            // `test_the_watermark_is_only_armed_once_an_alert_is_open`; closing the remainder
+            // needs a second request or state outliving the alert, which is a wider change
+            // than #1447. Raised in review on #1452.
             const RUNS_PER_LOOKUP = 5;
             const newestRun = (runs) => {
               const list = Array.isArray(runs) ? runs : [];
@@ -552,6 +563,12 @@ jobs:
               //
               // Strictly-less-than, never equality: `recordedRun === run.id` is the ordinary
               // "already logged this run" case and is handled below, on its own terms.
+              //
+              // BOUND: `existing ? … : null` means this is armed only for a workflow that
+              // ALREADY has an open rolling alert. A healthy workflow has no recorded run, so
+              // a first alert opened off a wholly-stale page is not refused here — see the
+              // note beside `newestRun` above for why that case is called out rather than
+              // inferred, and what closing it would cost.
               const recorded = existing ? recordedRun(existing.body) : null;
               if (recorded && Number(run.id) < Number(recorded)) {
                 stats.stale++;

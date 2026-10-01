@@ -1,0 +1,241 @@
+name: '749. Org - Invite Member [Org]'
+run-name:
+  'Invite ${{ inputs.username }} to ${{ inputs.org }} as ${{ inputs.role }} (dry_run=${{
+  inputs.dry_run }})'
+
+# Invites one or more GitHub users to the FreeForCharity organization as a
+# member (or admin), or updates the role of an existing member.
+#
+# Why this exists next to 729 (Repo - Add Collaborator): an org MEMBER gets the
+# org's base permission (Read) on every repo and can be added to teams, whereas
+# an outside collaborator sees only the repos they were explicitly added to.
+# The intended model is "member for read-everything, 729 for write-where-named".
+# Nothing here touches repository permissions — pair it with 729 for the write
+# grant.
+#
+# Two jobs, one script (`scripts/org-invite-member.sh`):
+#   preflight  ungated, github-prod-read, READ PAT. Always runs. Validates the
+#              org/users/role and prints the plan (who would be invited, who is
+#              already a member, whose invitation is already pending).
+#   invite     github-prod (approval gate), WRITE PAT. Skipped entirely on a dry
+#              run, so a dry dispatch never parks on the gate or mints a writer
+#              credential (#983, test_dry_run_skips_write_gates.py). Runs the
+#              identical file with IN_DRY=false.
+#
+# `dry_run` defaults to TRUE (unlike 729). Dispatch once to read the plan, then
+# again with dry_run=false and approve the gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'GitHub username to invite (or a space/comma-separated list).'
+        required: true
+        type: string
+      role:
+        description: 'Organization role to grant.'
+        required: true
+        default: member
+        type: choice
+        options:
+          - member
+          - admin
+      org:
+        description: 'Organization login.'
+        required: false
+        default: FreeForCharity
+        type: string
+      dry_run:
+        description: 'Dry run (plan only; no invitation is sent).'
+        required: false
+        default: true
+        type: boolean
+
+  workflow_call:
+    inputs:
+      username:
+        description: 'GitHub username to invite (or a space/comma-separated list).'
+        required: true
+        type: string
+      role:
+        description: 'Organization role to grant (member|admin).'
+        required: false
+        default: member
+        type: string
+      org:
+        description: 'Organization login.'
+        required: false
+        default: FreeForCharity
+        type: string
+      dry_run:
+        description: 'Dry run (plan only; no invitation is sent).'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  # Required for the OIDC exchange that fetches the PAT from Key Vault (#844).
+  # CALLERS MUST GRANT THIS TOO when using this workflow via `workflow_call`.
+  id-token: write
+
+# Serialize runs: a second dispatch queues behind the first instead of racing it.
+concurrency:
+  group: 749-org-invite-member
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    environment: github-prod-read
+    steps:
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
+        run: |
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+          if [ -z "${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}" ]; then
+            echo "::error::READ_ALL_FFC_AZURE_TENANT_ID is not set. It is a repo-level Variable (non-secret GUID), read via vars.*, not an environment secret. See docs/azure-oidc-federated-credentials.md."; exit 1;
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # The READ PAT (`read-all-cbm-ffc-copilot-mcp-github-pat`, the one 726/745
+      # use) is enough to look up users and current membership state. Key Vault
+      # is the single source of truth for credentials (#844).
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name read-all-cbm-ffc-copilot-mcp-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault — check the reader identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Liveness, not just presence (#1102): a revoked-but-present PAT clears
+          # the emptiness check and fails later inside a script naming the wrong
+          # subsystem. Probe by status code only; the token never reaches output.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::read-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      # IN_DRY is pinned to true here regardless of the dispatch: this job only
+      # ever plans. The live run is the `invite` job below.
+      - name: Plan org invitation(s)
+        shell: bash
+        env:
+          IN_ORG: ${{ inputs.org }}
+          IN_USER: ${{ inputs.username }}
+          IN_ROLE: ${{ inputs.role }}
+          IN_DRY: 'true'
+        run: bash scripts/org-invite-member.sh
+
+  invite:
+    needs: preflight
+    # Job-level, not step-level (#983): a dry dispatch must not park on the
+    # github-prod gate or mint the writer PAT. The `preflight` job above is the
+    # rehearsal, and it runs the same file.
+    if: inputs.dry_run != true
+    runs-on: ubuntu-latest
+    environment: github-prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # The WRITE PAT. Sending an org invitation needs organization members
+      # WRITE (fine-grained "Members: write", classic `admin:org`) — a scope a
+      # repo-collaborator PAT does not necessarily carry. The script names that
+      # requirement on a 403 so the remedy is not misread as a Key Vault problem.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show \
+            --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-cbm-github-pat \
+            --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-github-pat came back empty from Key Vault — check the writer identity's role on kv-ffc-admin-prod-cbm."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - name: Invite org member(s)
+        shell: bash
+        env:
+          IN_ORG: ${{ inputs.org }}
+          IN_USER: ${{ inputs.username }}
+          IN_ROLE: ${{ inputs.role }}
+          IN_DRY: ${{ inputs.dry_run }}
+        run: bash scripts/org-invite-member.sh

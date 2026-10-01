@@ -53,7 +53,7 @@ MASK_LINE = 'echo "::add-mask::$token"'
 # The census is asserted, not assumed. A helper that quietly returns [] makes
 # every "for every step ..." test below pass over nothing -- the reassuring
 # direction, and the shape L47 warns about one layer down in the harness.
-EXPECTED_STEPS = 21
+EXPECTED_STEPS = 23
 
 BASH = shutil.which("bash")
 CURL = shutil.which("curl")

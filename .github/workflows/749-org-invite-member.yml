@@ -128,6 +128,9 @@ jobs:
           # Liveness, not just presence (#1102): a revoked-but-present PAT clears
           # the emptiness check and fails later inside a script naming the wrong
           # subsystem. Probe by status code only; the token never reaches output.
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE --
+          # a PAT without org members write answers 200 here and 403 on the PUT --
+          # so a green probe is not a licence to assume the later write will work.
           hdrs="$(mktemp)"
           code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
             -H "Authorization: Bearer $token" \
@@ -203,6 +206,9 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$token"
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE --
+          # a PAT without org members write answers 200 here and 403 on the PUT --
+          # so a green probe is not a licence to assume the later write will work.
           hdrs="$(mktemp)"
           code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
             -H "Authorization: Bearer $token" \

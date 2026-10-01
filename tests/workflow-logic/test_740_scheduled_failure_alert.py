@@ -127,6 +127,7 @@ def _run(
     event="schedule",
     last_green_event="schedule",
     older_runs=None,
+    run_created_at=None,
 ):
     """Drive one poll sweep in which `name` has `conclusion` as its latest run.
 
@@ -152,6 +153,14 @@ def _run(
     event, because that is the only shape in which "which run does 740 judge?"
     has a visible answer. Both default to `schedule`, which is what every fixture
     written before #1440 meant — 740 watches cron-driven workflows only.
+
+    `run_created_at` stamps the LATEST run with a `created_at`, which is what
+    #1447's selection sorts on. It is absent by default, and that absence is
+    load-bearing rather than lazy: no fixture written before #1447 carried the
+    field, so `newestRun` falls back to array order for all of them and they go
+    on meaning exactly what they were written to mean. A test about a stale page
+    must therefore stamp BOTH runs out loud, which is precisely the case under
+    test.
     """
     script = step_github_script(WORKFLOW, JOB, STEP)
     watched = _watched() if watched is None else watched
@@ -170,17 +179,18 @@ def _run(
 
     runs = dict(extra_runs or {})
     if name in ids:
-        runs[str(ids[name])] = [
-            {
-                "id": 30116967112,
-                "name": RUN_DISPLAY_NAME,
-                "conclusion": conclusion,
-                "event": event,
-                "run_number": 42,
-                "head_branch": head_branch,
-                "html_url": "https://github.com/x/y/actions/runs/999",
-            }
-        ]
+        latest = {
+            "id": 30116967112,
+            "name": RUN_DISPLAY_NAME,
+            "conclusion": conclusion,
+            "event": event,
+            "run_number": 42,
+            "head_branch": head_branch,
+            "html_url": "https://github.com/x/y/actions/runs/999",
+        }
+        if run_created_at is not None:
+            latest["created_at"] = run_created_at
+        runs[str(ids[name])] = [latest]
         if last_green is not None:
             green_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
                 days=last_green
@@ -625,7 +635,10 @@ def test_the_success_lookup_is_scoped_like_the_poll():
     calls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
     assert len(calls) == 1, r
     assert calls[0]["branch"] == "main", calls
-    assert calls[0]["per_page"] == 1, calls
+    # NOT `== 1` (#1447): the success probe decides whether a declined-gate
+    # suppression still holds, so a stale page here silences a real outage
+    # rather than inventing one. Same contract as the poll's — more than one.
+    assert calls[0]["per_page"] > 1, calls
 
 
 def test_a_real_job_failure_still_alerts_the_negative_control():
@@ -706,7 +719,12 @@ def test_the_run_query_is_scoped_to_completed_default_branch_runs():
     for call in calls.values():
         assert call["branch"] == "main", call
         assert call["status"] == "completed", call
-        assert call["per_page"] == 1, call
+        # NOT `== 1` (#1447). With a single element there is no sibling to
+        # disagree with the head, so a stale page cannot be falsified by
+        # anything inside the response. The contract is "more than one", not
+        # one particular number — pinning 5 here would make tuning the width
+        # a test edit rather than a decision.
+        assert call["per_page"] > 1, call
 
 
 def test_failure_on_a_feature_branch_is_ignored():
@@ -1831,6 +1849,271 @@ def test_the_success_probe_is_filtered_to_scheduled_runs_too():
     calls = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
     assert len(calls) == 1, r
     assert calls[0].get("event") == "schedule", calls  # `.get` for the reason above
+
+
+# --- #1447: the runs API can serve a stale page, so position 0 is not a verdict ----------
+#
+# Production evidence, 2026-09-29. Sweep 36575514742 opened #1444 ("502. Google -
+# Analytics Report failing") citing run 34450257554 — dated 2026-09-10, nineteen days
+# stale — while 502's real newest scheduled run was 36537865899 (2026-09-29T07:38:42Z,
+# SUCCESS). The sweeps either side read 502 correctly and closed the alert.
+#
+# The real pair is used verbatim below rather than round numbers, so the fixture decays
+# honestly: anyone can re-read those two ids against the live API.
+STALE_RUN_ID = 34450257554
+STALE_RUN_AT = "2026-09-10T07:30:03Z"
+FRESH_RUN_ID = 36537865899
+FRESH_RUN_AT = "2026-09-29T07:38:42Z"
+
+
+def _sibling(conclusion, *, run_id, created_at, run_number=99):
+    """A run object as the API returns it, carrying the `created_at` selection sorts on."""
+    return {
+        "id": run_id,
+        "name": RUN_DISPLAY_NAME,
+        "conclusion": conclusion,
+        "event": "schedule",
+        "run_number": run_number,
+        "head_branch": "main",
+        "created_at": created_at,
+        "html_url": f"https://github.com/x/y/actions/runs/{run_id}",
+    }
+
+
+def test_a_stale_failure_at_position_0_beside_a_newer_success_opens_no_alert():
+    # #1444 itself, reconstructed: the page's head is the 09-10 failure and a later
+    # element is the 09-29 success. Reading index 0 published a false outage on a
+    # workflow that was green. Selecting `max(created_at)` must read the success.
+    r = _run(
+        "failure",
+        open_issues=[],
+        run_created_at=STALE_RUN_AT,
+        older_runs=[_sibling("success", run_id=FRESH_RUN_ID, created_at=FRESH_RUN_AT)],
+    )
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert r["created"] == [], f"a stale head must not open an alert (#1444): {r}"
+    assert r["comments"] == [], r
+
+
+def test_a_stale_success_at_position_0_beside_a_newer_failure_still_alerts():
+    # The converse, and it is not optional: a fix that only ever suppresses would
+    # turn every stale read into silence, which is the fail-open #1440 closed.
+    # Here the head is the older SUCCESS and the real newest run failed, so the
+    # alert must open — on the newer run, not the head.
+    r = _run(
+        "success",
+        open_issues=[],
+        run_created_at=STALE_RUN_AT,
+        older_runs=[_sibling("failure", run_id=FRESH_RUN_ID, created_at=FRESH_RUN_AT)],
+    )
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert len(r["created"]) == 1, f"a newer failure behind a stale head must alert: {r}"
+    body = r["created"][0]["body"]
+    assert f"<!-- last-recorded-run:{FRESH_RUN_ID} -->" in body, body
+    assert str(STALE_RUN_ID) not in body, body
+
+
+def test_neither_lookup_asks_for_a_single_run():
+    # AC1 stated as one guard over BOTH calls rather than two scattered ones: with
+    # `per_page: 1` there is no sibling to disagree with the head, so the defect is
+    # undetectable by construction no matter how the selection is written.
+    r = _run("cancelled", open_issues=[], jobs=_declined_gate_jobs(), last_green=41)
+    calls = r["listWorkflowRunsCalls"]
+    assert len(calls) >= 2, r  # the poll and the success probe
+    assert {c["status"] for c in calls} == {"completed", "success"}, calls
+    for c in calls:
+        assert c["per_page"] > 1, c
+
+
+def test_the_success_probe_selects_by_created_at_too():
+    # The success probe decides whether a declined-gate suppression still holds, and
+    # its answer is an AGE. A stale head there reports a workflow as recently-green
+    # when it is not, which SILENCES a real outage — the more dangerous direction of
+    # the two, and the reason AC1 covers both calls rather than the alerting one.
+    #
+    # Fixture: the probe's page leads with a 400-day-old green and carries a 2-day-old
+    # green behind it. Index 0 escalates past STALE_SUCCESS_DAYS and alerts;
+    # `max(created_at)` suppresses, which is the correct reading of this history.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stale_green = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh_green = (now - datetime.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The cancelled run must carry the NEWEST `created_at` of the three, or the poll
+    # selects a green sibling and the run under test is never judged at all — the
+    # test would then pass because nothing alerted, which is the answer it expects
+    # for the wrong reason (L306). Caught by mutation B flipping nothing.
+    r = _run(
+        "cancelled",
+        open_issues=[],
+        jobs=_declined_gate_jobs(),
+        run_created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        older_runs=[
+            {
+                "id": 30116960001,
+                "name": RUN_DISPLAY_NAME,
+                "conclusion": "success",
+                "event": "schedule",
+                "run_number": 40,
+                "head_branch": "main",
+                "created_at": stale_green,
+                "updated_at": stale_green,
+                "html_url": "https://github.com/x/y/actions/runs/997",
+            },
+            {
+                "id": 30116960002,
+                "name": RUN_DISPLAY_NAME,
+                "conclusion": "success",
+                "event": "schedule",
+                "run_number": 41,
+                "head_branch": "main",
+                "created_at": fresh_green,
+                "updated_at": fresh_green,
+                "html_url": "https://github.com/x/y/actions/runs/996",
+            },
+        ],
+    )
+    assert r["threw"] is None, r
+    assert r["created"] == [], f"a fresh green behind a stale head must still suppress: {r}"
+
+
+def test_a_run_list_with_no_created_at_anywhere_keeps_api_order():
+    # The fallback, asserted rather than assumed. Every fixture written before #1447
+    # omits `created_at`; if the selection quietly returned null or reordered them,
+    # this module would go green for the wrong reason and the 102 cases above would
+    # be testing the fallback instead of what they say they test.
+    r = _run("failure", open_issues=[])
+    assert len(r["created"]) == 1, r
+    assert "<!-- last-recorded-run:30116967112 -->" in r["created"][0]["body"], r
+
+
+def test_the_harness_returns_run_fixtures_in_array_order():
+    # AC4. Every case above reads "position 0 is the head" out of the fixture's array
+    # order, so that property belongs to the harness contract and must be asserted,
+    # not relied upon. If the shim ever sorted its fixtures, the stale-page tests
+    # would pass while presenting a list that is impossible to construct.
+    #
+    # Driven through the shim with a PROBE script rather than 740's, because the
+    # question is about the harness, not about the caller.
+    probe = (
+        "const res = await github.rest.actions.listWorkflowRuns("
+        "{ owner: 'o', repo: 'r', workflow_id: 100, per_page: 5 });\n"
+        "core.notice(JSON.stringify(res.data.workflow_runs.map(x => x.id)));\n"
+    )
+    seeded = [
+        _sibling("failure", run_id=STALE_RUN_ID, created_at=STALE_RUN_AT),
+        _sibling("success", run_id=FRESH_RUN_ID, created_at=FRESH_RUN_AT),
+    ]
+    env = child_env(pathlib.Path(NODE).parent)
+    with tempfile.TemporaryDirectory() as td:
+        tdp = pathlib.Path(td)
+        (tdp / "script.js").write_text(probe, encoding="utf-8")
+        (tdp / "context.json").write_text(
+            json.dumps({"repo": {"owner": "o", "repo": "r"}, "payload": {}}), encoding="utf-8"
+        )
+        (tdp / "runs.json").write_text(json.dumps({"100": seeded}), encoding="utf-8")
+        env["TEST_SCRIPT_FILE"] = str(tdp / "script.js")
+        env["TEST_CONTEXT_FILE"] = str(tdp / "context.json")
+        env["TEST_WORKFLOW_RUNS_FILE"] = str(tdp / "runs.json")
+        proc = subprocess.run(
+            [NODE, str(HARNESS)],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+    if proc.returncode != 0:
+        raise AssertionError(f"harness crashed: {proc.stderr}")
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["threw"] is None, result
+    # Fixture order, NOT created_at order — the shim must hand back exactly what it
+    # was given, so a fixture can present a page the real API would call misordered.
+    assert json.loads(result["notices"][0]) == [STALE_RUN_ID, FRESH_RUN_ID], result
+
+
+def test_a_newest_run_older_than_the_one_already_recorded_is_refused():
+    # `max(created_at)` outvotes ONE stale element beside fresh siblings. It is
+    # powerless against the shape measured most often on 2026-09-29: a page stale in
+    # EVERY element, in correct descending order (five runs, all 18 days old). The
+    # max of a wholly stale page is the correct max of the wrong page, and nothing
+    # inside the response can falsify it.
+    #
+    # A reading the sweep already holds can. The rolling alert records the run it last
+    # judged, and a run id cannot go backwards on a live workflow, so a "newest" run
+    # numerically below the recorded one proves the page is stale — for free, with no
+    # second request.
+    r = _run(
+        "failure",
+        open_issues=[_alert_issue(7, last_run=FRESH_RUN_ID)],
+        run_created_at=STALE_RUN_AT,
+        older_runs=[_sibling("failure", run_id=30000000000, created_at="2026-09-01T00:00:00Z")],
+    )
+    assert r["threw"] is None, r
+    assert r["comments"] == [], f"a backwards read must not append: {r}"
+    assert r["updates"] == [], r
+    assert any("stale" in w.lower() for w in r["warnings"]), r["warnings"]
+    assert "stale=1" in _summary(r), _summary(r)
+
+
+def test_a_stale_success_cannot_close_an_alert_that_is_still_failing():
+    # The watermark's other direction, and the one that matters more. A stale page
+    # whose head is an old SUCCESS closes a rolling alert for an outage that is still
+    # running, and a closed alert asks nobody to look again — the fail-open shape
+    # #1440 closed, reached through the run lookup instead of the event filter.
+    r = _run(
+        "success",
+        open_issues=[_alert_issue(7, last_run=FRESH_RUN_ID)],
+        run_created_at=STALE_RUN_AT,
+    )
+    assert r["threw"] is None, r
+    assert r["updates"] == [], f"a stale success must not close the alert: {r}"
+    assert r["comments"] == [], r
+
+
+def test_the_watermark_is_strictly_less_than_never_equality():
+    # Equality is the ordinary "I have already logged this exact run" case, handled
+    # on its own terms further down with its own message. If the watermark fired on
+    # `<=` it would swallow that path, and the de-duplication it exists to provide
+    # would be attributed to a stale-read refusal — a guard credited for work it
+    # never did (L306).
+    r = _run("failure", open_issues=[_alert_issue(7, last_run=30116967112)])
+    assert r["threw"] is None, r
+    assert r["comments"] == [], r
+    assert not any("stale" in w.lower() for w in r["warnings"]), r["warnings"]
+    assert "stale=0" in _summary(r), _summary(r)
+    assert any("already recorded" in i for i in r["infos"]), r["infos"]
+
+def test_the_watermark_is_only_armed_once_an_alert_is_open():
+    """The watermark's BOUND, asserted so it cannot be inherited silently.
+
+    `const recorded = existing ? recordedRun(existing.body) : null;` — with no
+    open rolling alert there is nothing to compare against, so a first alert
+    opened off a wholly-stale page is NOT refused. That uncovered case is
+    #1444's own situation: 502 was healthy, with no open alert, when the false
+    alert was published.
+
+    This pins the limitation rather than the fix. It is deliberately written so
+    that CLOSING the gap breaks it — a future change that refuses this read must
+    update this case, which is the point: the bound becomes discoverable from
+    the test suite instead of only from a review comment on #1452.
+    """
+    # A page stale in EVERY element (both runs old, newest-first), a `failure` at
+    # the head, and NO open alert. `newestRun` has no fresh sibling to prefer, so
+    # it correctly returns the stale head, and the watermark cannot arm.
+    r = _run(
+        "failure",
+        open_issues=[],
+        run_created_at=STALE_RUN_AT,
+        older_runs=[
+            _sibling("failure", run_id=30000000000, created_at="2026-09-01T00:00:00Z")
+        ],
+    )
+    assert r["threw"] is None, r
+    # Today's behaviour: the alert opens. Asserted as the known bound, not endorsed.
+    assert len(r["created"]) == 1, f"the bound is that this is NOT refused: {r}"
+    assert not any("stale" in w.lower() for w in r["warnings"]), r["warnings"]
+    assert "stale=0" in _summary(r), _summary(r)
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

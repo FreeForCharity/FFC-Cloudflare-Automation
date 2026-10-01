@@ -86,6 +86,20 @@ ENVIRONMENT = "whmcs-prod-read"
 # Read as a table so a step that loses a mapping fails by name rather than by a
 # whole-file grep that cannot say which body regressed.
 SITES = {
+    # #1422's guard step: it validates all five artifact-consumed paths in one
+    # loop, ahead of `whmcs-secrets-from-kv`, so a refused dispatch never fetches
+    # the WHMCS credential. Listed here because this table's positive control
+    # requires every step reading an `IN_*` variable to appear — and because a
+    # sixth path input must be added to the loop's spec list as well as to the
+    # consuming step. `test_1422_artifact_path_input_guards.py` owns the guard
+    # set itself; this entry only pins the mappings.
+    "Validate artifact-consumed output paths": {
+        "IN_CLIENTS_OUTPUT": "${{ inputs.clients_output }}",
+        "IN_TRANSACTIONS_OUTPUT": "${{ inputs.transactions_output }}",
+        "IN_INVOICES_OUTPUT": "${{ inputs.invoices_output }}",
+        "IN_ZEFFY_OUTPUT": "${{ inputs.zeffy_output }}",
+        "IN_ZEFFY_OUTPUT_XLSX": "${{ inputs.zeffy_output_xlsx }}",
+    },
     "Export clients": {
         "IN_CLIENTS_OUTPUT": "${{ inputs.clients_output }}",
     },
@@ -422,8 +436,23 @@ def test_every_path_input_fails_closed_before_its_first_use():
 
 
 def _guarded_in_loop(body: str, var: str) -> bool:
-    """The generator step checks its five paths in one `foreach`, by NAME."""
-    return f"'{var}'" in body and "GetEnvironmentVariable($name)" in body
+    """Either loop form that checks several paths in one `foreach`.
+
+    Two ship in this workflow and they differ in how the loop reaches the value:
+
+      by NAME   the generator step iterates variable NAMES and resolves each with
+                `GetEnvironmentVariable($name)`.
+      by VALUE  #1422's guard step iterates a spec list of (input, upload, value)
+                hashtables, reading `$env:<VAR>` in the list and testing `$value`
+                in the body — 202's shape.
+
+    Both are asserted to mention the variable AND to carry the loop's own
+    resolution spelling, so a body that merely names a variable in a comment does
+    not count as guarding it.
+    """
+    by_name = f"'{var}'" in body and "GetEnvironmentVariable($name)" in body
+    by_value = f"Value = $env:{var}" in body and "IsNullOrWhiteSpace($value)" in body
+    return by_name or by_value
 
 
 def _first_code_offset(body: str, needle: str) -> int | None:
@@ -729,6 +758,43 @@ def test_a_payload_in_an_optional_filter_is_inert_too():
 #   * "Validate Zeffy CSV headers" invokes no script at all. IN_ZEFFY_OUTPUT_XLSX
 #     is consumed by the enumeration that derives the .xlsx list from it.
 CALL_SITES = {
+    # #1422's guard step invokes no script -- it exists to REFUSE a value before
+    # the credential is fetched -- so `callee` is None, as it is for the three
+    # other rows whose consuming statement is not an invocation. What each
+    # variable must reach here is the loop's spec list: a mapping present in
+    # `env:` but absent from the list would be validated by nothing, which is the
+    # copy-paste the spec-list shape exists to prevent.
+    "Validate artifact-consumed output paths": (
+        None,
+        None,
+        {
+            "IN_CLIENTS_OUTPUT": (
+                "Value = $env:IN_CLIENTS_OUTPUT",
+                "Value = $env:IN_CLIENTS_OUTPUT",
+                False,
+            ),
+            "IN_TRANSACTIONS_OUTPUT": (
+                "Value = $env:IN_TRANSACTIONS_OUTPUT",
+                "Value = $env:IN_TRANSACTIONS_OUTPUT",
+                False,
+            ),
+            "IN_INVOICES_OUTPUT": (
+                "Value = $env:IN_INVOICES_OUTPUT",
+                "Value = $env:IN_INVOICES_OUTPUT",
+                False,
+            ),
+            "IN_ZEFFY_OUTPUT": (
+                "Value = $env:IN_ZEFFY_OUTPUT",
+                "Value = $env:IN_ZEFFY_OUTPUT",
+                False,
+            ),
+            "IN_ZEFFY_OUTPUT_XLSX": (
+                "Value = $env:IN_ZEFFY_OUTPUT_XLSX",
+                "Value = $env:IN_ZEFFY_OUTPUT_XLSX",
+                False,
+            ),
+        },
+    ),
     "Export clients": (
         "whmcs-clients-export.ps1",
         None,

@@ -85,6 +85,16 @@ When you add or change embedded workflow logic, add a scenario here:
    is failed as a **truncated roster**, naming the last test that reported — the module died in the
    test after it, because the shared runner catches `AssertionError` and nothing else, so an
    `IndexError` ends the module while the PASSes already printed still read as green (L82, #1013).
+   **A truncated roster has a second cause, and it is not a crash.**
+   `TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]` is evaluated where
+   it sits, so a test defined **below** that line was not in `globals()` when the list was built and
+   never runs. The counts look identical to the crash above; `run_all.py` tells them apart and names
+   the tests that never entered the roster (L307, #1427). **Append new tests ABOVE the
+   `TESTS = [...]` line** — keep the roster and the `__main__` runner at the end of the module. Note
+   that `pytest` collects by module attribute and reports those tests passing, so
+   `pytest tests/workflow-logic/` cannot see this: verify a new test with
+   `python3 tests/workflow-logic/<module>.py`.
+
    Two escapes, both explicit:
    - `  SKIP all (<why>)` — the whole module opted out of this run (228 and 720 print it when the
      environment has no PowerShell host).

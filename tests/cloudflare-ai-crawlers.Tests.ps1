@@ -35,29 +35,60 @@ BeforeAll {
 
     # Shapes modelled on Cloudflare's bot_management result. `blocked` is what a
     # newly created zone looks like under Cloudflare's own default.
+    # Field set as MEASURED on the first live run (2026-10-02, zone
+    # newheightseducation.org): six posture fields plus the bookkeeping ones.
     $script:Blocked = [pscustomobject]@{
-        enable_js          = $true
-        fight_mode         = $false
-        ai_bots_protection = 'block'
-        crawler_protection = 'enabled'
+        enable_js               = $true
+        fight_mode              = $false
+        ai_bots_protection      = 'block'
+        content_bots_protection = 'block'
+        crawler_protection      = 'enabled'
+        ai_training             = 'block'
+        ai_search               = 'block'
+        ai_user                 = 'block'
+        is_robots_txt_managed   = $false
+        cf_robots_variant       = 'policy_only'
     }
     $script:Allowed = [pscustomobject]@{
-        enable_js          = $true
-        fight_mode         = $false
-        ai_bots_protection = 'disabled'
-        crawler_protection = 'disabled'
+        enable_js               = $false
+        fight_mode              = $false
+        ai_bots_protection      = 'disabled'
+        content_bots_protection = 'disabled'
+        crawler_protection      = 'disabled'
+        ai_training             = 'disabled'
+        ai_search               = 'disabled'
+        ai_user                 = 'disabled'
+        is_robots_txt_managed   = $false
+        cf_robots_variant       = 'policy_only'
     }
+    $script:PostureFields = @('ai_bots_protection', 'crawler_protection', 'ai_training', 'ai_search', 'ai_user', 'content_bots_protection')
 }
 
 Describe 'Resolve-AiCrawlerPatch' {
 
     Context 'the FFC default: allow' {
-        It 'patches a Cloudflare-default (blocked) zone to disabled on both fields' {
+        It 'patches a fully blocked zone to disabled on every posture field, and nothing else' {
             $p = Resolve-AiCrawlerPatch -Current $script:Blocked -Desired 'allow'
             $p.Action | Should -Be 'patch'
-            $p.Body.ai_bots_protection | Should -Be 'disabled'
-            $p.Body.crawler_protection | Should -Be 'disabled'
-            $p.Body.Keys.Count | Should -Be 2
+            foreach ($f in $script:PostureFields) { $p.Body[$f] | Should -Be 'disabled' }
+            $p.Body.Keys.Count | Should -Be $script:PostureFields.Count
+            # Bookkeeping fields are never written, whatever they hold.
+            $p.Body.ContainsKey('enable_js') | Should -BeFalse
+            $p.Body.ContainsKey('cf_robots_variant') | Should -BeFalse
+        }
+
+        It 'patches only the one per-category field that still blocks' {
+            # The live shape on 2026-10-02 with a single category flipped: the
+            # toggle fields are already allow, so only ai_training is sent.
+            $one = [pscustomobject]@{
+                ai_bots_protection = 'disabled'; crawler_protection = 'disabled'
+                ai_training = 'block'; ai_search = 'disabled'; ai_user = 'disabled'
+                content_bots_protection = 'disabled'
+            }
+            $p = Resolve-AiCrawlerPatch -Current $one -Desired 'allow'
+            $p.Action | Should -Be 'patch'
+            $p.Body.Keys | Should -Be @('ai_training')
+            $p.Body.ai_training | Should -Be 'disabled'
         }
 
         It 'is a no-op on a zone that already allows' {
@@ -76,11 +107,13 @@ Describe 'Resolve-AiCrawlerPatch' {
     }
 
     Context 'the opt-out: block' {
-        It 'patches an allowing zone back to block/enabled' {
+        It 'patches an allowing zone back to block/enabled on every posture field' {
             $p = Resolve-AiCrawlerPatch -Current $script:Allowed -Desired 'block'
             $p.Action | Should -Be 'patch'
             $p.Body.ai_bots_protection | Should -Be 'block'
             $p.Body.crawler_protection | Should -Be 'enabled'
+            foreach ($f in @('ai_training', 'ai_search', 'ai_user', 'content_bots_protection')) { $p.Body[$f] | Should -Be 'block' }
+            $p.Body.Keys.Count | Should -Be $script:PostureFields.Count
         }
 
         It 'is a no-op on a zone that already blocks' {
@@ -105,13 +138,16 @@ Describe 'Resolve-AiCrawlerPatch' {
             $p.Reason | Should -Match 'no properties'
         }
 
-        It 'only writes crawler_protection when the response carries it' {
-            # A plan without the AI Labyrinth field must not be asked to set it.
-            $noLabyrinth = [pscustomobject]@{ ai_bots_protection = 'block' }
-            $p = Resolve-AiCrawlerPatch -Current $noLabyrinth -Desired 'allow'
+        It 'only writes the fields the response carries (pre-2026 shape: the two toggles)' {
+            # A plan or an older API shape without the AI Labyrinth and the
+            # per-category fields must not be asked to set them.
+            $legacy = [pscustomobject]@{ ai_bots_protection = 'block' }
+            $p = Resolve-AiCrawlerPatch -Current $legacy -Desired 'allow'
             $p.Action | Should -Be 'patch'
             $p.Body.Keys | Should -Be @('ai_bots_protection')
-            $p.Body.ContainsKey('crawler_protection') | Should -BeFalse
+            foreach ($f in @('crawler_protection', 'ai_training', 'ai_search', 'ai_user', 'content_bots_protection')) {
+                $p.Body.ContainsKey($f) | Should -BeFalse
+            }
         }
     }
 

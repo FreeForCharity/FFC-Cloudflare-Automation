@@ -1575,11 +1575,10 @@ jobs:
           fi
           # Forms were neutralized in `convert`, BEFORE the artifact was made.
           # Re-check here rather than trust it: this is the last point before a
-          # dead form would become a published page, and the check costs a grep.
-          if grep -rqIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm'; then
-            echo "::error::The downloaded capture still contains a <form> tag. A static export has no form backend, so this would publish a form that accepts a visitor's message and drops it."
-            exit 1
-          fi
+          # dead form would become a published page. Search forms are kept on
+          # purpose (they send nothing), so the check classifies each <form>
+          # rather than rejecting the tag outright.
+          node automation/scripts/replace-forms-with-mailto.mjs --check --dir "$site"
 
       - name: Check out the target FFC-EX repo (writable)
         uses: actions/checkout@v7.0.1

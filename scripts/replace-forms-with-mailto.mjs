@@ -143,14 +143,16 @@ export function formKind(formHtml) {
   const open = (formHtml.match(/^<form[^>]*>/i) || [''])[0];
   if (
     /wp-login\.php/i.test(open) ||
-    /<input\b[^>]*\btype\s*=\s*["']?password\b/i.test(formHtml) ||
-    /<input\b[^>]*\bname\s*=\s*["']?(log|pwd|user_login)["'\s/>]/i.test(formHtml)
+    /<input\b[^>]*\stype\s*=\s*["']?password\b/i.test(formHtml) ||
+    /<input\b[^>]*\sname\s*=\s*["']?(log|pwd|user_login)["'\s/>]/i.test(formHtml)
   ) {
     return 'login';
   }
-  const isGet = !/\bmethod\s*=\s*["']?post\b/i.test(open);
-  const hasQueryField = /<input\b[^>]*\bname\s*=\s*["']?s["'\s/>]/i.test(formHtml);
-  if (isGet && (hasQueryField || /\brole\s*=\s*["']?search\b/i.test(open))) return 'search';
+  // `\s` before each attribute name, not `\b`: `\b` also matches after the
+  // hyphen in `data-name="user_login"`, which is not a field at all.
+  const isGet = !/\smethod\s*=\s*["']?post\b/i.test(open);
+  const hasQueryField = /<input\b[^>]*\sname\s*=\s*["']?s["'\s/>]/i.test(formHtml);
+  if (isGet && (hasQueryField || /\srole\s*=\s*["']?search\b/i.test(open))) return 'search';
   return 'message';
 }
 
@@ -183,6 +185,20 @@ export function replaceForms(html, email, subject) {
     out = out.slice(0, spans[i].start) + replacement + out.slice(spans[i].end);
   }
   return { html: out, ...counts, unclosed: unclosed.length };
+}
+
+/**
+ * The forms a neutralized page must not still carry: anything but a search
+ * form, plus any form whose extent cannot be determined. The delivery step
+ * re-checks the downloaded capture with this before it becomes a published
+ * page.
+ */
+export function unsafeForms(html) {
+  const { spans, unclosed } = findFormSpans(html);
+  const kinds = spans
+    .map((span) => formKind(html.slice(span.start, span.end)))
+    .filter((kind) => kind !== 'search');
+  return [...kinds, ...unclosed.map(() => 'unclosed')];
 }
 
 /**
@@ -404,6 +420,24 @@ function selfTest() {
     [1, 1, 2, true],
   );
 
+  eq(
+    'a data- attribute that ends in a field name is not that field',
+    [
+      formKind('<form method="post"><input data-name="user_login" name="email"></form>'),
+      formKind('<form><input data-type="password" name="code"></form>'),
+      formKind('<form data-method="post"><input name="s"></form>'),
+    ],
+    ['message', 'message', 'search'],
+  );
+  eq(
+    'unsafeForms allows search forms and reports every other kind',
+    [
+      unsafeForms(`<nav>${jupiterSearch}</nav>${astraSearch}`),
+      unsafeForms(`${jupiterSearch}${caldera}${login}<form>open`),
+    ],
+    [[], ['message', 'login', 'unclosed']],
+  );
+
   // htmlFilesUnder touches the filesystem, so it gets a real tree rather than
   // no coverage. The consequence of a widened filter is not a wrong count: the
   // caller REWRITES every path this returns, so a stylesheet or a minified
@@ -469,6 +503,25 @@ function arg(name, def = '') {
 if (isMain) {
   if (process.argv.includes('--self-test')) {
     selfTest();
+  } else if (process.argv.includes('--check')) {
+    const dir = arg('dir');
+    if (!dir) {
+      console.error('Usage: node scripts/replace-forms-with-mailto.mjs --check --dir <siteRoot>');
+      process.exit(64);
+    }
+    const offenders = [];
+    for (const f of htmlFilesUnder(dir)) {
+      const kinds = unsafeForms(readFileSync(f, 'utf8'));
+      if (kinds.length) offenders.push(`${relative(dir, f)}: ${kinds.join(', ')}`);
+    }
+    if (offenders.length) {
+      console.error(
+        `::error::${offenders.length} page(s) still carry a form that is not a search form. A static export has no form backend, so this would publish a form that accepts a visitor's message and drops it.\n` +
+          offenders.slice(0, 20).join('\n'),
+      );
+      process.exit(1);
+    }
+    console.log('No message, sign-in or unclosed forms remain; only search forms.');
   } else {
     const dir = arg('dir');
     const email = arg('email');

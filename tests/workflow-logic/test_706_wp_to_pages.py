@@ -804,7 +804,7 @@ def test_deliver_refuses_a_partial_or_form_bearing_capture():
     published page. Both would otherwise review as capture problems."""
     run = step_run(WORKFLOW, "deliver", "Verify the downloaded capture is intact")
     assert "site/index.html" in run, run
-    assert "<form" in run, run
+    assert "replace-forms-with-mailto.mjs --check" in run, run
     assert "exit 1" in run, run
 
 

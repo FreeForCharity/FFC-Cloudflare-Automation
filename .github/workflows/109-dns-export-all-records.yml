@@ -51,7 +51,11 @@ jobs:
             "## Full DNS record export: ${{ inputs.domain }}",
             '',
             '```csv',
-            $csv.TrimEnd(),
+            # [string] cast: Get-Content -Raw on a header-only or empty export
+            # returns $null, and .TrimEnd() on $null is the "cannot call a method
+            # on a null-valued expression" that failed this step on a zone with
+            # no records (run 37009126539, newheightseducation.org, 2026-10-02).
+            ([string]$csv).TrimEnd(),
             '```'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 

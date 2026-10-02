@@ -431,7 +431,16 @@ function Get-AllDnsRecords {
         $page++
     }
 
-    return $records
+    # The unary comma is load-bearing. `return $records` on an EMPTY array
+    # unrolls to $null at the caller, and every consumer below binds it to a
+    # [Parameter(Mandatory)][AllowEmptyCollection()] $Records that accepts an
+    # empty collection and refuses null. A zone with no records - which is
+    # exactly what a zone 110 just created looks like - therefore killed
+    # -EnforceStandard and -ExportAll with "Cannot bind argument to parameter
+    # 'Records' because it is null" (106 run 37008673446, 109 run 37009126539,
+    # newheightseducation.org, 2026-10-02). Wrapping the array in a one-element
+    # array survives the unroll, so the caller receives @() rather than $null.
+    return , $records
 }
 
 function Normalize-TxtContent {

@@ -147,7 +147,7 @@
       "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "`dry_run` (default true); `mail_provider` default `from-registry`; UNLISTED domains have mail untouched; a listed domain is on EXACTLY ONE provider (enforcing REMOVES the other's MX/CNAME/SRV); MOVING providers needs `confirm_mail_change` = the domain name",
+      "guard": "`dry_run` (default true); `mail_provider` default `from-registry`; UNLISTED domains have mail untouched; a listed domain is on EXACTLY ONE provider (enforcing REMOVES the other's MX/CNAME/SRV); MOVING providers needs `confirm_mail_change` = the domain name; `ai_crawlers` default `allow` (Block AI Bots + AI Labyrinth OFF after the audit, under `dry_run` only previewed); `block` opts a charity out, `skip` leaves it untouched",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -227,7 +227,7 @@
       "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "\u2014",
+      "guard": "`ai_crawlers` default `allow`: right after the create, the new zone's Block AI Bots + AI Labyrinth are turned OFF (Cloudflare's own default blocks them); `block` keeps Cloudflare's default, `skip` leaves it untouched",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -2243,6 +2243,28 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "proves 701's provisioning yields a site that passes its OWN CI on either template: for every template (Footer-Only, Single Page) x sample charity (`tests/fixtures/sample-charities.json`, all fictional) it clones the template's default branch, applies the charity through 701's real parse script and `scripts/Apply-WebsiteReactTemplate.ps1`, then runs that template's format/lint/unit/site-config/drift/build checks; the drift check is what catches Free For Charity's identity left under a charity's name; runs on PRs touching the provisioning path, weekly, and on demand; public template clones and a local build only, no credentials, no writes, ungated",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 749,
+      "title": "Org - Invite Member",
+      "apis": [
+        "Org"
+      ],
+      "file": "749-org-invite-member.yml",
+      "triggers": [
+        "workflow_call",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod",
+        "github-prod-read"
+      ],
+      "description": "Invites one or more GitHub users to the FreeForCharity organization as a member (or admin), or updates the role of an existing member.  Why this exists next to 729 (Repo - Add Collaborator): an org MEMBER gets the org's base permission (Read) on every repo and can be added to teams, whereas an outside collaborator sees only the repos they were explicitly added to. The intended model is \"member for read-everything, 729 for write-where-named\". Nothing here touches repository permissions \u2014 pair it with 729 for the write grant.  Two jobs, one script (`scripts/org-invite-member.sh`): preflight  ungated, github-prod-read, READ PAT. Always runs. Validates the org/users/role and prints the plan (who would be invited, who is already a member, whose invitation is already pending). invite     github-prod (approval gate), WRITE PAT. Skipped entirely on a dry run, so a dry dispatch never parks on the gate or mints a writer credential (#983, test_dry_run_skips_write_gates.py). Runs the identical file with IN_DRY=false.  `dry_run` defaults to TRUE (unlike 729). Dispatch once to read the plan, then again with dry_run=false and approve the gate.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (invite job only)",
+      "guard": "dry_run default true; ungated `preflight` on `github-prod-read` plans first (user exists, current membership, invitation already pending); the gated `invite` job is skipped at job level on a dry run (#983 shape); `PUT /orgs/{org}/memberships/{user}` is idempotent (re-run safe, never re-sends a pending invite); org membership only \u2014 pair with 729 for a repo write grant",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

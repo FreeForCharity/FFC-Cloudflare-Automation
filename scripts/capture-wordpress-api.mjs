@@ -1873,6 +1873,35 @@ export function rewriteRefs(text, replacements) {
       const slashed = to.replace(/\//g, '\\/');
       out = out.split(escaped).join(token(targets.push(slashed) - 1));
     }
+    // The raws are DECODED URLs (`collectAssetUrls` decodes `&amp;` and
+    // `&#038;` before fetching, and the fetch is what the replacement map is
+    // keyed on), but the text being rewritten is still the markup, where
+    // WordPress spells every `&` in an enqueued URL as `&#038;` and a
+    // serializer spells it `&amp;`. So a multi-parameter URL never matched
+    // its own reference: `split(from)` found nothing, and when a SHORTER raw
+    // was a prefix of it (the version-less preload beside the versioned
+    // stylesheet link), that prefix was replaced and the entity tail left
+    // dangling. Measured on tamkeensports.org (706 run 37066569090):
+    //
+    //   href='…/css__family-Open-20Sans…bold.bin&#038;ver=2.0.1'
+    //
+    // which the browser requests as a file literally named `…bin&ver=2.0.1`,
+    // 404 on the export; and Pagelayer's
+    // `givecss.php?give=…&#038;premium=…&#038;ver=2.0.1`, downloaded and on
+    // disk, was left pointing at the source path on 13 of 13 pages and then
+    // dropped by the converter as "never captured". Each entity spelling is
+    // swapped for the same sentinel, inside the same longest-first iteration,
+    // so a longer raw's entity form still beats a shorter raw's plain one.
+    if (from.includes('&')) {
+      for (const amp of ['&amp;', '&#038;']) {
+        const entity = from.replace(/&/g, amp);
+        out = out.split(entity).join(token(targets.push(to) - 1));
+        if (escaped !== from) {
+          const slashed = to.replace(/\//g, '\\/');
+          out = out.split(escaped.replace(/&/g, amp)).join(token(targets.push(slashed) - 1));
+        }
+      }
+    }
   }
   // One pass, and via a callback so a `$&` inside a target is literal.
   return out.replace(/\u0000ffc-ref-(\d+)\u0000/g, (whole, i) => targets[Number(i)] ?? whole);
@@ -4180,6 +4209,59 @@ function selfTest() {
     rewriteRefs('<img src="https://x.org/q.png">', new Map([['https://x.org/q.png', 'a$&b']])),
     '<img src="a$&b">',
   );
+  // The raws are decoded URLs; the markup spells `&` as `&#038;` (WordPress)
+  // or `&amp;` (any serializer). The versioned stylesheet link beside its
+  // version-less preload is the shape that left `…bin&#038;ver=2.0.1` dangling
+  // on tamkeensports.org: the shorter raw matched as a prefix, the longer one
+  // never matched at all.
+  {
+    const fontReps = new Map([
+      ['https://f.g/css?family=Open+Sans', '../_ffc-assets/f.g/css__family-Open-Sans.bin'],
+      [
+        'https://f.g/css?family=Open+Sans&ver=2.0.1',
+        '../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin',
+      ],
+    ]);
+    eq(
+      'rewriteRefs matches the &#038; spelling of a multi-parameter URL',
+      rewriteRefs(
+        "<link rel='preload' href='https://f.g/css?family=Open+Sans'><link href='https://f.g/css?family=Open+Sans&#038;ver=2.0.1'>",
+        fontReps,
+      ),
+      "<link rel='preload' href='../_ffc-assets/f.g/css__family-Open-Sans.bin'><link href='../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin'>",
+    );
+    eq(
+      'rewriteRefs matches the &amp; spelling too',
+      rewriteRefs('<link href="https://f.g/css?family=Open+Sans&amp;ver=2.0.1">', fontReps),
+      '<link href="../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin">',
+    );
+    // Three parameters, every `&` entity-spelled, root-relative: the Pagelayer
+    // givecss.php shape that was downloaded and then left unrewritten.
+    eq(
+      'rewriteRefs rewrites a URL whose every & is an entity',
+      rewriteRefs(
+        "<link href='./wp-content/pagelayer/givecss.php?give=a.css,b.css&#038;premium=p.css&#038;ver=2.0.1'>",
+        new Map([
+          [
+            './wp-content/pagelayer/givecss.php?give=a.css,b.css&premium=p.css&ver=2.0.1',
+            './_ffc-assets/x.org/wp-content/pagelayer/givecss__give-a-css-b-css-1234.php',
+          ],
+        ]),
+      ),
+      "<link href='./_ffc-assets/x.org/wp-content/pagelayer/givecss__give-a-css-b-css-1234.php'>",
+    );
+    eq(
+      'rewriteRefs rewrites the entity spelling inside escaped JSON as well',
+      rewriteRefs('{"u":"https:\\/\\/f.g\\/css?family=Open+Sans&amp;ver=2.0.1"}', fontReps),
+      '{"u":"..\\/_ffc-assets\\/f.g\\/css__family-Open-Sans-ver-2-0-1.bin"}',
+    );
+    // A literal `&amp;` in text that is NOT one of the raws is untouched.
+    eq(
+      'rewriteRefs leaves an unrelated entity alone',
+      rewriteRefs('<a href="https://x.org/?a=1&amp;b=2">x</a>', fontReps),
+      '<a href="https://x.org/?a=1&amp;b=2">x</a>',
+    );
+  }
 
   eq(
     'remainingExternalAssetHosts reports an unlocalized asset host',

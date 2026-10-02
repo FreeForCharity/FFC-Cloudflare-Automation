@@ -1,17 +1,20 @@
 # Regression test for Get-AllDnsRecords in Update-CloudflareDns.ps1 on a zone
 # with NO records.
 #
-# WHY: `return $records` on an empty array unrolls to $null at the caller, and
-# every consumer of the result binds it to a
-# [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records - which
-# accepts an empty collection and refuses null. A freshly created zone is
-# exactly that case, so the first -EnforceStandard dry run and the first
-# -ExportAll on newheightseducation.org (106 run 37008673446, 109 run
-# 37009126539, 2026-10-02) both died with
+# WHY: `return $records` on an empty array unrolls to $null at the caller. The
+# enforce and audit paths hand the result to Resolve-MailProvider,
+# Get-ProviderMxRecord and Get-ForeignMailRecord, whose
+# [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records accepts an
+# empty collection and refuses null. A freshly created zone is exactly that
+# case, so the first -EnforceStandard dry run on newheightseducation.org (106
+# run 37008673446, 2026-10-02) died with
 #   Cannot bind argument to parameter 'Records' because it is null.
-# before touching a single record. The fix is `return , $records`; this file
-# pins that the caller receives an EMPTY ARRAY, never $null, and that the
-# non-empty and paginated paths are unchanged.
+# before touching a single record. (-ExportAll consumes the result through the
+# pipeline and tolerated the $null; 109 run 37009126539 exported "0 records"
+# and failed later, in the workflow's summary step, which is fixed separately.)
+# The fix is `return , $records`; this file pins that the caller receives an
+# EMPTY ARRAY, never $null, and that the non-empty and paginated paths are
+# unchanged.
 #
 # The function is extracted from the AST, as the sibling modules do, because
 # the script itself resolves a zone against the live API on load. Invoke-CfApi

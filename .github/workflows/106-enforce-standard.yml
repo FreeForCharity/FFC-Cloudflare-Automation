@@ -48,6 +48,19 @@ on:
         description: 'Debug: run DMARC Management API probe/attempts (noisy)'
         type: boolean
         default: false
+      ai_crawlers:
+        description:
+          "AI crawlers on this zone. Cloudflare BLOCKS AI bots on new zones by default; FFC's
+          default is 'allow' (Block AI Bots and the AI Labyrinth OFF), because a charity's public
+          site exists to be found. Applied after the DNS audit and honours dry_run (prints the
+          change, writes nothing). 'block' is the per-charity opt-out; 'skip' leaves the setting
+          untouched."
+        type: choice
+        options:
+          - allow
+          - block
+          - skip
+        default: allow
 
 permissions:
   id-token: write
@@ -207,3 +220,40 @@ jobs:
           if ($ProxyOn -eq 'true') { $params['ProxyGitHubPages'] = $true }
 
           & .\Update-CloudflareDns.ps1 @params -ErrorAction Continue
+
+      # FFC's AI-crawler default, enforced beside the DNS standard so a zone that
+      # was created elsewhere (or before 110 learned this) converges on every
+      # routine run. Idempotent: scripts/cloudflare-ai-crawlers.ps1 re-reads the
+      # zone and writes only a field that differs, then confirms by re-reading.
+      # Honours dry_run: -DryRun prints the plan and exits without a PUT.
+      # `ai_crawlers` is a `type: choice` and still travels by env with a
+      # `default` arm that throws (same shape as mail_provider above); the body
+      # never interpolates it, and `skip` never reaches the body at all.
+      # Wiring pinned by tests/workflow-logic/test_cloudflare_ai_crawlers_wiring.py.
+      - name: Set AI-crawler posture (FFC default allow)
+        if: ${{ inputs.ai_crawlers != 'skip' }}
+        shell: pwsh
+        env:
+          REC_DOMAIN: ${{ inputs.domain }}
+          REC_DRY_RUN: ${{ inputs.dry_run }}
+          REC_AI_CRAWLERS: ${{ inputs.ai_crawlers }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Fail closed on a missing mapping (L214): to a native command an
+          # unmapped env: var is NO ARGUMENT, so -Zone would bind the posture
+          # switch and the error would name the wrong parameter.
+          if ([string]::IsNullOrWhiteSpace($env:REC_DOMAIN)) {
+            Write-Output '::error::REC_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call cloudflare-ai-crawlers.ps1 with an empty -Zone.'
+            exit 1
+          }
+          switch ([string]$env:REC_AI_CRAWLERS) {
+            'allow' { $posture = '-Allow' }
+            'block' { $posture = '-Block' }
+            default { throw "Unsupported ai_crawlers '$($env:REC_AI_CRAWLERS)' (expected allow or block; skip never reaches this step)" }
+          }
+          $extra = @()
+          if ([string]$env:REC_DRY_RUN -eq 'true') {
+            Write-Host "--- DRY RUN: previewing the AI-crawler change, writing nothing ---"
+            $extra = @('-DryRun')
+          }
+          pwsh -NoProfile -File scripts/cloudflare-ai-crawlers.ps1 -Zone $env:REC_DOMAIN $posture @extra

@@ -648,6 +648,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 746 | Repo - Bulk Enable GitHub Pages [Repo] | `746-bulk-enable-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 747 | Repo - Conductor Liveness [GH] | `747-conductor-liveness.yml` | schedule, workflow_dispatch | Reads | — |
 | 748 | Repo - Template Provisioning Matrix [Repo] | `748-template-provisioning-matrix.yml` | pull_request, schedule, workflow_dispatch | Reads | — |
+| 749 | Org - Invite Member [Org] | `749-org-invite-member.yml` | workflow_call, workflow_dispatch | Writes (dry-run default) | ✅ github-prod (invite job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

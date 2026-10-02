@@ -14,7 +14,9 @@ WHAT THE WIRING MUST HOLD
     The house pattern for a dispatch input: by step-level `env:`, never
     interpolated; `IsNullOrWhiteSpace` guard on the free-text domain before the
     native call (L214); a `switch` whose `default` arm fails; `skip` is an
-    `if:` and never reaches the body. The step runs after the create step and
+    `if:` and never reaches the body, and neither does a CM zone (the toggle
+    enables the OWNING account's pair and only FFC carries one). The step
+    runs after the create step and
     the token loader, and before the AI-crawler posture step (which
     test_cloudflare_ai_crawlers_wiring.py pins as last).
 
@@ -47,7 +49,7 @@ CALLEE = "cloudflare-custom-nameservers.ps1"
 INPUT = "custom_nameservers"
 OPTIONS = ["enable", "skip"]
 DEFAULT = "enable"
-SKIP_CONDITION = "${{ inputs.custom_nameservers != 'skip' }}"
+SKIP_CONDITION = "${{ inputs.custom_nameservers != 'skip' && inputs.account == 'FFC' }}"
 DOMAIN_VAR = "IN_DOMAIN"
 MODE_VAR = "IN_CUSTOM_NS"
 CONTROLLED_VARS = (DOMAIN_VAR, MODE_VAR, "CLOUDFLARE_API_TOKEN_FFC", "CLOUDFLARE_API_TOKEN_CM")

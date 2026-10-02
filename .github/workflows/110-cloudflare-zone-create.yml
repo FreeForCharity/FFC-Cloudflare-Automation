@@ -48,7 +48,8 @@ on:
           the pair every FFC zone uses and the pair 102 and the onboarding docs hand to charities.
           Cloudflare assigns each zone its own pair instead and nothing enabled the account pair per
           zone until this step. 'enable' (default) switches it on; 'skip' leaves the zone on its
-          assigned pair."
+          assigned pair. FFC account only: the toggle enables the OWNING account's pair, and only
+          the FFC account carries one, so a CM zone keeps its assigned pair whatever this says."
         required: false
         type: choice
         options:
@@ -136,9 +137,13 @@ jobs:
       # Runs on an existing zone too (the create step exits 0 on "already
       # exists"), so re-dispatching 110 converges an older zone.
       # `custom_nameservers` is a `type: choice` and travels by env with a
-      # `default` arm that fails; `skip` never reaches the body.
+      # `default` arm that fails; `skip` never reaches the body. Neither does
+      # a CM zone: the toggle enables the OWNING account's custom pair, and
+      # only the FFC account has one configured, so on a CM zone the call
+      # would either delegate to a different pair or fail the run after the
+      # zone was created. The `if:` scopes it to `account: FFC`.
       - name: Enable FFC custom nameservers (account pair)
-        if: ${{ inputs.custom_nameservers != 'skip' }}
+        if: ${{ inputs.custom_nameservers != 'skip' && inputs.account == 'FFC' }}
         shell: pwsh
         env:
           IN_DOMAIN: ${{ inputs.domain }}

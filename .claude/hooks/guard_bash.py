@@ -751,7 +751,7 @@ def _pipe_stages(stmt):
         git push --force $(git remote | head -1) main
         git push --force origin $(cat b.txt | tr -d '\\n'):main
         git push --force `git remote | head -1` main
-        git push --force origin \\| main
+        git push --force origin feat\\|x:main
 
     All four BLOCK on the PRE-STACK BASELINE (`main` before #1310), where the
     rule judged the whole segment, so these were a regression introduced with

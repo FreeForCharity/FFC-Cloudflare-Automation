@@ -56,8 +56,10 @@ values. Scopes are **exact-string** matched, so the read-only variants must be l
    https://www.googleapis.com/auth/cloud-identity.devices.readonly
    https://www.googleapis.com/auth/cloud-identity.policies.readonly
    https://www.googleapis.com/auth/admin.directory.device.mobile.readonly
-   https://www.googleapis.com/auth/admin.directory.device.mobile.action
    ```
+
+   All four are read scopes. `admin.directory.device.mobile.action` (wipe / approve / block) is
+   deliberately **not** included: add it only if an approved workflow needs to act on devices.
 
    Granted today (keep):
    `admin.directory.{user,group,orgunit,domain,customer,device.mobile, device.chromeos}`,

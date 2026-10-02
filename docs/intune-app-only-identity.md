@@ -176,8 +176,8 @@ new `scripts/graph-api-common.ps1` is the natural follow-up once the identity ex
 ## Step 4 — verify end to end
 
 1. Dispatch any workflow that uses `intune-prod-read` (or run the YAML above as a throwaway
-   workflow): the `az rest` call must return the four "Default Mobile App Policy" rows with
-   `requireCompliance = false`.
+   workflow): the `az rest` call must return the two Android "Default Mobile App Policy" rows with
+   `requireCompliance = false`; swap in `iosManagedAppProtections` for the two iOS rows.
 2. `python3 scripts/check-federated-credential-subjects.py --live` must pass after the map update.
 
 ## Rollback

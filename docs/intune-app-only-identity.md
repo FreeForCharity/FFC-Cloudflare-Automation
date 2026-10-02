@@ -26,15 +26,15 @@ with admin consent are the equivalent, and audit entries name the app.
 
 ## What it can and cannot do
 
-| Area                                                                | App-only? | Permission (application role)                                        |
-| ------------------------------------------------------------------- | --------- | -------------------------------------------------------------------- |
-| App protection (MAM) policies — read/write                          | yes       | `DeviceManagementApps.ReadWrite.All`                                 |
-| Device configuration / compliance policies — read/write             | yes       | `DeviceManagementConfiguration.ReadWrite.All`                        |
-| Enrollment restrictions, Android Enterprise binding — read/write    | yes       | `DeviceManagementServiceConfig.ReadWrite.All`                        |
-| Managed device inventory — read                                     | yes       | `DeviceManagementManagedDevices.Read.All`                            |
-| Conditional Access and Entra policies — read                        | yes       | `Policy.Read.All`                                                    |
-| Group names for assignments — read                                  | yes       | `Group.Read.All`                                                     |
-| **Entra automatic MDM/MAM enrollment scope** (`mobilityManagement`) | **no**    | `Policy.ReadWrite.MobilityManagement` is **delegated-only**; a human |
+| Area                                                                | App-only? | Permission (application role)                                |
+| ------------------------------------------------------------------- | --------- | ------------------------------------------------------------ |
+| App protection (MAM) policies — read/write                          | yes       | `DeviceManagementApps.ReadWrite.All`                         |
+| Device configuration / compliance policies — read/write             | yes       | `DeviceManagementConfiguration.ReadWrite.All`                |
+| Enrollment restrictions, Android Enterprise binding — read/write    | yes       | `DeviceManagementServiceConfig.ReadWrite.All`                |
+| Managed device inventory — read                                     | yes       | `DeviceManagementManagedDevices.Read.All`                    |
+| Conditional Access and Entra policies — read                        | yes       | `Policy.Read.All`                                            |
+| Group names for assignments — read                                  | yes       | `Group.Read.All`                                             |
+| **Entra automatic MDM/MAM enrollment scope** (`mobilityManagement`) | **no**    | `Policy.ReadWrite.MobilityManagement` is **delegated-only**. |
 
 So the Entra "MDM user scope" stays a human task (it is currently `none`, which is what we want).
 

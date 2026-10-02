@@ -403,6 +403,29 @@ export function relativePrefix(localPath) {
  * asset-bearing <link rel>; srcset candidates; og:image / twitter:image meta
  * content; and url() inside <style> blocks and style attributes.
  */
+/**
+ * Every spelling of `&` that markup can carry: `&amp;`, decimal `&#38;` /
+ * `&#038;`, hex `&#x26;`, any case. ONE definition, used by both sides of the
+ * localization: `collectAssetUrls` decodes these to key the replacement map,
+ * and `rewriteRefs` must match the same set in the raw markup or a URL is
+ * downloaded under its decoded key and never rewritten. The two used to be
+ * separate lists and drifted (Copilot on #1492): the rewriter covered two
+ * spellings, the decoder four.
+ *
+ * Case-insensitivity is spelled out with character classes rather than the
+ * `i` flag because `AMP_ANY_SOURCE` is embedded in a pattern built from a
+ * whole URL, whose path must stay case-sensitive.
+ */
+const AMP_ENTITY_SOURCE = '&(?:[aA][mM][pP]|#0*38|#[xX]0*26);';
+const AMP_ENTITY_RE = new RegExp(AMP_ENTITY_SOURCE, 'g');
+/** `&` as the browser sees it, in any of the spellings above or bare. */
+const AMP_ANY_SOURCE = `(?:&|${AMP_ENTITY_SOURCE})`;
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The spellings of `&` the markup can carry, for the self-tests. */
+export const AMPERSAND_SPELLINGS = ['&amp;', '&AMP;', '&#38;', '&#038;', '&#x26;', '&#X26;'];
+
 export function collectAssetUrls(html) {
   const urls = new Set();
   const push = (u) => {
@@ -412,7 +435,7 @@ export function collectAssetUrls(html) {
     // origin for a query string it does not have — measured on this migration:
     // `bilmur.min.js?i=17&amp;m=202636` was requested, and reported, with the
     // entity still in it. WordPress emits the numeric form as well.
-    const t = u.trim().replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
+    const t = u.trim().replace(AMP_ENTITY_RE, '&');
     if (
       !t ||
       t.startsWith('data:') ||
@@ -1889,17 +1912,19 @@ export function rewriteRefs(text, replacements) {
     // 404 on the export; and Pagelayer's
     // `givecss.php?give=…&#038;premium=…&#038;ver=2.0.1`, downloaded and on
     // disk, was left pointing at the source path on 13 of 13 pages and then
-    // dropped by the converter as "never captured". Each entity spelling is
-    // swapped for the same sentinel, inside the same longest-first iteration,
-    // so a longer raw's entity form still beats a shorter raw's plain one.
+    // dropped by the converter as "never captured". Every spelling the
+    // decoder accepts (`AMP_ENTITY_SOURCE`, so the two cannot drift again),
+    // in any mix, is swapped for the same sentinel inside the same
+    // longest-first iteration, so a longer raw's entity form still beats a
+    // shorter raw's plain one. The replacement is a callback so a `$` in the
+    // sentinel or target is never read as a pattern reference.
     if (from.includes('&')) {
-      for (const amp of ['&amp;', '&#038;']) {
-        const entity = from.replace(/&/g, amp);
-        out = out.split(entity).join(token(targets.push(to) - 1));
-        if (escaped !== from) {
-          const slashed = to.replace(/\//g, '\\/');
-          out = out.split(escaped.replace(/&/g, amp)).join(token(targets.push(slashed) - 1));
-        }
+      const anySpelling = (s) => new RegExp(escapeRegExp(s).replace(/&/g, AMP_ANY_SOURCE), 'g');
+      const plainToken = token(targets.push(to) - 1);
+      out = out.replace(anySpelling(from), () => plainToken);
+      if (escaped !== from) {
+        const slashedToken = token(targets.push(to.replace(/\//g, '\\/')) - 1);
+        out = out.replace(anySpelling(escaped), () => slashedToken);
       }
     }
   }
@@ -4234,6 +4259,45 @@ function selfTest() {
       'rewriteRefs matches the &amp; spelling too',
       rewriteRefs('<link href="https://f.g/css?family=Open+Sans&amp;ver=2.0.1">', fontReps),
       '<link href="../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin">',
+    );
+    // The rewriter must accept exactly the spellings the decoder accepts, or a
+    // URL is downloaded under its decoded key and left dangling in the markup
+    // for the spellings the rewriter lacks (Copilot on #1492: the first cut
+    // covered two of the decoder's four). One table drives both assertions.
+    for (const amp of AMPERSAND_SPELLINGS) {
+      eq(
+        `collectAssetUrls decodes ${amp}`,
+        [...collectAssetUrls(`<img src="/a.png?x=1${amp}y=2">`)],
+        ['/a.png?x=1&y=2'],
+      );
+      eq(
+        `rewriteRefs matches ${amp}`,
+        rewriteRefs(`<link href="https://f.g/css?family=Open+Sans${amp}ver=2.0.1">`, fontReps),
+        '<link href="../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin">',
+      );
+    }
+    // Spellings mixed within one URL, including a bare `&`, still match.
+    eq(
+      'rewriteRefs matches a URL that mixes spellings of &',
+      rewriteRefs(
+        "<link href='./wp-content/pagelayer/givecss.php?give=a.css,b.css&#x26;premium=p.css&ver=2.0.1'>",
+        new Map([
+          ['./wp-content/pagelayer/givecss.php?give=a.css,b.css&premium=p.css&ver=2.0.1', 'MIXED'],
+        ]),
+      ),
+      "<link href='MIXED'>",
+    );
+    // A raw with regex metacharacters (every query string has `?` and `+`)
+    // is matched literally.
+    eq(
+      'rewriteRefs matches literally, not as a pattern',
+      rewriteRefs('<a href="https://f.g/css?family=Open+Sans&amp;ver=2.0.1">', fontReps),
+      '<a href="../_ffc-assets/f.g/css__family-Open-Sans-ver-2-0-1.bin">',
+    );
+    eq(
+      'rewriteRefs does not let a pattern-looking raw match something else',
+      rewriteRefs('<a href="https://f.g/cssXfamily=OpenXSans&amp;ver=2.0.1">', fontReps),
+      '<a href="https://f.g/cssXfamily=OpenXSans&amp;ver=2.0.1">',
     );
     // Three parameters, every `&` entity-spelled, root-relative: the Pagelayer
     // givecss.php shape that was downloaded and then left unrewritten.

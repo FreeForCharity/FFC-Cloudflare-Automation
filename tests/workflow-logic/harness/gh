@@ -32,6 +32,48 @@ case "$cmd" in
       *rules/branches/*)
         echo "${TEST_HAS_MQ:-0}"
         ;;
+      orgs/*/memberships/*)
+        # 749: one user's current org membership. Pre-formatted as if the
+        # script's --jq '"\(.state) \(.role)"' already ran ("active member",
+        # "pending member", "active admin"). "404" = not a member and no pending
+        # invitation, in the real shape: body on STDOUT, HTTP line on stderr.
+        # "error" = a non-404 failure, body on STDOUT (ledger L02) — the script
+        # must report that as UNKNOWN, never as a membership state.
+        case "${TEST_ORG_MEMBERSHIP:-404}" in
+          404)
+            echo '{"message":"Not Found","status":"404"}'
+            echo "gh: Not Found (HTTP 404)" >&2
+            exit 1
+            ;;
+          error)
+            echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+            exit 1
+            ;;
+          *)
+            printf '%s\n' "$TEST_ORG_MEMBERSHIP"
+            ;;
+        esac
+        ;;
+      "-X PUT orgs/"*memberships/*)
+        # 749: the invitation / role set itself. The default body is what GitHub
+        # returns for a fresh invitation to a non-member.
+        if [ "${TEST_ORG_MEMBERSHIP_PUT_FAIL:-}" = "1" ]; then
+          echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+          exit 1
+        fi
+        if [ -n "${TEST_ORG_MEMBERSHIP_PUT_BODY:-}" ]; then
+          printf '%s\n' "$TEST_ORG_MEMBERSHIP_PUT_BODY"
+        else
+          echo '{"state":"pending","role":"member"}'
+        fi
+        ;;
+      users/*)
+        # 729 / 749: does this login exist? Exists unless a scenario says not.
+        if [ "${TEST_USER_NOT_FOUND:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
+        fi
+        ;;
       *actions/workflows/*/runs*)
         # 736 preflight: list prior runs to find a matching successful dry-run.
         if [ "${TEST_RUNS_FAIL:-}" = "1" ]; then
@@ -227,6 +269,15 @@ case "$cmd" in
         else
           # settings: squash|auto|del|upd (726 drift audit)
           echo "${TEST_REPO_SETTINGS:-false|true|true|true}"
+        fi
+        ;;
+      orgs/*)
+        # 749: is the org readable with this token? Last among the orgs/
+        # patterns on purpose — every more specific orgs/<org>/… case above
+        # must keep winning.
+        if [ "${TEST_ORG_GET_FAIL:-}" = "1" ]; then
+          echo '{"message":"Not Found","status":"404"}'
+          exit 1
         fi
         ;;
       *)

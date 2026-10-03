@@ -84,6 +84,69 @@ def test_prose_outside_a_code_span_is_not_a_command():
     assert scan_text("We used to tell people to npx prettier --write and that was wrong.") == []
 
 
+def test_a_fenced_block_is_scanned():
+    """The canonical copy-paste recipe lives in a fenced block, so a span-only
+    scanner could not see the one line most likely to regress. Measured on
+    `CLAUDE.md:64` before this was fixed: the whole tree scanned clean with
+    that recipe unpinned."""
+    doc = (
+        "Run CI's own command:\n"
+        "\n"
+        "```bash\n"
+        '( cd "$(git rev-parse --show-toplevel)" && npx prettier --check . --ignore-unknown )\n'
+        "```\n"
+    )
+    findings = scan_text(doc, "CLAUDE.md")
+    assert len(findings) == 1, f"expected the fenced recipe to be flagged, got {findings}"
+    assert "CLAUDE.md:4" in findings[0], findings
+    assert "npx prettier --check" in findings[0], findings
+
+
+def test_a_pinned_fenced_recipe_is_accepted():
+    """The real tree's fenced recipe. Scanning fence bodies must not turn the
+    repo's own correct instructions into a finding."""
+    doc = (
+        "```bash\n"
+        '( cd "$(git rev-parse --show-toplevel)" && '
+        "npx --yes prettier@3.8.1 --check . --ignore-unknown )\n"
+        "```\n"
+    )
+    assert scan_text(doc, "CLAUDE.md") == []
+
+
+def test_a_tilde_fence_counts_and_a_closed_fence_restores_span_scanning():
+    """A `~~~` fence is a fence, and prose after a fence closes is back to
+    span-only — otherwise one stray fence turns the rest of the file into
+    raw-line scanning and the prose rule silently stops applying."""
+    assert scan_text("~~~\nnpx prettier --write x.md\n~~~\n") != []
+    after = (
+        "```bash\n"
+        "echo hello\n"
+        "```\n"
+        "We used to tell people to npx prettier --write and that was wrong.\n"
+    )
+    assert scan_text(after) == [], "prose after a closed fence is not a command"
+
+
+def test_an_indented_continuation_is_not_treated_as_code():
+    """Deliberate scope boundary: a 4-space indented line is NOT code here.
+
+    In Markdown an indented block is a code block, but it is also how a wrapped
+    bullet continuation renders, and `CLAUDE.md:41` is exactly that. So the
+    fence is the only unambiguous code delimiter and indentation is left alone.
+
+    The fixture must carry an UNPINNED invocation with an action flag and no
+    backticks — the one shape that scanning indented lines raw would flag. An
+    earlier draft of this test used a pinned command, which passes whether or
+    not the boundary holds and so asserted nothing."""
+    wrapped = (
+        "  - **Never do this.** The advice we used to give was\n"
+        "    to run npx prettier --write over the tree, and it caused\n"
+        "    local-pass/CI-fail loops.\n"
+    )
+    assert scan_text(wrapped, "CLAUDE.md") == []
+
+
 def test_the_guard_is_wired_into_ci():
     """A checker nobody runs is the failure mode this whole class is about."""
     ci = (REPO_ROOT / ".github" / "workflows" / "722-ci.yml").read_text(encoding="utf-8")

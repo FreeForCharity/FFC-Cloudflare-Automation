@@ -46,10 +46,17 @@ import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-# A backtick-delimited span. Prettier invocations in these docs are always
-# written inside code spans or fenced blocks; scanning the raw line instead
-# would match prose that merely abuts a backtick.
+# A backtick-delimited span. OUTSIDE a fenced block, scanning the raw line
+# instead would match prose that merely abuts a backtick.
 _SPAN = re.compile(r"`([^`]+)`")
+
+# A fence open/close: ``` or ~~~, optionally indented, optionally with an info
+# string. Inside a fence there are no code spans to find -- the whole line is
+# already code -- so the raw line is what gets scanned. The canonical
+# copy-paste recipe in CLAUDE.md lives in exactly such a block, which is the
+# highest-risk edit surface for this regression and was invisible to a
+# span-only scan.
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
 
 # `npx`, optionally `--yes`/`-y`, then `prettier` not followed by a FULL
 # `@MAJOR.MINOR.PATCH`. Requiring all three parts is deliberate: `prettier@3` is
@@ -83,10 +90,20 @@ def scan_text(text: str, name: str = "<text>") -> list[str]:
     construction asserts nothing (#943's lesson, applied again).
     """
     findings: list[str] = []
+    in_fence = False
     for lineno, line in enumerate(text.splitlines(), start=1):
-        for span in _SPAN.findall(line):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        # Inside a fence the line IS the command; outside, only a code span is.
+        # An indented (4-space) block is deliberately NOT treated as code: it
+        # is indistinguishable from a wrapped prose continuation, and
+        # CLAUDE.md:41 is exactly that -- a wrapped bullet whose indented
+        # continuation carries a legitimate inline mention.
+        candidates = [line] if in_fence else _SPAN.findall(line)
+        for span in candidates:
             if _UNPINNED.search(span) and _ACTION.search(span):
-                findings.append(f"{name}:{lineno}: `{span}`")
+                findings.append(f"{name}:{lineno}: `{span.strip()}`")
     return findings
 
 

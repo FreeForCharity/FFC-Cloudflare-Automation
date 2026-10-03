@@ -108,10 +108,50 @@ def test_content_skipped_mentions_metadata_still_recorded():
     b = body({"SERVED": "true", "CONTENT_STATUS": "skipped"})
     assert "admin-minimal" in b, b
     assert "ffc-content.json" in b, b
-    # A skip is not only admin-minimal: any missing footer field causes it, and
-    # the site then ships the template's (FFC's) identity. Say so.
-    assert "not every footer field was provided" in b, b
+    # Only a missing charity name skips the patch now (any other gap is
+    # emptied and marked pending), and the site then ships the template's
+    # (FFC's) identity. Say so.
+    assert "no charity name was provided" in b, b
     assert "placeholder identity" in b, b
+    assert "all four social links" not in b, b
+
+
+def test_content_applied_lists_the_pending_fields_and_the_call_to_action():
+    b = body(
+        {
+            "SERVED": "true",
+            "CONTENT_STATUS": "applied",
+            "CONTENT_PENDING_FIELDS": "phone,address,guidestar",
+            "CONTENT_PENDING_RENDERED": "true",
+            "CONTENT_PENDING_ISSUE_URL": "https://github.com/FreeForCharity/FFC-EX-example.org/issues/3",
+        }
+    )
+    assert "was applied to the React template" in b, b
+    assert "**Awaiting information from the charity:**" in b, b
+    assert "`phone` (public phone number), `address` (address), `guidestar` (Candid / GuideStar profile)" in b, b
+    assert "never filled with Free For Charity's values" in b, b
+    assert 'shows an "Awaiting information from the charity" placeholder' in b, b
+    assert "https://github.com/FreeForCharity/FFC-EX-example.org/issues/3" in b, b
+
+
+def test_pending_on_a_template_without_placeholders_says_so_and_flags_no_issue():
+    b = body(
+        {
+            "SERVED": "true",
+            "CONTENT_STATUS": "applied",
+            "CONTENT_PENDING_FIELDS": "team",
+            "CONTENT_PENDING_RENDERED": "false",
+        }
+    )
+    assert "`team` (board / leadership)" in b, b
+    assert "does not render the placeholder yet" in b, b
+    assert "No call-to-action issue was opened" in b, b
+
+
+def test_content_applied_with_nothing_pending_has_no_pending_note():
+    for pending in ("", " , "):
+        b = body({"SERVED": "true", "CONTENT_STATUS": "applied", "CONTENT_PENDING_FIELDS": pending})
+        assert "Awaiting information" not in b, b
 
 
 def test_content_failed_is_nonblocking_warning():

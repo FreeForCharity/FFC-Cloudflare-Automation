@@ -82,6 +82,26 @@ function assertedParentOrg() {
 
 const TEMPLATE_EIN = '46-2471893'
 const TEMPLATE_GUIDESTAR = 'https://www.guidestar.org/profile/46-2471893'
+
+/**
+ * Footer-standard fields the charity has not supplied yet (`siteConfig.pending`,
+ * the convention from FFC-EX-iwilf.org#6 / FFC-IN-Footer_Only_Template#169 /
+ * FFC-IN-FFC_Single_Page_Template#482). A pending field is shown as a visible
+ * "awaiting information" placeholder -- plain text, never a link -- so a gap in
+ * the footer standard is a call to action rather than a silent omission.
+ *
+ * Read defensively and the text inlined, for the same reason as
+ * `assertedParentOrg` above: this file is copied into repos whose
+ * `site.config` may predate `pending` / `PENDING_TEXT`, and neither may be
+ * imported from there. Of the pending fields only `ein` and `guidestar` are
+ * rendered by this footer (the cloned pages keep their own contact block).
+ */
+const PENDING_TEXT = 'Awaiting information from the charity'
+function isPending(field: string): boolean {
+  const pending = (siteConfig as unknown as { pending?: readonly string[] }).pending
+  return Array.isArray(pending) && pending.includes(field)
+}
+
 export default function FfcFooter() {
   const year = new Date().getFullYear()
   // Never the raw `siteConfig.parentOrg`: the template ships it pointing at
@@ -139,6 +159,10 @@ export default function FfcFooter() {
     { name: 'Security Acknowledgements', href: '/security-acknowledgements' },
   ]
   const identity = ein ? `${siteConfig.name} — EIN ${ein}` : siteConfig.name
+  // Pending placeholders, only where the value is really absent: a value that
+  // has arrived renders normally even if `pending` was not updated yet.
+  const einPending = !ein && isPending('ein')
+  const candidPending = !candidUrl && isPending('guidestar')
 
   return (
     <footer className="ffc-footer" aria-label="Site information and policies">
@@ -158,7 +182,11 @@ export default function FfcFooter() {
           ) : (
             identity
           )}
+          {einPending && <span className="ffc-footer__pending"> — EIN: {PENDING_TEXT}</span>}
         </p>
+        {candidPending && (
+          <p className="ffc-footer__pending">Candid / GuideStar profile: {PENDING_TEXT}</p>
+        )}
 
         <ul className="ffc-footer__links">
           {policyLinks.map((link) => (

@@ -41,10 +41,21 @@ param(
     zone 110 creates, and every zone 106 enforces, is set to ALLOW unless the
     dispatcher opts it out.
 
-    Two settings on `/zones/{id}/bot_management` carry the posture:
+    Six settings on `/zones/{id}/bot_management` carry the posture:
 
-        ai_bots_protection   "block" | "disabled"   -- Block AI Bots toggle
-        crawler_protection   "enabled" | "disabled" -- AI Labyrinth
+        ai_bots_protection       "block" | "disabled"   -- Block AI Bots toggle
+        crawler_protection       "enabled" | "disabled" -- AI Labyrinth
+        ai_training              "block" | "disabled"   -- per-category: training crawlers
+        ai_search                "block" | "disabled"   -- per-category: search / indexing
+        ai_user                  "block" | "disabled"   -- per-category: user-initiated fetches
+        content_bots_protection  "block" | "disabled"   -- content-scraping bots
+
+    The first two were in the field map from day one. The other four were
+    MEASURED on 2026-10-02, on the first live run (110 run 36952204684,
+    zone newheightseducation.org): Cloudflare returned all six, every one
+    `disabled`, so `allow` on those four is confirmed and `block` on them is
+    inferred from the vocabulary `ai_bots_protection` uses. A write that
+    Cloudflare refuses fails loudly here, never silently.
 
     The exact field set Cloudflare returns is the one thing this script does
     NOT assume. The API reference was not reachable from the sandbox that wrote
@@ -125,17 +136,33 @@ function Resolve-AiCrawlerPatch {
     }
 
     # Desired values per field. Only fields PRESENT in the response are sent,
-    # so a plan that lacks the AI Labyrinth toggle is not asked to set it.
+    # so a plan that lacks the AI Labyrinth toggle (or the per-category
+    # fields) is not asked to set it. The order is the order they are
+    # reported in.
     $want = if ($Desired -eq 'allow') {
-        @{ ai_bots_protection = 'disabled'; crawler_protection = 'disabled' }
+        [ordered]@{
+            ai_bots_protection      = 'disabled'
+            crawler_protection      = 'disabled'
+            ai_training             = 'disabled'
+            ai_search               = 'disabled'
+            ai_user                 = 'disabled'
+            content_bots_protection = 'disabled'
+        }
     }
     else {
-        @{ ai_bots_protection = 'block'; crawler_protection = 'enabled' }
+        [ordered]@{
+            ai_bots_protection      = 'block'
+            crawler_protection      = 'enabled'
+            ai_training             = 'block'
+            ai_search               = 'block'
+            ai_user                 = 'block'
+            content_bots_protection = 'block'
+        }
     }
 
     $body = @{}
     $changes = @()
-    foreach ($field in @('ai_bots_protection', 'crawler_protection')) {
+    foreach ($field in @($want.Keys)) {
         if ($names -notcontains $field) { continue }
         $have = [string]$Current.$field
         if ($have -ne $want[$field]) {

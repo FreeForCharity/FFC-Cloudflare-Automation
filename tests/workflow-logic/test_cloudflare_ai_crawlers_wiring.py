@@ -62,6 +62,20 @@ SKIP_CONDITION = "${{ inputs.ai_crawlers != 'skip' }}"
 DOMAIN_EXPRESSION = "${{ inputs.domain }}"
 POSTURE_EXPRESSION = "${{ inputs.ai_crawlers }}"
 
+# The bot_management fields the callee governs, as MEASURED on the first live
+# run (2026-10-02, zone newheightseducation.org). The response also carried
+# enable_js, fight_mode, is_robots_txt_managed, bot_preference_sync_enabled,
+# cf_robots_variant, ai_bots_migration_opt_out and using_latest_model, none of
+# which is a crawler posture and none of which the callee may write.
+POSTURE_FIELDS = (
+    "ai_bots_protection",
+    "crawler_protection",
+    "ai_training",
+    "ai_search",
+    "ai_user",
+    "content_bots_protection",
+)
+
 # One entry per workflow that carries the default. `must_follow` is the step
 # that makes the zone exist (110) or finishes the DNS standard (106): the
 # posture step is ordered after it, and that ordering is asserted rather than
@@ -198,16 +212,17 @@ def test_the_callee_spells_allow_as_both_toggles_off():
     zone blocked.
     """
     text = SCRIPT.read_text(encoding="utf-8")
-    allow_map = re.search(
-        r"\$Desired -eq 'allow'\)\s*\{\s*@\{\s*ai_bots_protection\s*=\s*'disabled';\s*crawler_protection\s*=\s*'disabled'\s*\}",
-        text,
-    )
-    assert allow_map, "the callee's 'allow' map no longer sets ai_bots_protection=disabled AND crawler_protection=disabled"
-    block_map = re.search(
-        r"@\{\s*ai_bots_protection\s*=\s*'block';\s*crawler_protection\s*=\s*'enabled'\s*\}",
-        text,
-    )
-    assert block_map, "the callee's 'block' map no longer restores Cloudflare's block/enabled pair"
+    # The two [ordered] maps, in source order: allow first, then block. Each
+    # field is pinned by NAME and VALUE, because 'allow' is only the right
+    # posture if every field it names is turned OFF.
+    maps = re.findall(r"\[ordered\]@\{(.*?)\}", text, flags=re.S)
+    assert len(maps) == 2, f"expected the allow and block maps, found {len(maps)} [ordered] hashtables"
+    allow = dict(re.findall(r"(\w+)\s*=\s*'(\w+)'", maps[0]))
+    block = dict(re.findall(r"(\w+)\s*=\s*'(\w+)'", maps[1]))
+    assert set(allow) == set(POSTURE_FIELDS) == set(block), (allow, block)
+    assert all(v == "disabled" for v in allow.values()), f"'allow' must turn every field OFF: {allow}"
+    assert block["ai_bots_protection"] == "block" and block["crawler_protection"] == "enabled", block
+    assert all(block[f] == "block" for f in POSTURE_FIELDS if f not in ("crawler_protection",)), block
 
 
 # --------------------------------------------------------------------------

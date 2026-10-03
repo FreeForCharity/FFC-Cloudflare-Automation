@@ -431,7 +431,16 @@ function Get-AllDnsRecords {
         $page++
     }
 
-    return $records
+    # The unary comma is load-bearing. `return $records` on an EMPTY array
+    # unrolls to $null at the caller. The enforce and audit paths hand that to
+    # Resolve-MailProvider / Get-ProviderMxRecord / Get-ForeignMailRecord, whose
+    # [Parameter(Mandatory)][AllowEmptyCollection()] $Records accepts an empty
+    # collection and refuses null - so a zone with no records (exactly what 110
+    # has just created) killed -EnforceStandard with "Cannot bind argument to
+    # parameter 'Records' because it is null" (106 run 37008673446,
+    # newheightseducation.org, 2026-10-02). The pipeline consumers (-ExportAll,
+    # -List, the CNAME inventory) tolerate $null; @() is simply correct for all.
+    return , $records
 }
 
 function Normalize-TxtContent {

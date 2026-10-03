@@ -399,11 +399,6 @@ export function relativePrefix(localPath) {
 }
 
 /**
- * Every asset URL referenced by a chunk of HTML: src, poster and data-src;
- * asset-bearing <link rel>; srcset candidates; og:image / twitter:image meta
- * content; and url() inside <style> blocks and style attributes.
- */
-/**
  * Every spelling of `&` that markup can carry: `&amp;`, decimal `&#38;` /
  * `&#038;`, hex `&#x26;`, any case. ONE definition, used by both sides of the
  * localization: `collectAssetUrls` decodes these to key the replacement map,
@@ -426,6 +421,11 @@ const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** The spellings of `&` the markup can carry, for the self-tests. */
 export const AMPERSAND_SPELLINGS = ['&amp;', '&AMP;', '&#38;', '&#038;', '&#x26;', '&#X26;'];
 
+/**
+ * Every asset URL referenced by a chunk of HTML: src, poster and data-src;
+ * asset-bearing <link rel>; srcset candidates; og:image / twitter:image meta
+ * content; and url() inside <style> blocks and style attributes.
+ */
 export function collectAssetUrls(html) {
   const urls = new Set();
   const push = (u) => {

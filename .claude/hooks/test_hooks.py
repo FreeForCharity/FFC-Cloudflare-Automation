@@ -657,6 +657,51 @@ RULES = [
         # line is a command, not an endpoint.
         ("line continuation, slash-less endpoint allowed",
          "gh api \\\nrepos/o/r/issues", ALLOW),
+        # A QUOTED endpoint was invisible to the span regex on every revision,
+        # `main` included: `(?<=\s)` wants whitespace before the slash and finds
+        # a quote. Hit live in Conductor run 190 -- two `gh api` calls apart, one
+        # worked and one failed `invalid API endpoint`, and rule 8 said nothing
+        # about either. All six pre-existing rows in this rule were unquoted,
+        # which is why eleven rounds of review never surfaced it.
+        ("double-quoted leading-slash endpoint",
+         'gh api "/repos/o/r/actions/runs/1/pending_deployments"', BLOCK),
+        ("single-quoted leading-slash endpoint",
+         "gh api '/repos/o/r/actions/runs/1/pending_deployments'", BLOCK),
+        ("quoted leading-slash endpoint with flags before it",
+         'gh api -X POST "/repos/o/r/issues/1/comments"', BLOCK),
+        # ...and the carve-out that keeps the fix from becoming a false positive.
+        # A `?` ANYWHERE in the argument suppresses MSYS path conversion -- even
+        # a trailing one with nothing after it -- so these commands genuinely
+        # work and must stay allowed. That measurement is INHERITED from
+        # Conductor run 190 (argv[1] printed through git-bash); this suite's host
+        # is Linux and cannot observe the rewrite, so these rows pin the
+        # behaviour the measurement implies rather than the measurement itself.
+        ("quoted endpoint with a query string allowed",
+         'gh api "/repos/o/r/actions/runs?status=waiting"', ALLOW),
+        ("single-quoted endpoint with a query string allowed",
+         "gh api '/repos/o/r/actions/runs?status=waiting'", ALLOW),
+        ("quoted endpoint with a bare trailing ? allowed",
+         'gh api "/repos/o/r/actions/runs?"', ALLOW),
+        # Controls for the word-reading half: a quoted FULL URL is not a path, a
+        # quoted slash-less route was never mangled, and a slashed path inside a
+        # field VALUE is data. Without these, "the endpoint is the first non-flag
+        # word" could be satisfied by any quoted token.
+        ("quoted full URL allowed",
+         'gh api "https://api.github.com/repos/o/r/issues"', ALLOW),
+        ("quoted slash-less endpoint allowed",
+         'gh api "repos/o/r/issues"', ALLOW),
+        ("a slashed path in a quoted field value allowed",
+         'gh api repos/o/r/issues -f body="see /markdown"', ALLOW),
+        # KNOWN FALSE POSITIVE, pinned deliberately at `main`'s behaviour: a BARE
+        # endpoint carrying a `?` is not mangled, and both guards block it. The
+        # fix is a LOOSENING, and it rests entirely on the inherited `?`
+        # measurement -- so it is not taken here. Retire these two rows when a
+        # second reading on a Windows host confirms `?` suppression; until then
+        # blocking a working command is the cheaper error.
+        ("bare endpoint with a query string still blocks (known FP, #1313 r12)",
+         "gh api /repos/o/r/actions/runs?status=waiting", BLOCK),
+        ("bare endpoint with a bare trailing ? still blocks (known FP, #1313 r12)",
+         "gh api /repos/o/r/actions/runs?", BLOCK),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a

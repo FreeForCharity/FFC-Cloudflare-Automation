@@ -1108,9 +1108,13 @@ def _gh_api_endpoint(cmd):
             # `gh api graphql` and `gh api rate_limit` have no slash and are not
             # collections; stop rather than scanning into the rest of the line.
             return None, None
-        path, _, query = candidate.partition("?")
+        path, sep, query = candidate.partition("?")
         path = re.sub(r"^https?://[^/]+/", "", path)
-        return path, query
+        # `None` means the argument carried no `?` at all; `""` means it ended in
+        # one. Rule 8 needs them apart (a trailing `?` suppresses MSYS path
+        # conversion just as a full query string does), and the #971 caller below
+        # reads `query or ""`, so both spellings reach it identically.
+        return path, (query if sep else None)
     return None, None
 
 
@@ -1316,7 +1320,37 @@ def main():
     candidates = [_strip_quoted(cmd)]
     candidates += [_strip_quoted(p) for p in _shell_c_payloads(cmd)]
     candidates += list(_substitution_sources(cmd))
-    if any(re.search(endpoint_re, text) for text in candidates):
+
+    # A QUOTED endpoint is invisible to the regex above and always was, on `main`
+    # too: `(?<=\s)` wants whitespace immediately before the slash and finds a
+    # quote. So `gh api "/repos/o/r/actions/runs/1/pending_deployments"` is
+    # mangled in reality and passed by both guards -- hit live in Conductor run
+    # 190, two `gh api` calls apart, with rule 8 silent for both.
+    #
+    # Read the endpoint as a WORD rather than widening the pattern:
+    # `_gh_api_endpoint` already skips flags and their operands, strips the
+    # quotes, and splits the query off, so it answers "does the argument the
+    # shell will hand to gh begin with a slash" without another lookaround.
+    #
+    # ⚠️ The `query is None` half is INHERITED, not reproduced here. Conductor
+    # run 190 measured on git-bash, by printing argv[1], that a `?` ANYWHERE in
+    # the argument suppresses the rewrite -- even a trailing one with nothing
+    # after it -- while every other leading-slash argument is rewritten. This
+    # sandbox is Linux and cannot observe MSYS path conversion at all, so that
+    # claim is taken on the only host that can make it. The condition is written
+    # so an error in it costs a false NEGATIVE and never a false positive: a
+    # `?`-bearing quoted endpoint stays allowed, exactly as on `main`.
+    endpoint_candidates = [cmd]
+    endpoint_candidates += list(_shell_c_payloads(cmd))
+    endpoint_candidates += list(_substitution_sources(cmd))
+    quoted_endpoint = False
+    for text in endpoint_candidates:
+        path, query = _gh_api_endpoint(text)
+        if path and path.startswith("/") and query is None:
+            quoted_endpoint = True
+            break
+
+    if quoted_endpoint or any(re.search(endpoint_re, text) for text in candidates):
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

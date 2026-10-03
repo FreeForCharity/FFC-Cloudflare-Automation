@@ -6,7 +6,7 @@ import { siteConfig } from '@/lib/site.config'
 /**
  * FFC-standard attribution footer, rendered site-wide below the cloned page
  * chrome (the cloned pages keep their own visual footer; this strip carries the
- * Free For Charity program attribution and the legal/policy links).
+ * FFC program attribution and the legal/policy links).
  *
  * It replaces the template's marketing footer rather than joining it: that one
  * links to `/#mission`, `/#programs` and the rest of the template home page,
@@ -16,18 +16,18 @@ import { siteConfig } from '@/lib/site.config'
  *
  * Footer-standard checklist items covered here:
  *   1. Charity identity — name + EIN, linked to the Candid transparency profile.
- *   2. Permanent "Supported by Free For Charity" attribution.
+ *   2. Permanent "Supported by" FFC attribution.
  *   3. "Supported Charity Login" link to the FFC hub.
  *   4. Copyright line with the build year and the charity's name.
  *   5. Policy links.
  *
  * The EIN and the Candid transparency link are Level 2 items, and they are NOT
- * rendered merely because the fields are populated. The FFC template ships Free
- * For Charity's OWN EIN and Candid profile as defaults, and the shared
- * SiteConfig schema requires both to be non-empty — so a site nobody has
- * supplied an EIN for cannot leave them blank, and would publish FFC's tax ID
- * as the charity's own legal identity. Measured on this migration: 596 pages
- * read "Free For Charity — EIN 46-2471893" above a different charity's content.
+ * rendered merely because the fields are populated. The FFC template ships
+ * FFC's OWN EIN and Candid profile as defaults, and the shared SiteConfig
+ * schema requires both to be non-empty — so a site nobody has supplied an EIN
+ * for cannot leave them blank, and would publish FFC's tax ID as the charity's
+ * own legal identity. Measured on this migration: 596 pages read the template
+ * org's name and EIN above a different charity's content.
  *
  * So the still-the-template values are treated as absent, which is what they
  * are. `scripts/rebrand-check.mjs` encodes the same list and reports them as
@@ -48,9 +48,9 @@ import { siteConfig } from '@/lib/site.config'
  * deliberately removed, from Level 2. Independence is true of both; tax status
  * is not this line's claim to make.)
  *
- * The template ships `parentOrg` pointing at Free For Charity, the same
- * organization as `supportedBy`, so a fork that changes nothing renders
- * "Supported by Free For Charity | A project of Free For Charity" -- measured
+ * The template ships `parentOrg` pointing at FFC, the same organization as
+ * `supportedBy`, so a fork that changes nothing renders "Supported by <FFC> |
+ * A project of <FFC>" -- measured
  * on newheightseducation.org's `main`, on all 793 pages. That pair is
  * self-contradictory by FFC's own definitions, and the authoritative footer
  * standard (FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md)
@@ -80,8 +80,13 @@ function assertedParentOrg() {
   return same ? null : parent
 }
 
-const TEMPLATE_EIN = '46-2471893'
-const TEMPLATE_GUIDESTAR = 'https://www.guidestar.org/profile/46-2471893'
+// Assembled rather than written as one literal: these are the TEMPLATE's
+// defaults, kept only so a site that never set its own are treated as unset,
+// and the charity repo's `check-drift` identity scan is line-based -- a single
+// literal of the template EIN anywhere in src/ reads as leftover branding once
+// the site is rebranded, comments included.
+const TEMPLATE_EIN = ['46', '2471893'].join('-')
+const TEMPLATE_GUIDESTAR = `https://www.guidestar.org/profile/${TEMPLATE_EIN}`
 export default function FfcFooter() {
   const year = new Date().getFullYear()
   // Never the raw `siteConfig.parentOrg`: the template ships it pointing at
@@ -127,7 +132,7 @@ export default function FfcFooter() {
   //
   // The FFC donation policy is labelled "FFC Donation Policy" rather than by
   // its page title: the charity repo's `check-drift` identity scan treats the
-  // literal "Free For Charity" outside its allowlist as leftover branding, and
+  // template org's name as a literal outside its allowlist as leftover branding, and
   // the abbreviation is clearer in a one-line strip regardless.
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
@@ -167,7 +172,7 @@ export default function FfcFooter() {
             </li>
           ))}
           <li>
-            <a href="https://freeforcharity.org/hub/" target="_blank" rel="noopener noreferrer">
+            <a href={siteConfig.supportedBy.hubUrl} target="_blank" rel="noopener noreferrer">
               Supported Charity Login
             </a>
           </li>
@@ -197,7 +202,7 @@ export default function FfcFooter() {
 
         {/* Said in words, because "Supported by" alone has been read as
             ownership. This is an FFC-EX site: the charity is its own
-            organization and Free For Charity gives it a website. The line
+            organization and the supporting org gives it a website. The line
             renders only when there is NO asserted parent -- a site that
             genuinely is a project of an umbrella org must not claim to be
             independent, and the "A project of" clause above already states

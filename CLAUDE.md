@@ -1656,3 +1656,147 @@ Two habits that do:
   returning an identical count is the signature of neither filter running — the same reason
   `audit-agentic-os-board.py` prints `expected=N board=M` rather than just reporting "0 missing"
   (#966).
+
+> **Everything below this line is append-only on purpose.** `docs/lessons-ledger.md` cites this file
+> by `CLAUDE.md:<line>`, so inserting into a section above renumbers those anchors. Run 189 added
+> its `--paginate` note inside the `--paginate` section, shifted 24 lines, and broke L180's citation
+> on the spot. The content belongs with its section and the anchors are the reason it is not there —
+> see the stale-anchor note at the end of this file. **Add new sections here, at the end.**
+
+## An AGGREGATE under `--paginate` aggregates the page, never the set (validated 2026-10-03, Conductor run 189)
+
+An extension of **`…but --paginate concatenates pages, so the result is often not valid JSON`**
+above, which lists two broken shapes — streaming (correct) and array-building (invalid JSON). There
+is a third, and it is the dangerous one, because **nothing ever errors**.
+
+`--jq '[…] | last'`, `| length`, `| max_by(…)`, `| add` — any whole-set aggregate — runs **once per
+page**. Each page therefore produces its own individually well-formed answer, and `gh` prints all of
+them. The two documented shapes eventually fail on malformed JSON; this one succeeds and is wrong.
+
+Measured: hunting the newest comment on #719 with `issues/719/comments --paginate --jq '[…]|last'`
+returned **the last comment of every page** — 11 results, oldest first, each a perfectly plausible
+"newest comment". The one that got read as the answer was from **2026-07-23**, eleven weeks stale,
+and it was a Conductor log entry being mistaken for a human reply.
+
+Remedies, cheapest first:
+
+```bash
+# 1. BEST when the question is "what is new": narrow server-side, no --paginate, no aggregate.
+#    `since=` IS supported on issues/{n}/comments (it filters on updated_at).
+gh api "repos/OWNER/REPO/issues/719/comments?per_page=100&since=2026-10-03T19:10:00Z" \
+  --jq '.[] | "\(.created_at) \(.body[0:120])"'
+
+# 2. Otherwise fetch raw and aggregate afterwards. `--slurp` is the right flag but
+#    CANNOT be combined with `--jq` (gh rejects it outright), so do it in two steps.
+gh api --paginate --slurp "repos/OWNER/REPO/issues/719/comments" > pages.json   # array OF PAGES
+```
+
+`sort`/`direction` are **not** supported on this endpoint and are dropped in silence — the
+dropped-parameter rule above was found on this very endpoint.
+
+## On #719 you cannot find Clarke's reply by author — every comment is `clarkemoyer` (validated 2026-10-03, Conductor run 189)
+
+Two facts recorded elsewhere in this file combine into a trap that neither one states, and the thing
+it threatens is a **hard rule**.
+
+`gh` is authenticated as `clarkemoyer` (see _"You cannot approve your own PR, and every agent
+authenticates as `clarkemoyer`"_ and the cloud-worker authorship note). So **every** comment the
+Conductor or a cloud worker posts to #719 comes back from the API with `user.login == "clarkemoyer"`
+— the same login as the human whose answer the run is waiting for. Filtering #719 by author to find
+out whether Clarke replied returns **the Conductor's own log**, in full, and nothing else.
+
+Measured: run 189 filtered #719 for `user.login == "clarkemoyer"`, took the most recent hit, and
+read back a comment **it had posted itself four minutes earlier**. For about a minute the run
+believed Clarke had answered. (The `--paginate` aggregate bug above is what served the 2026-07-23
+entry as "most recent", so the two traps compounded.)
+
+Why this is a safety rule, not a nuisance: the standing instruction is _never approve a
+write-environment gate without Clarke's explicit yes in this run._ A run that detects that yes by
+author filter **will always find one, because it wrote it.** The failure direction is approval.
+
+How to actually tell:
+
+- **Read content, not authorship.** Every agent post on #719 opens with a recognisable marker —
+  `## Run N — START/END`, `## Conductor run N`, `## Cloud worker …`, or a workflow's `### 745 …` /
+  `<!-- process-health-metrics-report -->` header. A comment carrying none of those is the only
+  candidate for being human.
+- **Clarke's real channel is actions, not comments.** Scanning #719 back to 2026-09-25 finds **no**
+  human comment at all, while Clarke was plainly active: on 2026-10-03 he opened a PR at 16:26Z and
+  dispatched 119 at 16:44Z. He answers by **approving or declining gates, dispatching workflows, and
+  merging** — all observable as state, with a timestamp, none of them comments. Run 178 learned this
+  the same way ("Run 177's two iwilf.org gates are CLOSED — Clarke…").
+- **Silence is therefore not absence, and still not approval.** Evidence of activity elsewhere means
+  he is reading, not that he consented.
+
+## Do not pre-commit a prediction's falsifier to a verdict about another component (validated 2026-10-03, Conductor run 189)
+
+Predictions are cheap and worth making. Writing down _in advance_ what a failed prediction proves
+about some other component is not — it converts an unread assumption into a finding the next run
+dutifully files.
+
+Run 188 dispatched **745** (board audit, read-only, within its authority), saw it go `success` at
+16:4xZ, and recorded for run 189: _"740's sweep at :09 or :39 should close #1454. If it is still
+open after two sweeps, that is a 740 defect — the alert-closing path."_
+
+Two sweeps ran (17:30Z, 18:28Z), both `success`. **#1454 stayed open. 740 is correct.** Both of its
+run lookups carry `event: 'schedule'` **deliberately** (#1440), so a hand dispatch can neither close
+an alert nor reset the green clock. The code says why at length and names this exact case: _"745
+exits 1 by design on board drift and the Conductor dispatches it every run, which opened 'Scheduled
+workflow failing' alerts (#1322, #1439) whose evidence was a hand-run audit."_ It is enforced in
+`tests/workflow-logic/test_740_scheduled_failure_alert.py`: one test asserts the filter on **both**
+lookups and that no third `listWorkflowRuns` exists, and another is named
+`test_a_dispatched_success_does_not_close_an_alert_for_a_failing_scheduled_lane`.
+
+So the prediction was not merely wrong, it was **unfalsifiable as written**: no number of sweeps
+could have closed #1454, because the triggering event was filtered out by design. #1454 closes on
+745's next _scheduled_ success.
+
+The habit: before recording "if X then component Y is broken", **read Y**. A dispatch proves a
+workflow _can_ pass; it says nothing about whether cron is firing it, and that distinction is the
+entire purpose of the filter. Generally — **the Conductor's own dispatches are not evidence about
+scheduled behaviour.**
+
+## The published status feed is DAILY — it cannot corroborate a live count (validated 2026-10-03, Conductor run 189)
+
+The public feed at `https://ffcadmin.org/data/agentic-os-status.json` is regenerated by **502**,
+whose cron is `17 7 * * *` — **once a day**. Its `generated_at` can be up to 24h behind, and the
+page renders that timestamp honestly, so neither is defective.
+
+It does mean the feed is **not an independent check on anything that moves in hours.** Run 188 cited
+its `pending_gates: 9` as _"a third, independent corroboration of the hand count"_ of 9 gates. The
+feed was already ~9h old and agreed by coincidence, because no gate had changed in between. Run 189
+measured the same feed still reading **9** against a true **10** — Clarke's 119 dispatch landed at
+16:44Z, seven hours after the feed was built. Nothing was broken; the comparison was never
+independent.
+
+Same family as **L242** (cross-checks that were not independent, and both wrong) and as the
+local-workspace rule above: _an artefact that is usually current is more dangerous than one that is
+obviously stale._ Before citing the feed, read its `generated_at` and ask whether the thing being
+corroborated could have changed since. For gates, it almost always could.
+
+Paths, because both have been fetched wrong: the feed is at **`/data/agentic-os-status.json`** and
+the page at **`/agentic-os/`**. Run 187 404'd on `/automation/agentic-os-status.json`; run 189 404'd
+on `/automation/agentic-os/`. Both read as an outage for about a minute. **`/automation/` is the
+workflow catalog — a different page.**
+
+## Two ledger citations into this file are stale, and the guard cannot see either (validated 2026-10-03, Conductor run 189)
+
+`test_lessons_ledger.py::test_every_source_citation_in_the_ledger_resolves_and_points_at_content`
+fires only when a cited line is **blank or a bare comment marker**. A citation that drifts onto any
+other text passes. Two rows are wrong on `main` right now:
+
+| row               | cites                       | actually at                       | what is at the cited line instead   |
+| ----------------- | --------------------------- | --------------------------------- | ----------------------------------- |
+| L180 (×2 columns) | `CLAUDE.md:547`             | **615**                           | merge-queue `--delete-branch` prose |
+| L147              | `CLAUDE.md:544,550,952,980` | `550` ✓, else **556, 1035, 1063** | unrelated lines at 544 / 952 / 980  |
+
+L180's drift surfaced only by accident: run 189 shifted lines by 24 and happened to move `:547` onto
+a blank line, which fired the guard. Had the shift been 23 or 25 it would still be hidden. L147's
+comma-list form appears not to be validated per-element at all.
+
+Both are **anchors, not content** — the rows' prose is right, the line numbers are not. Tracked on
+**#1455** (naming where a drifted anchor actually is) and **#1095** (the citation check).
+Deliberately not repaired here: `docs/lessons-ledger.md` is held by in-flight **#1500**, and run 188
+learned the hard way that "repairing" citations against the wrong revision breaks the suite. The
+lasting fix is to make the guard check that the line contains what the row describes — the two
+acceptance criteria above are the test cases.

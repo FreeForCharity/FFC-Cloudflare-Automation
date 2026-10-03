@@ -277,7 +277,22 @@ function main() {
   // site_name). Prefer it when the repo has it; a repo without it gets the
   // inline form. Checked rather than assumed, because these routes are written
   // into whatever repo the workflow is pointed at.
-  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'));
+  //
+  // The two FFC templates spell the helper differently and that is not
+  // cosmetic: the Single-Page template has `src/lib/page-metadata.ts` taking
+  // `canonical`, the Footer-Only template has `src/lib/pageMetadata.ts` taking
+  // `path`. Checking only the first spelling sent every Footer-Only repo down
+  // the inline path, whose relative `canonical: '/about/'` resolves against
+  // `metadataBase` -- the bare origin -- and so loses the GitHub Pages base
+  // path. Measured on FFC-EX-tamkeensports.org: every converted page
+  // canonicalised to `https://freeforcharity.github.io/about/`, a URL that
+  // serves FFC's own 404, while the template's own pages (through the helper)
+  // were right.
+  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'))
+    ? 'page-metadata'
+    : existsSync(join(repo, 'src', 'lib', 'pageMetadata.ts'))
+      ? 'pageMetadata'
+      : false;
 
   const { assigned, collisions, duplicates } = assignSlugs(htmlFiles);
   // Link rewriting is keyed on the path the capture actually wrote, because
@@ -1039,10 +1054,22 @@ function wireGeneratedComponents(repo) {
     done.push('clone-enhance already wired');
   } else {
     if (!hasCloneImport) {
+      // Anchor on the header import where there is one, else on the footer
+      // import. The Footer-Only template (FFC-IN-Footer_Only_Template) ships
+      // no header component at all -- its layout imports Footer, CookieConsent
+      // and GoogleTagManager and renders `{children}` straight after the skip
+      // link -- and a repo scaffolded from it (FFC-EX-tamkeensports.org, 706
+      // run 37065299694) failed the conversion on this anchor alone while the
+      // capture was 13/13. The footer import is matched in EITHER spelling
+      // because step 1 above has usually just repointed it at ffc-footer.
       const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
-      const m = headerImport.exec(source);
+      const footerImport =
+        /^([ \t]*import\s+Footer\s+from\s+)(['"])([^'"]*components\/)(?:ffc-)?footer\2/m;
+      const m = headerImport.exec(source) ?? footerImport.exec(source);
       if (!m) {
-        done.push('WARNING: no `import Header from .../header` to anchor the import to');
+        done.push(
+          'WARNING: no `import Header from .../header` or `import Footer from .../footer` to anchor the import to',
+        );
       } else {
         source = source.replace(
           m[0],
@@ -1051,15 +1078,28 @@ function wireGeneratedComponents(repo) {
       }
     }
     if (!hasCloneRender) {
-      // Rendered right after <Header />, which every FFC layout has.
+      // Rendered right after <Header /> where the layout has one. A
+      // Footer-Only layout has none, so there the runtime is rendered right
+      // before the `{children}` slot instead: still inside <body>, still on
+      // every route, which is all the component needs. `{children}` on its
+      // own line only -- a `<main>{children}</main>` is the header-template
+      // shape, and the <Header /> branch has already handled it.
       const render = /(\n?[ \t]*)<Header\s*\/>/;
+      const childrenSlot = /(\n[ \t]*)\{children\}/;
       if (render.test(source)) {
         source = source.replace(
           render,
           (_m2, indent) => `${indent}<Header />${indent}<CloneEnhance />`,
         );
+      } else if (childrenSlot.test(source)) {
+        source = source.replace(
+          childrenSlot,
+          (_m2, indent) => `${indent}<CloneEnhance />${indent}{children}`,
+        );
       } else {
-        done.push('WARNING: no `<Header />` to render `<CloneEnhance />` beside');
+        done.push(
+          'WARNING: no `<Header />` or `{children}` line to render `<CloneEnhance />` beside',
+        );
       }
     }
     // Reported from what the file NOW holds, not from which branch ran: a
@@ -1603,6 +1643,71 @@ function selfTest() {
         );
       } finally {
         rmSync(half, { recursive: true, force: true });
+      }
+
+      // FOOTER-ONLY TEMPLATE: no Header component anywhere, `{children}` on
+      // its own line between the skip link and <Footer />. This is the
+      // FFC-EX-tamkeensports.org layout, where 706 run 37065299694 captured
+      // 13/13 pages and then exited 1 on the missing <Header /> anchor.
+      const footerOnly = mkdtempSync(join(tmpdir(), 'ffc-wire-footer-only-'));
+      try {
+        mkdirSync(join(footerOnly, 'src', 'app'), { recursive: true });
+        const foPath = join(footerOnly, 'src', 'app', 'layout.tsx');
+        writeFileSync(
+          foPath,
+          [
+            "import './globals.css'",
+            "import Footer from './../components/footer'",
+            "import CookieConsent from './../components/cookie-consent'",
+            'export default function RootLayout({ children }) {',
+            '  return (',
+            '    <html lang="en">',
+            '      <body>',
+            '        <a href="#main-content">Skip</a>',
+            '        {children}',
+            '        <Footer />',
+            '        <CookieConsent />',
+            '      </body>',
+            '    </html>',
+            '  )',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+        const r = wireGeneratedComponents(footerOnly);
+        const fo = readFileSync(foPath, 'utf8');
+        eq('wire: a Footer-Only layout is edited', r.changed, true);
+        eq(
+          'wire: ...its footer import is repointed',
+          /import Footer from '\.\/\.\.\/components\/ffc-footer'/.test(fo),
+          true,
+        );
+        eq(
+          'wire: ...the runtime import is anchored on the footer import',
+          /ffc-footer'\nimport CloneEnhance from '\.\/\.\.\/components\/clone-enhance'/.test(fo),
+          true,
+        );
+        eq(
+          'wire: ...and rendered right before {children}',
+          /<CloneEnhance \/>\n[ \t]*\{children\}/.test(fo),
+          true,
+        );
+        eq('wire: ...with no warning', describeWiring(r).warnings.length, 0);
+        eq(
+          'wire: ...and reported as wired',
+          describeWiring(r).notes.includes('clone-enhance wired'),
+          true,
+        );
+        const again = wireGeneratedComponents(footerOnly);
+        eq('wire: a Footer-Only layout is idempotent', again.changed, false);
+        eq(
+          'wire: ...and the runtime is rendered exactly once',
+          (readFileSync(foPath, 'utf8').match(/<CloneEnhance \/>/g) || []).length,
+          1,
+        );
+      } finally {
+        rmSync(footerOnly, { recursive: true, force: true });
       }
 
       // A layout that does not match the template shape must be reported, not

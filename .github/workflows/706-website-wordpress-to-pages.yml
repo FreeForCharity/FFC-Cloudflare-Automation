@@ -1080,12 +1080,21 @@ jobs:
             echo "- No forms found; nothing to replace." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [ -z "$EMAIL" ]; then
-            echo "::error::$found captured page(s) carry a form, but contact_email was not set. A static site has no form backend, so shipping these would accept a visitor's message and drop it. Re-run with contact_email set."
-            exit 1
+          # Only a form that sends a message needs the address. Search forms are
+          # kept and sign-in forms removed without one, so a capture with only
+          # those must not be refused for a missing contact_email.
+          email_args=()
+          if [ -n "$EMAIL" ]; then
+            email_args=(--email "$EMAIL")
+          else
+            messages="$(node scripts/replace-forms-with-mailto.mjs --count-message-forms --dir "$site")"
+            if [ "$messages" -gt 0 ]; then
+              echo "::error::$messages captured form(s) send a message, but contact_email was not set. A static site has no form backend, so shipping these would accept a visitor's message and drop it. Re-run with contact_email set."
+              exit 1
+            fi
           fi
           node scripts/replace-forms-with-mailto.mjs \
-            --dir "$site" --email "$EMAIL" --subject "Website enquiry from $DOMAIN"
+            --dir "$site" ${email_args[@]+"${email_args[@]}"} --subject "Website enquiry from $DOMAIN"
           echo "pages_with_forms=$found" >> "$GITHUB_OUTPUT"
 
       # Deliberately unauthenticated: this job is the ungated lane, and giving it
@@ -1575,11 +1584,10 @@ jobs:
           fi
           # Forms were neutralized in `convert`, BEFORE the artifact was made.
           # Re-check here rather than trust it: this is the last point before a
-          # dead form would become a published page, and the check costs a grep.
-          if grep -rqIE '<form[[:space:]/>]' "$site" --include='*.html' --include='*.htm'; then
-            echo "::error::The downloaded capture still contains a <form> tag. A static export has no form backend, so this would publish a form that accepts a visitor's message and drops it."
-            exit 1
-          fi
+          # dead form would become a published page. Search forms are kept on
+          # purpose (they send nothing), so the check classifies each <form>
+          # rather than rejecting the tag outright.
+          node automation/scripts/replace-forms-with-mailto.mjs --check --dir "$site"
 
       - name: Check out the target FFC-EX repo (writable)
         uses: actions/checkout@v7.0.1

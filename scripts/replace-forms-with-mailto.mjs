@@ -11,9 +11,11 @@
  * fail on. Only a submission would reveal it, and by then a real person's
  * message is gone.
  *
- * So every <form> is replaced, in the markup, with a visible contact block
- * carrying a mailto: link. That is a deliberate downgrade, not a port: the
- * visitor loses in-page submission and gains a channel that actually delivers.
+ * So every form that sends a message is replaced, in the markup, with a
+ * visible contact block carrying a mailto: link. That is a deliberate
+ * downgrade, not a port: the visitor loses in-page submission and gains a
+ * channel that actually delivers. Search and sign-in forms send no message and
+ * are handled differently (see formKind).
  *
  * A form we cannot replace is a FAILURE, not a warning. Exit 3 leaves the
  * decision with an operator rather than shipping a dead form quietly.
@@ -125,23 +127,83 @@ export function mailtoBlock(email, subject) {
 }
 
 /**
- * Replace every closed <form> in `html`. Returns {html, replaced, unclosed}.
+ * What a form is for, judged from its own markup.
  *
- * `replaced` counts forms actually rewritten; `unclosed` counts forms left in
- * place because their extent could not be determined. A caller that treats
- * `unclosed > 0` as success ships a live-looking dead form, which is the whole
- * thing this script exists to prevent — so the CLI exits non-zero on it.
+ * - `search`: a GET with an `s` field or `role="search"`. It sends nothing to
+ *   anyone, so it stays: a mailto: block in the header search slot reads as a
+ *   contact box on every page, and the site decides separately whether to back
+ *   search with a static index or remove it.
+ * - `login`: a sign-in, registration or password-reset form (wp-login.php, a
+ *   password field, or WordPress's `log`/`user_login` fields). It is removed
+ *   with no replacement: there is no account to sign in to, and offering email
+ *   in place of a password box invites people to send credentials.
+ * - `message`: everything else, replaced with the mailto: block.
+ */
+export function formKind(formHtml) {
+  const open = (formHtml.match(/^<form[^>]*>/i) || [''])[0];
+  if (
+    /wp-login\.php/i.test(open) ||
+    /<input\b[^>]*\stype\s*=\s*["']?password\b/i.test(formHtml) ||
+    /<input\b[^>]*\sname\s*=\s*["']?(log|pwd|user_login)["'\s/>]/i.test(formHtml)
+  ) {
+    return 'login';
+  }
+  // `\s` before each attribute name, not `\b`: `\b` also matches after the
+  // hyphen in `data-name="user_login"`, which is not a field at all.
+  const isGet = !/\smethod\s*=\s*["']?post\b/i.test(open);
+  const hasQueryField = /<input\b[^>]*\sname\s*=\s*["']?s["'\s/>]/i.test(formHtml);
+  if (isGet && (hasQueryField || /\srole\s*=\s*["']?search\b/i.test(open))) return 'search';
+  return 'message';
+}
+
+/**
+ * Neutralize every closed <form> in `html`. Returns
+ * {html, replaced, removed, kept, unclosed}.
+ *
+ * `replaced` counts message forms rewritten to the mailto: block, `removed`
+ * sign-in forms dropped, and `kept` search forms left as they are. `unclosed`
+ * counts forms left in place because their extent could not be determined. A
+ * caller that treats `unclosed > 0` as success ships a live-looking dead form,
+ * which is the whole thing this script exists to prevent — so the CLI exits
+ * non-zero on it.
  */
 export function replaceForms(html, email, subject) {
   const { spans, unclosed } = findFormSpans(html);
-  if (!spans.length) return { html, replaced: 0, unclosed: unclosed.length };
+  const counts = { replaced: 0, removed: 0, kept: 0 };
+  if (!spans.length) return { html, ...counts, unclosed: unclosed.length };
   const block = mailtoBlock(email, subject);
   let out = html;
   // Splice from the end so earlier offsets stay valid.
   for (let i = spans.length - 1; i >= 0; i--) {
-    out = out.slice(0, spans[i].start) + block + out.slice(spans[i].end);
+    const kind = formKind(html.slice(spans[i].start, spans[i].end));
+    if (kind === 'search') {
+      counts.kept++;
+      continue;
+    }
+    const replacement = kind === 'login' ? '' : block;
+    counts[kind === 'login' ? 'removed' : 'replaced']++;
+    out = out.slice(0, spans[i].start) + replacement + out.slice(spans[i].end);
   }
-  return { html: out, replaced: spans.length, unclosed: unclosed.length };
+  return { html: out, ...counts, unclosed: unclosed.length };
+}
+
+/**
+ * The forms a neutralized page must not still carry: anything but a search
+ * form, plus any form whose extent cannot be determined. The delivery step
+ * re-checks the downloaded capture with this before it becomes a published
+ * page.
+ */
+export function messageFormCount(html) {
+  const { spans } = findFormSpans(html);
+  return spans.filter((span) => formKind(html.slice(span.start, span.end)) === 'message').length;
+}
+
+export function unsafeForms(html) {
+  const { spans, unclosed } = findFormSpans(html);
+  const kinds = spans
+    .map((span) => formKind(html.slice(span.start, span.end)))
+    .filter((kind) => kind !== 'search');
+  return [...kinds, ...unclosed.map(() => 'unclosed')];
 }
 
 /**
@@ -296,6 +358,99 @@ function selfTest() {
     true,
   );
 
+  // Real markup from newheightseducation.org (Jupiter on the apex and school.,
+  // Astra on publications.), where every page's header search became a
+  // contact block and school.'s sign-in popups became three of them.
+  const jupiterSearch =
+    '<form class="responsive-searchform" method="get" action="https://example.org/">' +
+    '<input type="text" class="text-input" value="" name="s" id="s" placeholder="Search.." />' +
+    '<i><input value="" type="submit" /></i></form>';
+  const overlaySearch =
+    '<form method="get" id="mk-fullscreen-searchform" action="https://example.org/">' +
+    '<input type="text" value="" name="s" id="mk-fullscreen-search-input" /></form>';
+  const astraSearch =
+    '<form role="search" method="get" class="search-form" action="https://example.org/">' +
+    '<label for="search-field"><input type="search" id="search-field" class="search-field" ' +
+    'placeholder="Search..." value="" name="s"></label></form>';
+  const login =
+    '<form id="mk_login_form" method="post" class="mk-login-form" action="https://example.org/wp-login.php">' +
+    '<input type="text" id="username" name="log"><input type="password" id="password" name="pwd"></form>';
+  const register =
+    '<form id="register_form" method="post" action="https://example.org/wp-login.php?action=register">' +
+    '<input type="text" name="user_login"><input type="text" name="user_email"></form>';
+  const lostPassword =
+    '<form id="forgot_form" method="post" action="https://example.org/wp-login.php?action=lostpassword">' +
+    '<input type="text" name="user_login"></form>';
+  const caldera =
+    '<form class="CF57ed5808ea4f5 caldera_forms_form" method="POST" data-form-id="CF57ed5808ea4f5">' +
+    '<input type="text" name="fld_8768091"><textarea name="fld_7683514"></textarea></form>';
+
+  eq(
+    'formKind keeps the three header search forms as search',
+    [jupiterSearch, overlaySearch, astraSearch].map(formKind),
+    ['search', 'search', 'search'],
+  );
+  eq(
+    'formKind marks sign-in, registration and password-reset forms as login',
+    [login, register, lostPassword].map(formKind),
+    ['login', 'login', 'login'],
+  );
+  eq('formKind leaves a contact form as a message form', formKind(caldera), 'message');
+  eq(
+    'a POST form with a field named s still counts as a message form',
+    formKind('<form method="post"><input name="s"><textarea name="m"></textarea></form>'),
+    'message',
+  );
+  eq(
+    'a GET form with no search field is still a message form',
+    formKind('<form action="/x"><input name="email"></form>'),
+    'message',
+  );
+  eq(
+    'replaceForms keeps search, removes sign-in and replaces only the contact form',
+    (() => {
+      const block = mailtoBlock('i@e.org', '');
+      const r = replaceForms(
+        `<nav>${jupiterSearch}</nav><div>${login}</div><main>${caldera}</main>${overlaySearch}`,
+        'i@e.org',
+        '',
+      );
+      return [
+        r.replaced,
+        r.removed,
+        r.kept,
+        r.html === `<nav>${jupiterSearch}</nav><div></div><main>${block}</main>${overlaySearch}`,
+      ];
+    })(),
+    [1, 1, 2, true],
+  );
+
+  eq(
+    'a data- attribute that ends in a field name is not that field',
+    [
+      formKind('<form method="post"><input data-name="user_login" name="email"></form>'),
+      formKind('<form><input data-type="password" name="code"></form>'),
+      formKind('<form data-method="post"><input name="s"></form>'),
+    ],
+    ['message', 'message', 'search'],
+  );
+  eq(
+    'messageFormCount counts only forms that send a message',
+    [
+      messageFormCount(`${jupiterSearch}${login}`),
+      messageFormCount(`${jupiterSearch}${caldera}${register}`),
+    ],
+    [0, 1],
+  );
+  eq(
+    'unsafeForms allows search forms and reports every other kind',
+    [
+      unsafeForms(`<nav>${jupiterSearch}</nav>${astraSearch}`),
+      unsafeForms(`${jupiterSearch}${caldera}${login}<form>open`),
+    ],
+    [[], ['message', 'login', 'unclosed']],
+  );
+
   // htmlFilesUnder touches the filesystem, so it gets a real tree rather than
   // no coverage. The consequence of a widened filter is not a wrong count: the
   // caller REWRITES every path this returns, so a stylesheet or a minified
@@ -361,19 +516,52 @@ function arg(name, def = '') {
 if (isMain) {
   if (process.argv.includes('--self-test')) {
     selfTest();
+  } else if (process.argv.includes('--count-message-forms')) {
+    // How many forms would need the mailto: block. The workflow asks before it
+    // insists on a contact address: a capture whose only forms are search or
+    // sign-in forms needs none.
+    const dir = arg('dir');
+    if (!dir) {
+      console.error(
+        'Usage: node scripts/replace-forms-with-mailto.mjs --count-message-forms --dir <siteRoot>',
+      );
+      process.exit(64);
+    }
+    let total = 0;
+    for (const f of htmlFilesUnder(dir)) total += messageFormCount(readFileSync(f, 'utf8'));
+    console.log(total);
+  } else if (process.argv.includes('--check')) {
+    const dir = arg('dir');
+    if (!dir) {
+      console.error('Usage: node scripts/replace-forms-with-mailto.mjs --check --dir <siteRoot>');
+      process.exit(64);
+    }
+    const offenders = [];
+    for (const f of htmlFilesUnder(dir)) {
+      const kinds = unsafeForms(readFileSync(f, 'utf8'));
+      if (kinds.length) offenders.push(`${relative(dir, f)}: ${kinds.join(', ')}`);
+    }
+    if (offenders.length) {
+      console.error(
+        `::error::${offenders.length} page(s) still carry a form that is not a search form. A static export has no form backend, so this would publish a form that accepts a visitor's message and drops it.\n` +
+          offenders.slice(0, 20).join('\n'),
+      );
+      process.exit(1);
+    }
+    console.log('No message, sign-in or unclosed forms remain; only search forms.');
   } else {
     const dir = arg('dir');
     const email = arg('email');
     const subject = arg('subject', '');
     const dryRun = process.argv.includes('--dry-run');
 
-    if (!dir || !email) {
+    if (!dir) {
       console.error(
-        'Usage: node scripts/replace-forms-with-mailto.mjs --dir <siteRoot> --email <addr> [--subject "<line>"] [--dry-run]',
+        'Usage: node scripts/replace-forms-with-mailto.mjs --dir <siteRoot> [--email <addr>] [--subject "<line>"] [--dry-run]',
       );
       process.exit(64);
     }
-    if (!isPlausibleEmail(email)) {
+    if (email && !isPlausibleEmail(email)) {
       console.error(
         `::error::--email '${email}' is not a plausible address. It becomes the site's only contact channel; a typo here silently ends every conversation.`,
       );
@@ -399,9 +587,20 @@ if (isMain) {
       );
       process.exit(66);
     }
+    // Only a message form needs the address. Without one, search and sign-in
+    // forms are still handled; a message form is refused rather than replaced
+    // with a mailto: that goes nowhere.
+    if (!email && htmlFiles.some((f) => messageFormCount(readFileSync(f, 'utf8')) > 0)) {
+      console.error(
+        '::error::--email is required: at least one form sends a message and needs the mailto: block.',
+      );
+      process.exit(64);
+    }
 
     let files = 0;
     let replaced = 0;
+    let removed = 0;
+    let kept = 0;
     let unclosed = 0;
     const unclosedFiles = [];
     for (const f of htmlFiles) {
@@ -411,19 +610,24 @@ if (isMain) {
         unclosed += r.unclosed;
         unclosedFiles.push(f);
       }
-      if (r.replaced) {
+      kept += r.kept;
+      if (r.replaced || r.removed) {
         files++;
         replaced += r.replaced;
+        removed += r.removed;
         if (!dryRun) writeFileSync(f, r.html, 'utf8');
       }
     }
 
     const verb = dryRun ? 'would replace' : 'replaced';
-    console.log(`${verb} ${replaced} form(s) across ${files} file(s) under ${dir}`);
+    console.log(
+      `${verb} ${replaced} form(s) and removed ${removed} sign-in form(s) across ${files} file(s) under ${dir}; kept ${kept} search form(s)`,
+    );
     if (process.env.GITHUB_STEP_SUMMARY) {
       writeFileSync(
         process.env.GITHUB_STEP_SUMMARY,
         `\n### Forms\n\n- ${verb} **${replaced}** form(s) across **${files}** file(s) with a mailto: block for \`${email}\`\n` +
+          `- removed **${removed}** sign-in form(s); kept **${kept}** search form(s)\n` +
           (unclosed
             ? `- ⚠️ **${unclosed}** unclosed form tag(s) left in place — see the job log\n`
             : ''),

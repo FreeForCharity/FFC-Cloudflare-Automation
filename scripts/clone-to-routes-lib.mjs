@@ -972,10 +972,33 @@ export function collectHeadings(html) {
       level: Number(m[1]),
       attrs: m[2],
       module: mods ? mods[mods.length - 1] : null,
-      inChrome: /_tb_(header|footer)$/.test(mods ? mods[mods.length - 1] : ''),
+      inChrome:
+        /_tb_(header|footer)$/.test(mods ? mods[mods.length - 1] : '') || isSiteTitleHeading(m[2]),
     });
   }
   return out;
+}
+
+/**
+ * Is this heading the theme's site title, i.e. chrome rather than content?
+ *
+ * The Divi detection above reads the template-part class off the enclosing
+ * module, which a block theme does not have. Twenty Twenty-Five renders the
+ * site name as `<h1 class="wp-block-site-title">` inside the header template
+ * part on every page, and classic themes use `site-title` for the same
+ * element. Measured on tamkeensports.org: with neither recognised as chrome,
+ * the plan made "Tamkeen Sports" the h1 of all 13 pages and demoted every
+ * page's own title -- "ABOUT US", "UPCOMING EVENTS" -- to h2. A site name is
+ * never what a page is about, which is exactly the rule the Divi branch
+ * already encodes.
+ *
+ * Tokens are split, not pattern-matched (the `widgettitle` lesson): a class
+ * such as `site-title-wrapper` is not the site title.
+ */
+function isSiteTitleHeading(attrs) {
+  const cls = /\sclass\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const tokens = (cls?.[2] ?? cls?.[3] ?? '').split(/\s+/).filter(Boolean);
+  return tokens.includes('wp-block-site-title') || tokens.includes('site-title');
 }
 
 /**
@@ -2874,6 +2897,33 @@ function selfTest() {
     [1],
   );
   eq('a page with no headings plans nothing', planHeadingLevels(collectHeadings('<p>hi</p>')), []);
+  // A block theme's site title is chrome: the page's own heading stays the
+  // h1 and the site name nests under it. Without this every page of a
+  // Twenty Twenty-Five capture was titled by the site name.
+  eq(
+    'a block-theme site title is chrome, not the primary heading',
+    planHeadingLevels(
+      collectHeadings(
+        '<header><h1 class="wp-block-site-title">Site</h1></header><main><h1 class="wp-block-heading">About</h1><h2>Sub</h2></main>',
+      ),
+    ).map((h) => h.newLevel),
+    [2, 1, 2],
+  );
+  eq(
+    'a classic-theme site-title class is chrome too, and a look-alike token is not',
+    [
+      planHeadingLevels(collectHeadings('<h1 class="site-title">Site</h1><h1>Page</h1>')).map(
+        (h) => h.newLevel,
+      ),
+      planHeadingLevels(
+        collectHeadings('<h1 class="site-title-wrapper">First</h1><h1>Second</h1>'),
+      ).map((h) => h.newLevel),
+    ],
+    [
+      [2, 1],
+      [1, 2],
+    ],
+  );
 
   // --- the CSS half --------------------------------------------------
   // Measured regression: the front page's white h1 on the site's blue #1c75b9

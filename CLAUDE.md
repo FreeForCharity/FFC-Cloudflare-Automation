@@ -1672,3 +1672,65 @@ Two habits that do:
   returning an identical count is the signature of neither filter running — the same reason
   `audit-agentic-os-board.py` prints `expected=N board=M` rather than just reporting "0 missing"
   (#966).
+
+## "Green on `main`, red on the branch" is only a control if the branch is the ONLY thing that moved (run 188, 2026-10-03)
+
+Running `main` as a control is the right instinct, and this file should record what it costs. Run
+187 used it to settle a PR's local test counts, correctly. Run 188 used the same move on **748**,
+the template-provisioning matrix, and the control was **void** — because 748 is not a function of
+this repository alone.
+
+`748-template-provisioning-matrix.yml` checks out each template repo with `repository:` and **no
+`ref:`**, so every cell is judged against that template's **default branch at run time**. "748
+passed on `main` at 08:38Z and fails on this branch at 15:02Z" therefore holds two variables, and
+the one that actually moved was the template.
+
+Measured on #1431, which had not been pushed for four days. Re-running its failed legs produced a
+**different** verdict from an unchanged branch, and across the two runs its red cells had **three
+distinct causes, every one of them template-side**:
+
+| cause                                              | origin                                           | status now                                                     |
+| -------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| `guidestar.profileUrl: must be a non-empty string` | `"minLength": 1` in the templates' shared schema | relaxed by the template two hours **before** the run it failed |
+| `Unable to find an element with the alt text: …`   | a one-line miss in template commit `61afce8`     | fixed by that commit's immediate successor                     |
+| `error TS2741: Property 'sealUrl' is missing`      | template made the field required on 2026-10-01   | live; #1507                                                    |
+
+So the verdict changed twice while the thing under test held still, and in both directions.
+
+- **Before reasoning from a cross-repo CI result, ask what else it checks out.**
+  `grep -n 'repository:' <workflow>` answers it. A `repository:` with no `ref:` means the result is
+  dated rather than reproducible, and two runs of it are two experiments, not a retry.
+- **The SHA is the evidence and it is nearly invisible.** It appears once per job, inside the second
+  `##[group]Checking out the ref`, as the output of `git log -1 --format=%H` — not in the run
+  metadata, the job name, or the step summary, and **raw logs expire**, after which the input cannot
+  be recovered at any price. Record it whenever you reason from the result (#1508).
+- **Date the failure against the OTHER repo's history, not only this one's.** What falsified run
+  188's control was `git log` in the template clone: the commit the matrix had cloned was the one
+  that introduced the bug, and the fix was its very next commit. That read is cheap, and it is the
+  only thing that distinguishes "the PR broke it" from "we cloned it broken".
+- **A red that outlives its cause is worse than a red.** #1431 sat four days carrying two causes
+  already fixed upstream, with nothing on the PR to say so. When you trace a PR's red to another
+  repo, write it on the PR — the author cannot see what you just measured.
+
+Same family as the background-suite and wrong-baseline rules above: the measurement is sound and its
+**referent** has moved, so every usual tell — an error, a crash, a non-zero exit — is absent.
+
+### A corollary that cost this run a wrong accusation
+
+Applying the rule above to **#1450 itself**, the Conductor read that PR's CLAUDE.md insertion (`+43`
+lines at `:414`), checked the two `CLAUDE.md:<line>` citations the ledger carries, found the cited
+content displaced, and concluded the PR silently broke them. It had not: the **same commit** updates
+those citations from `:544/:547` to `:587/:590`, and `test_lessons_ledger.py` passes on it 56/0.
+
+The error was diagnosing from a **partial diff** — `git diff … -- CLAUDE.md` rather than the whole
+change — and then checking the branch's citation numbers against `main`'s file, which is guaranteed
+to disagree whenever a PR legitimately shifts lines. The repair the Conductor applied on that false
+premise is what actually broke the test, and the guard caught it in one run.
+
+- **`git diff origin/main...HEAD --stat` before judging placement**, never a single-path diff. A
+  citation and its target are two files, so a one-file diff cannot show a consistent change.
+- **Verify a citation against the tree it lives in.** Resolve `<file>:<line>` in the same ref as the
+  ledger that cites it; comparing across refs measures the shift, not the correctness.
+- And note which claim was wrong first: _"no CI guard covers these citations"_. The guard exists,
+  runs in `tests/workflow-logic/test_lessons_ledger.py`, and names the row, the column and the
+  reason. Check for the guard before concluding prose is the only tier.

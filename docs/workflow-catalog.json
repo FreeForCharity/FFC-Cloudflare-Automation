@@ -1589,10 +1589,10 @@
       "environments": [
         "github-prod"
       ],
-      "description": "Regenerates an FFC-EX site as a faithful static clone of the live WordPress site and opens a PR on the target FFC-EX repo. Pipeline (all proven locally): clone-site-static.mjs (httrack) -> integrate-clone-into-nextjs.mjs -> next build (output: 'export') so the Next.js app serves the exact clone. See docs/ffc-ex-static-clone-runbook.md.  Auth: uses CBM_TOKEN (cross-repo PAT, same secret create-repo.yml uses) to check out the FFC-EX repo and push a branch + open a PR there. Non-destructive: it never pushes to the FFC-EX default branch, only opens a PR for review.",
+      "description": "Regenerates an FFC-EX site as a faithful static clone of the live WordPress site and opens a PR on the target FFC-EX repo. Pipeline (all proven locally): clone-site-static.mjs (httrack) -> integrate-clone-into-nextjs.mjs -> next build (output: 'export') so the Next.js app serves the exact clone. See docs/ffc-ex-static-clone-runbook.md.  Auth: uses CBM_TOKEN (cross-repo PAT, same secret create-repo.yml uses) to check out the FFC-EX repo and push a branch + open a PR there. Non-destructive: it never pushes to the FFC-EX default branch, only opens a PR for review.  The github-prod approval is the only human stop, and the approver sees nothing but the run name and the run summary before clicking \"Approve\". So the ungated preflight writes the whole plan into that summary once every check has passed: the resolved target repo, the credential the gate releases, every input, the steps in order, and -- in one unmissable line -- whether this run writes (dry_run=false: push a NEW branch + open a DRAFT PR) or writes nothing.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 github-prod",
-      "guard": "ungated preflight (repo must exist; refuses live sites and sibling-domain repos unless `force=true`); opens a draft PR (never pushes); serialized",
+      "guard": "ungated preflight (repo must exist; refuses live sites and sibling-domain repos unless `force=true`) that prints the approver's plan into the run summary (target repo, branch, draft PR, credential, every input, and whether the run writes); opens a draft PR (never pushes to `main`); serialized",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

@@ -1460,7 +1460,19 @@ export function scopeCloneCss(css, wrapper = 'ffc-clone') {
     if (ch === '{') {
       const prelude = buf;
       buf = '';
-      const trimmed = prelude.trim();
+      // Comments are whitespace to the parser and must be to this test too.
+      // The prelude is copied with its comments intact (they are harmless in
+      // a selector list: `.ffc-clone /* c */ .a` reads as `.ffc-clone .a`),
+      // but an at-rule BEHIND a comment -- `/* Mobile */ @media (...)` --
+      // starts with `/`, not `@`, so it used to be scoped as a selector and
+      // emitted as `.ffc-clone /* Mobile */ @media (...){...}`. That is not a
+      // valid rule, and the browser drops the whole block without a word.
+      // Measured on tamkeensports.org: the WPForms block's only mobile rule
+      // (`max-width: unset` under 600px) went that way, the form stayed at
+      // its desktop 500px, and the home page overflowed a 393px phone by
+      // 137px -- which pushed the navigation overlay's close button off the
+      // screen.
+      const trimmed = prelude.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       const isAtRule = trimmed.startsWith('@');
       const insideKeyframes = keyframesDepth !== -1 && depth > keyframesDepth;
       if (isAtRule || insideKeyframes) {
@@ -3588,6 +3600,19 @@ function selfTest() {
     'a rule inside a media query is scoped, its at-rule prelude is not',
     scopeCloneCss('@media (max-width:600px){h2{font-size:1rem}}').css,
     '@media (max-width:600px){.ffc-clone h2{font-size:1rem}}',
+  );
+  // A comment ahead of the at-rule is whitespace to the browser; it must not
+  // turn the prelude into a "selector". Scoped, `.ffc-clone /* m */ @media`
+  // is invalid and the whole block is dropped silently.
+  eq(
+    'a comment before an at-rule does not get it scoped as a selector',
+    scopeCloneCss('/* m */ @media (max-width:600px){h2{font-size:1rem}}').css,
+    '/* m */ @media (max-width:600px){.ffc-clone h2{font-size:1rem}}',
+  );
+  eq(
+    'a comment before a selector still scopes the selector',
+    scopeCloneCss('/* c */ .a{x:y}').css,
+    '.ffc-clone /* c */ .a{x:y}',
   );
   // Keyframe "selectors" are percentages; a prefix destroys the animation.
   eq(

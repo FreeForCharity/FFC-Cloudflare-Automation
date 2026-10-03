@@ -402,6 +402,65 @@ function wireBlockNavigation(opener: Element): Teardown | null {
 }
 
 /**
+ * The core navigation block's submenu toggles (the chevron next to "Events").
+ *
+ * Core's stylesheet shows a submenu in three ways: on hover, via
+ * `:focus-within` for a block set to open on hover only, and via the toggle
+ * button -- `.wp-block-navigation-submenu__toggle[aria-expanded=true] ~
+ * .wp-block-navigation__submenu-container`. This block is `open-on-hover-click`,
+ * which core excludes from the `:focus-within` rule on purpose: the button is
+ * the keyboard path. The Interactivity API runtime set `aria-expanded` on it,
+ * and the capture strips that runtime, so measured on the converted site a
+ * Tab stop landed on "Events submenu", Enter did nothing, and a keyboard
+ * visitor had no way to reach Chicago or Dallas from the menu. Hover and the
+ * mobile overlay (where the submenu is always expanded) were unaffected.
+ *
+ * Setting the attribute is the whole fix; the stylesheet does the rest.
+ * Escape closes the submenu and returns focus to the toggle, and focus
+ * leaving the item closes it, as core did.
+ */
+const BLOCK_SUBMENU_TOGGLE = '.wp-block-navigation-submenu__toggle'
+
+function wireBlockSubmenu(toggle: Element): Teardown | null {
+  if (!(toggle instanceof HTMLElement)) return null
+  const item = toggle.closest<HTMLElement>('.wp-block-navigation-submenu, .has-child')
+  const container = item?.querySelector<HTMLElement>('.wp-block-navigation__submenu-container')
+  if (!item || !container || !container.querySelector('a')) return null
+
+  const isOpen = () => toggle.getAttribute('aria-expanded') === 'true'
+  const setOpen = (next: boolean) => toggle.setAttribute('aria-expanded', next ? 'true' : 'false')
+  setOpen(false)
+
+  const onClick = (event: Event) => {
+    event.preventDefault()
+    setOpen(!isOpen())
+  }
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' && event.key !== 'Esc') return
+    if (!isOpen()) return
+    setOpen(false)
+    toggle.focus()
+  }
+  // Closes when focus moves outside the item, so a keyboard visitor tabbing
+  // past the last submenu link does not leave it hanging open. `relatedTarget`
+  // is null when focus leaves the document; that closes it too.
+  const onFocusOut = (event: FocusEvent) => {
+    const next = event.relatedTarget
+    if (next instanceof Node && item.contains(next)) return
+    setOpen(false)
+  }
+
+  toggle.addEventListener('click', onClick)
+  item.addEventListener('keydown', onKeyDown as EventListener)
+  item.addEventListener('focusout', onFocusOut as EventListener)
+  return () => {
+    toggle.removeEventListener('click', onClick)
+    item.removeEventListener('keydown', onKeyDown as EventListener)
+    item.removeEventListener('focusout', onFocusOut as EventListener)
+  }
+}
+
+/**
  * Reveal Divi's scroll-in elements.
  *
  * Divi hides `.et-waypoint` at `opacity: 0` and reveals it from a scroll
@@ -450,6 +509,10 @@ export default function CloneEnhance() {
     // Block themes (core navigation block) match neither of the above.
     document.querySelectorAll(BLOCK_NAV_OPEN).forEach((opener) => {
       const off = wireBlockNavigation(opener)
+      if (off) teardowns.push(off)
+    })
+    document.querySelectorAll(BLOCK_SUBMENU_TOGGLE).forEach((toggle) => {
+      const off = wireBlockSubmenu(toggle)
       if (off) teardowns.push(off)
     })
     const offWaypoints = wireWaypoints()

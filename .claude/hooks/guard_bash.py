@@ -1340,17 +1340,57 @@ def main():
     # claim is taken on the only host that can make it. The condition is written
     # so an error in it costs a false NEGATIVE and never a false positive: a
     # `?`-bearing quoted endpoint stays allowed, exactly as on `main`.
+    # The true predicate is "leading slash AND no `?`". The lookbehind above
+    # encodes "leading slash AND unquoted", and `unquoted` is a PROXY for `will
+    # be mangled` that is wrong in both directions -- measured in both quadrants
+    # by Conductor run 190:
+    #
+    #   quoted, no query   `gh api "/…/pending_deployments"`   mangled, ALLOWED
+    #   bare, with query   `gh api /…/runs?status=waiting`     works,   BLOCKED
+    #
+    # So read the endpoint as a WORD and decide on the word. `_gh_api_endpoint`
+    # already skips flags and their operands, strips the quotes and splits off
+    # the query, which is the whole predicate without another lookaround.
+    #
+    # The regex stays as a fallback, because the word reader gives up early on a
+    # QUOTED FLAG OPERAND containing a space: `-H 'Accept: application/json'`
+    # tokenizes on whitespace, so it returns `application/json` and never reaches
+    # the endpoint. That is why the exemption below is conditional on the word it
+    # found actually being a slashed path -- an operand that merely contains a
+    # `?` must not exempt a command whose real endpoint is mangled.
+    #
+    # ⚠️ `?` suppression is measured on git-bash (run 190 printed argv[1]: a `?`
+    # anywhere, even trailing with nothing after it, leaves the argument intact;
+    # every other leading-slash argument is rewritten). This host is Linux and
+    # cannot observe MSYS path conversion, so that half is inherited. Being wrong
+    # about it costs a retry on the error the rule describes -- which is the cost
+    # this rule exists to save, not a security boundary -- while being wrong in
+    # the other direction blocks correct commands and teaches people to route
+    # around the guard (the run-161 failure in point 1 of #1313).
     endpoint_candidates = [cmd]
     endpoint_candidates += list(_shell_c_payloads(cmd))
     endpoint_candidates += list(_substitution_sources(cmd))
-    quoted_endpoint = False
+    # Two flags, not one value with a sentinel. The first draft of this stored
+    # `query` and tested it for None, which collided with "the reader found no
+    # slashed path" -- so a quoted endpoint with no query string, the very case
+    # this round exists to catch, fell through to the regex and was allowed. That
+    # is the same `""`-versus-`None` conflation fixed in `_gh_api_endpoint` just
+    # below, reintroduced one level up by reusing its return value as a sentinel.
+    found_slashed = False
+    has_query = False
     for text in endpoint_candidates:
         path, query = _gh_api_endpoint(text)
-        if path and path.startswith("/") and query is None:
-            quoted_endpoint = True
+        if path and path.startswith("/"):
+            found_slashed = True
+            has_query = query is not None
             break
 
-    if quoted_endpoint or any(re.search(endpoint_re, text) for text in candidates):
+    if found_slashed:
+        mangled = not has_query
+    else:
+        mangled = any(re.search(endpoint_re, text) for text in candidates)
+
+    if mangled:
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "

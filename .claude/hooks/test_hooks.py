@@ -692,16 +692,25 @@ RULES = [
          'gh api "repos/o/r/issues"', ALLOW),
         ("a slashed path in a quoted field value allowed",
          'gh api repos/o/r/issues -f body="see /markdown"', ALLOW),
-        # KNOWN FALSE POSITIVE, pinned deliberately at `main`'s behaviour: a BARE
-        # endpoint carrying a `?` is not mangled, and both guards block it. The
-        # fix is a LOOSENING, and it rests entirely on the inherited `?`
-        # measurement -- so it is not taken here. Retire these two rows when a
-        # second reading on a Windows host confirms `?` suppression; until then
-        # blocking a working command is the cheaper error.
-        ("bare endpoint with a query string still blocks (known FP, #1313 r12)",
-         "gh api /repos/o/r/actions/runs?status=waiting", BLOCK),
-        ("bare endpoint with a bare trailing ? still blocks (known FP, #1313 r12)",
-         "gh api /repos/o/r/actions/runs?", BLOCK),
+        # The other quadrant, and `main` gets it wrong in the opposite direction:
+        # a BARE endpoint carrying a `?` is NOT mangled, and `main` blocks it.
+        # `gh api /repos/<o>/<r>/actions/runs?status=waiting` is how one lists
+        # pending gates -- an ordinary read, refused with advice that does not
+        # describe a real failure for that argument. Same harm as the run-161
+        # over-block in point 1 of #1313: a guard that fires on correct commands
+        # teaches its users to route around it.
+        ("bare endpoint with a query string allowed",
+         "gh api /repos/o/r/actions/runs?status=waiting", ALLOW),
+        ("bare endpoint with a bare trailing ? allowed",
+         "gh api /repos/o/r/actions/runs?", ALLOW),
+        # The regex fallback has to survive, and this is the row that proves it:
+        # the word reader tokenizes on whitespace, so a quoted flag operand with
+        # a space in it (`-H 'Accept: application/json'`) makes it return
+        # `application/json` and never reach the endpoint. It is already a BLOCK
+        # row above; this is its `?` sibling, which must NOT be exempted by a
+        # question mark sitting in an OPERAND rather than in the endpoint.
+        ("a ? in a flag operand does not exempt a mangled endpoint",
+         "gh api -H 'Accept: application/vnd?x' /markdown", BLOCK),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a

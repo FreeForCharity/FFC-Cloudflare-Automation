@@ -29,6 +29,33 @@ on:
         required: false
         type: boolean
         default: false
+      ai_crawlers:
+        description:
+          "AI crawlers on the new zone. Cloudflare BLOCKS AI bots on every new zone by default;
+          FFC's default is the opposite, because a charity's public site exists to be found. 'allow'
+          (default) turns Block AI Bots and the AI Labyrinth OFF right after the create; 'block'
+          keeps Cloudflare's default; 'skip' leaves the setting untouched."
+        required: false
+        type: choice
+        options:
+          - allow
+          - block
+          - skip
+        default: allow
+      custom_nameservers:
+        description:
+          "Delegate the new zone to FFC's ACCOUNT custom nameservers (ns1/ns2.freeforcharity.org),
+          the pair every FFC zone uses and the pair 102 and the onboarding docs hand to charities.
+          Cloudflare assigns each zone its own pair instead and nothing enabled the account pair per
+          zone until this step. 'enable' (default) switches it on; 'skip' leaves the zone on its
+          assigned pair. FFC account only: the toggle enables the OWNING account's pair, and only
+          the FFC account carries one, so a CM zone keeps its assigned pair whatever this says."
+        required: false
+        type: choice
+        options:
+          - enable
+          - skip
+        default: enable
 
 permissions:
   contents: read
@@ -99,3 +126,81 @@ jobs:
               -Account "${{ inputs.account }}" `
               -ZoneType "${{ inputs.zone_type }}"
           }
+
+      # Every FFC zone delegates to the ACCOUNT custom nameservers
+      # (ns1/ns2.freeforcharity.org): 102 hands those names to the registrar
+      # and the onboarding docs hand them to charities. The Cloudflare side is
+      # a per-zone toggle that nothing in this repo set, so a zone this
+      # workflow created came up on its assigned pair (measured 2026-10-02,
+      # newheightseducation.org: dane/zainab.ns.cloudflare.com) and the names
+      # the charity was given would not have been authoritative for it.
+      # Runs on an existing zone too (the create step exits 0 on "already
+      # exists"), so re-dispatching 110 converges an older zone.
+      # `custom_nameservers` is a `type: choice` and travels by env with a
+      # `default` arm that fails; `skip` never reaches the body. Neither does
+      # a CM zone: the toggle enables the OWNING account's custom pair, and
+      # only the FFC account has one configured, so on a CM zone the call
+      # would either delegate to a different pair or fail the run after the
+      # zone was created. The `if:` scopes it to `account: FFC`.
+      - name: Enable FFC custom nameservers (account pair)
+        if: ${{ inputs.custom_nameservers != 'skip' && inputs.account == 'FFC' }}
+        shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_CUSTOM_NS: ${{ inputs.custom_nameservers }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Same fail-closed guard as the create step above (L214).
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call cloudflare-custom-nameservers.ps1 with an empty -Zone.'
+            exit 1
+          }
+          switch ([string]$env:IN_CUSTOM_NS) {
+            'enable' { $mode = '-Enable' }
+            default {
+              Write-Output "::error::Unsupported custom_nameservers value '$($env:IN_CUSTOM_NS)' (expected enable; skip never reaches this step)."
+              exit 1
+            }
+          }
+          pwsh -NoProfile -File scripts/cloudflare-custom-nameservers.ps1 -Zone $env:IN_DOMAIN $mode
+
+      # Cloudflare blocks AI crawlers on every NEW zone by default (Block AI Bots
+      # on, plus the AI Labyrinth where the plan carries it). FFC's default is
+      # the opposite: the sites it hosts are charities' public information, and
+      # being readable by assistants and search engines is the point of
+      # publishing them. So the posture is set HERE, in the same approved run
+      # that created the zone, rather than left to a later dispatch nobody
+      # remembers. 106 re-applies it on every enforce run, so a zone that
+      # predates this step converges too.
+      #
+      # `ai_crawlers` is a `type: choice`, so GitHub constrains its value - and
+      # it still travels by `env:` with a `default` arm that fails, never
+      # interpolated into the body. `skip` never reaches the body at all.
+      # scripts/cloudflare-ai-crawlers.ps1 re-reads the zone after the write
+      # and fails closed on a bot_management shape it does not recognise;
+      # tests/workflow-logic/test_cloudflare_ai_crawlers_wiring.py pins this
+      # step's wiring and the input's `allow` default.
+      - name: Set AI-crawler posture (FFC default allow)
+        if: ${{ inputs.ai_crawlers != 'skip' }}
+        shell: pwsh
+        env:
+          IN_DOMAIN: ${{ inputs.domain }}
+          IN_AI_CRAWLERS: ${{ inputs.ai_crawlers }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Same fail-closed guard as the create step above (L214): an unmapped
+          # env: var renders as NO ARGUMENT to a native command, so -Zone would
+          # bind to the posture switch and the error would name the wrong thing.
+          if ([string]::IsNullOrWhiteSpace($env:IN_DOMAIN)) {
+            Write-Output '::error::IN_DOMAIN is empty: the step-level env: mapping is missing or misnamed, or the dispatch supplied a blank domain. Refusing to call cloudflare-ai-crawlers.ps1 with an empty -Zone.'
+            exit 1
+          }
+          switch ([string]$env:IN_AI_CRAWLERS) {
+            'allow' { $posture = '-Allow' }
+            'block' { $posture = '-Block' }
+            default {
+              Write-Output "::error::Unsupported ai_crawlers value '$($env:IN_AI_CRAWLERS)' (expected allow or block; skip never reaches this step)."
+              exit 1
+            }
+          }
+          pwsh -NoProfile -File scripts/cloudflare-ai-crawlers.ps1 -Zone $env:IN_DOMAIN $posture

@@ -11,7 +11,11 @@ consequences:
 - **Internal / FFC-tenant workflows — `301`–`306` (named `M365 (FFC Tenant) - …`).** These
   authenticate to **FFC's own Microsoft 365 tenant** (Graph / Exchange Online) and act on it: `305`
   **adds a domain to the FFC tenant**, `304` enables DKIM in FFC's Exchange Online, `301`–`303` read
-  FFC-tenant state. Only use these for domains whose mailboxes FFC itself hosts.
+  FFC-tenant state. They are for **FFC's own internal projects only** — FFC never hosts a charity's
+  email in its tenant, so these are **never run for an external charity**. Every charity applies for
+  and owns its own Microsoft 365 (nonprofit) or Google Workspace for Nonprofits tenant, with FFC's
+  help. A charity that wants this automation may **copy** these workflows to run against **their
+  own** tenant; FFC does not run them against the FFC tenant on a charity's behalf.
 - **External-focused work — DNS records + delegated access.** For a charity that runs (or will run)
   **their own** Microsoft tenant, FFC's role is only:
   - put the DNS records they need into Cloudflare (`105` for individual records such as the

@@ -277,7 +277,22 @@ function main() {
   // site_name). Prefer it when the repo has it; a repo without it gets the
   // inline form. Checked rather than assumed, because these routes are written
   // into whatever repo the workflow is pointed at.
-  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'));
+  //
+  // The two FFC templates spell the helper differently and that is not
+  // cosmetic: the Single-Page template has `src/lib/page-metadata.ts` taking
+  // `canonical`, the Footer-Only template has `src/lib/pageMetadata.ts` taking
+  // `path`. Checking only the first spelling sent every Footer-Only repo down
+  // the inline path, whose relative `canonical: '/about/'` resolves against
+  // `metadataBase` -- the bare origin -- and so loses the GitHub Pages base
+  // path. Measured on FFC-EX-tamkeensports.org: every converted page
+  // canonicalised to `https://freeforcharity.github.io/about/`, a URL that
+  // serves FFC's own 404, while the template's own pages (through the helper)
+  // were right.
+  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'))
+    ? 'page-metadata'
+    : existsSync(join(repo, 'src', 'lib', 'pageMetadata.ts'))
+      ? 'pageMetadata'
+      : false;
 
   const { assigned, collisions, duplicates } = assignSlugs(htmlFiles);
   // Link rewriting is keyed on the path the capture actually wrote, because

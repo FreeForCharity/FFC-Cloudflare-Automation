@@ -193,6 +193,11 @@ export function replaceForms(html, email, subject) {
  * re-checks the downloaded capture with this before it becomes a published
  * page.
  */
+export function messageFormCount(html) {
+  const { spans } = findFormSpans(html);
+  return spans.filter((span) => formKind(html.slice(span.start, span.end)) === 'message').length;
+}
+
 export function unsafeForms(html) {
   const { spans, unclosed } = findFormSpans(html);
   const kinds = spans
@@ -430,6 +435,14 @@ function selfTest() {
     ['message', 'message', 'search'],
   );
   eq(
+    'messageFormCount counts only forms that send a message',
+    [
+      messageFormCount(`${jupiterSearch}${login}`),
+      messageFormCount(`${jupiterSearch}${caldera}${register}`),
+    ],
+    [0, 1],
+  );
+  eq(
     'unsafeForms allows search forms and reports every other kind',
     [
       unsafeForms(`<nav>${jupiterSearch}</nav>${astraSearch}`),
@@ -503,6 +516,20 @@ function arg(name, def = '') {
 if (isMain) {
   if (process.argv.includes('--self-test')) {
     selfTest();
+  } else if (process.argv.includes('--count-message-forms')) {
+    // How many forms would need the mailto: block. The workflow asks before it
+    // insists on a contact address: a capture whose only forms are search or
+    // sign-in forms needs none.
+    const dir = arg('dir');
+    if (!dir) {
+      console.error(
+        'Usage: node scripts/replace-forms-with-mailto.mjs --count-message-forms --dir <siteRoot>',
+      );
+      process.exit(64);
+    }
+    let total = 0;
+    for (const f of htmlFilesUnder(dir)) total += messageFormCount(readFileSync(f, 'utf8'));
+    console.log(total);
   } else if (process.argv.includes('--check')) {
     const dir = arg('dir');
     if (!dir) {
@@ -528,13 +555,13 @@ if (isMain) {
     const subject = arg('subject', '');
     const dryRun = process.argv.includes('--dry-run');
 
-    if (!dir || !email) {
+    if (!dir) {
       console.error(
-        'Usage: node scripts/replace-forms-with-mailto.mjs --dir <siteRoot> --email <addr> [--subject "<line>"] [--dry-run]',
+        'Usage: node scripts/replace-forms-with-mailto.mjs --dir <siteRoot> [--email <addr>] [--subject "<line>"] [--dry-run]',
       );
       process.exit(64);
     }
-    if (!isPlausibleEmail(email)) {
+    if (email && !isPlausibleEmail(email)) {
       console.error(
         `::error::--email '${email}' is not a plausible address. It becomes the site's only contact channel; a typo here silently ends every conversation.`,
       );
@@ -559,6 +586,15 @@ if (isMain) {
         `::error::no .html/.htm files under ${dir}. Nothing was scanned, so "no forms found" would be a false negative.`,
       );
       process.exit(66);
+    }
+    // Only a message form needs the address. Without one, search and sign-in
+    // forms are still handled; a message form is refused rather than replaced
+    // with a mailto: that goes nowhere.
+    if (!email && htmlFiles.some((f) => messageFormCount(readFileSync(f, 'utf8')) > 0)) {
+      console.error(
+        '::error::--email is required: at least one form sends a message and needs the mailto: block.',
+      );
+      process.exit(64);
     }
 
     let files = 0;

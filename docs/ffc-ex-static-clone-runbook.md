@@ -107,6 +107,29 @@ npx serve out                # spot-check vs the live site, then commit + PR
 - Only then run the cutover (workflow 120). **Do not bulk-cut-over** until each domain passes this
   gate.
 
+## Running it as workflow 702 (what the gate approver sees)
+
+`702. Domain - Deploy Static Clone to FFC-EX Repo` runs the pipeline above on a runner. It has one
+human stop, the `github-prod` environment gate, and the reviewer sees nothing but the run name and
+the run summary before clicking **Approve**. So the ungated `preflight` job, once every check has
+passed, writes the whole plan into that summary under **"what approving the `github-prod` gate will
+run"**: the resolved target repo, the credential the gate releases, every dispatch input, the steps
+in order, and one unmissable line saying whether the run writes. The same verdict is posted as a
+notice annotation beside the **Review deployments** button.
+
+Read that line before approving:
+
+- **`dry_run=true`** — nothing is written. The clone, the integration and the build all run, and the
+  last step only lists the files it _would_ have committed.
+- **`dry_run=false`** — the run commits the clone to a **new** branch
+  `clone/static-from-live-<timestamp>`, pushes it to the target repo, and opens a **draft** PR
+  against `main`. Nothing is merged. Once it has written, the `clone-deploy` summary records the
+  branch and the PR URL.
+
+A refused preflight (target missing, archived, already live, sibling repo, probe failure) prints no
+plan, so a summary without that section is a run that never reached the gate. `force=true` is called
+out in the plan as having skipped the live-site, probe-failure and sibling-repo guards.
+
 ## Validation status
 
 Proven end-to-end on **browncanyonranch.org**: clone = 55 pages / 87 images / 12.5 MB; the Next.js

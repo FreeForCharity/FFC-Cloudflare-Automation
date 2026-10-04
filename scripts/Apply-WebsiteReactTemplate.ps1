@@ -863,7 +863,26 @@ function Update-SiteConfig {
         Write-Warning 'No Candid / GuideStar profile for this charity; siteConfig.guidestar is left empty and pending (never the template profile).'
         Add-PendingField 'guidestar'
     }
-    $guidestarTs = "{`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
+    # Keep whatever keys the template's own guidestar object declares. The
+    # Footer-Only template added a REQUIRED `sealUrl` (Candid's live seal
+    # widget, keyed to an organization's own Candid id). Replacing the whole
+    # object without it fails `tsc`, so the charity's site never builds and
+    # never deploys -- measured on every sample charity in 748 run
+    # 37164489698. It cannot be derived from an EIN, and FFC's own widget URL
+    # is a transparency claim about FFC, so it is written EMPTY: the template
+    # renders the seal only when it is set. Read before the write below, which
+    # replaces the span this inspects.
+    $sealTs = ''
+    $existing = Get-SiteConfigProperties -Source $text
+    if ($existing.ContainsKey('guidestar')) {
+        $guidestarSpan = $existing['guidestar']
+        $currentGuidestar = $text.Substring(
+            $guidestarSpan.Start, $guidestarSpan.End - $guidestarSpan.Start)
+        if ($currentGuidestar -match '(?m)^\s*sealUrl\s*:') {
+            $sealTs = "`n    sealUrl: '',"
+        }
+    }
+    $guidestarTs = "{$sealTs`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
     $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
 
     # Only the links the charity gave; none of FFC's (facebook.com/freeforcharity,

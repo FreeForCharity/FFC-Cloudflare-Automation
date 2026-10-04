@@ -72,6 +72,7 @@ import {
   ensureSingleH1,
   repairSocialShareChrome,
   stripLayoutDuplicates,
+  uaDefaultsStyle,
   removeFormerHostCredits,
   retargetSkipLinkTarget,
   removeDeadConsentUi,
@@ -482,7 +483,11 @@ function main() {
     // Share chrome first: the capture strips scripts, and a share plugin is
     // almost entirely script -- its links keep their destinations in data
     // attributes and its modal triggers keep nothing at all.
-    const share = repairSocialShareChrome(`${fragmentCss.html}\n${out}`.trim() + '\n');
+    // The browser defaults the template's CSS reset strips go FIRST, so every
+    // captured rule -- all of them heavier -- still overrides them.
+    const share = repairSocialShareChrome(
+      `${uaDefaultsStyle(WRAPPER_CLASS)}\n${fragmentCss.html}\n${out}`.trim() + '\n',
+    );
     tally.shareLinksRepaired += share.repaired;
     tally.shareChromeRemoved += share.removed;
     tally.shareLinksRefused += share.rejected;

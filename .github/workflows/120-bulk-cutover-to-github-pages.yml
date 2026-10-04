@@ -34,6 +34,15 @@ on:
         required: false
         type: boolean
         default: false
+      legacy_apex_ip:
+        description: >-
+          IPv4 address of the site's current origin. The DNS flip deletes apex A records with this
+          content before adding the GitHub Pages records. Leave blank for the HostPapa default
+          (216.222.200.253). A site hosted elsewhere needs its own IP here, or its old record is
+          left in place and the apex splits between two hosts.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -189,6 +198,7 @@ jobs:
         # rewrites apex DNS for the whole FFC-EX fleet.
         env:
           IN_DOMAINS: ${{ inputs.domains }}
+          IN_LEGACY_APEX_IP: ${{ inputs.legacy_apex_ip }}
         run: |
           # Fleet default list — single source of truth shared with workflow 121.
           $defaultDomains = (
@@ -202,6 +212,25 @@ jobs:
             SkipCname = $true   # this job only does DNS
           }
           if ('${{ inputs.dry_run }}' -eq 'true') { $params.DryRun = $true }
+
+          # The script deletes only apex A records equal to -HostPapaIp. A site on any
+          # other origin keeps its old record beside the four Pages records, so the apex
+          # answers from two hosts. Blank keeps the script's HostPapa default.
+          $legacyIp = ([string]$env:IN_LEGACY_APEX_IP).Trim()
+          if ($legacyIp) {
+            $parsed = $null
+            if (-not [System.Net.IPAddress]::TryParse($legacyIp, [ref]$parsed) -or
+                $parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or
+                $parsed.ToString() -ne $legacyIp) {
+              throw "legacy_apex_ip must be a dotted-quad IPv4 address; got '$legacyIp'."
+            }
+            . ./scripts/cloudflare-api-common.ps1
+            if ((Get-GhPagesIps) -contains $legacyIp) {
+              throw "legacy_apex_ip '$legacyIp' is a GitHub Pages address; deleting it would remove the cutover target."
+            }
+            Write-Host "Legacy apex IP to replace: $legacyIp"
+            $params.HostPapaIp = $legacyIp
+          }
 
           ./scripts/bulk-cutover-to-github-pages.ps1 @params
 

@@ -277,6 +277,190 @@ function wireMkMenu(toggle: Element): Teardown | null {
 }
 
 /**
+ * The WordPress core navigation block's overlay menu, the third theme family
+ * this file has had to learn.
+ *
+ * Everything above is Divi or Jupiter. tamkeensports.org is a block theme
+ * (Twenty Twenty-Five), and on a block-theme capture none of those selectors
+ * match -- so, as with Jupiter before it, wiring this component made no
+ * difference until this function existed. The capture carries the whole
+ * overlay: the hamburger `<button>`, the `#modal-1` container, the close
+ * `<button>` and every link. It also carries the core stylesheet's open-state
+ * rules (`.is-menu-open` displays the overlay; below 600px the container is
+ * hidden and the hamburger shown). What it does NOT carry is the Interactivity
+ * API runtime that core drives those rules from: the `data-wp-on--click` /
+ * `data-wp-class--is-menu-open` directives survive as inert attributes, so on
+ * a phone the hamburger is a dead control and the site has no navigation.
+ *
+ * The same minimal shape as `wireMkMenu`: nothing is built or cloned, the
+ * state classes core would have toggled are toggled, and the stylesheet does
+ * the rest. The ARIA core binds at runtime (`role="dialog"`, `aria-modal`,
+ * `aria-label` on the dialog element; `aria-expanded` on the hamburger) is
+ * set here instead, so the open overlay is announced as the modal it is and
+ * removed again on close so the inline desktop menu is not. Open moves focus
+ * into the overlay, as core's `focusFirstElement` did; close and Escape return
+ * it to the hamburger.
+ *
+ * Core also closes the overlay on `focusout`, so a visitor tabbing past the
+ * last link lands back on the page. That is NOT reproduced: with
+ * `html.has-modal-open { overflow: hidden }` the page behind the overlay
+ * cannot scroll, so losing focus from it is the one dead-end this handler
+ * would add rather than remove. Escape and the close button are the exits.
+ */
+const BLOCK_NAV_OPEN = '.wp-block-navigation__responsive-container-open'
+
+function wireBlockNavigation(opener: Element): Teardown | null {
+  if (!(opener instanceof HTMLElement)) return null
+  // Core resolves the container by `aria-controls` when the block carries it,
+  // and by adjacency otherwise; this capture has no `aria-controls`, so the
+  // container is the next sibling, with a scoped query as the fallback.
+  const scope: ParentNode = opener.closest('.wp-block-navigation') ?? document
+  const sibling = opener.nextElementSibling
+  const container =
+    sibling instanceof HTMLElement &&
+    sibling.classList.contains('wp-block-navigation__responsive-container')
+      ? sibling
+      : scope.querySelector<HTMLElement>('.wp-block-navigation__responsive-container')
+  if (!container) return null
+  // A container with no links is not a menu; leave it alone rather than
+  // offering a control that opens an empty overlay.
+  if (!container.querySelector('a')) return null
+  const closer = container.querySelector<HTMLElement>(
+    '.wp-block-navigation__responsive-container-close'
+  )
+  const dialog = container.querySelector<HTMLElement>('.wp-block-navigation__responsive-dialog')
+
+  // State is READ FROM THE CONTAINER, as `wireMkMenu` reads its panel, so a
+  // second control sharing the container (core renders none, but the rule is
+  // cheap) can never disagree with the first.
+  const isOpen = () => container.classList.contains('is-menu-open')
+
+  opener.setAttribute('aria-expanded', isOpen() ? 'true' : 'false')
+
+  const setOpen = (next: boolean) => {
+    // The three classes core's `data-wp-class--*` directives would have
+    // written: `is-menu-open` is the one the overlay rules key on,
+    // `has-modal-open` on the container styles the close bar, and on `<html>`
+    // it locks the page scroll behind the overlay.
+    container.classList.toggle('is-menu-open', next)
+    container.classList.toggle('has-modal-open', next)
+    document.documentElement.classList.toggle('has-modal-open', next)
+    opener.setAttribute('aria-expanded', next ? 'true' : 'false')
+    if (dialog) {
+      if (next) {
+        dialog.setAttribute('role', 'dialog')
+        dialog.setAttribute('aria-modal', 'true')
+        dialog.setAttribute('aria-label', 'Menu')
+      } else {
+        dialog.removeAttribute('role')
+        dialog.removeAttribute('aria-modal')
+        dialog.removeAttribute('aria-label')
+      }
+    }
+  }
+
+  const open = () => {
+    setOpen(true)
+    // Into the overlay, as core's `focusFirstElement` did. The container is
+    // `tabindex="-1"` in the capture, so it can take focus and the next Tab
+    // lands on the close button, then the first link.
+    container.focus()
+  }
+  const close = () => {
+    setOpen(false)
+    opener.focus()
+  }
+
+  const onOpenClick = (event: Event) => {
+    event.preventDefault()
+    if (isOpen()) close()
+    else open()
+  }
+  const onCloseClick = (event: Event) => {
+    event.preventDefault()
+    close()
+  }
+  // Escape anywhere in the document while the overlay is open: the overlay
+  // covers the page, so wherever focus is, the visitor is inside it.
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' && event.key !== 'Esc') return
+    if (!isOpen()) return
+    close()
+  }
+
+  opener.addEventListener('click', onOpenClick)
+  closer?.addEventListener('click', onCloseClick)
+  document.addEventListener('keydown', onEscape as EventListener)
+
+  return () => {
+    opener.removeEventListener('click', onOpenClick)
+    closer?.removeEventListener('click', onCloseClick)
+    document.removeEventListener('keydown', onEscape as EventListener)
+    // A component unmounting mid-open must not leave the page scroll locked.
+    if (isOpen()) setOpen(false)
+  }
+}
+
+/**
+ * The core navigation block's submenu toggles (the chevron next to "Events").
+ *
+ * Core's stylesheet shows a submenu in three ways: on hover, via
+ * `:focus-within` for a block set to open on hover only, and via the toggle
+ * button -- `.wp-block-navigation-submenu__toggle[aria-expanded=true] ~
+ * .wp-block-navigation__submenu-container`. This block is `open-on-hover-click`,
+ * which core excludes from the `:focus-within` rule on purpose: the button is
+ * the keyboard path. The Interactivity API runtime set `aria-expanded` on it,
+ * and the capture strips that runtime, so measured on the converted site a
+ * Tab stop landed on "Events submenu", Enter did nothing, and a keyboard
+ * visitor had no way to reach Chicago or Dallas from the menu. Hover and the
+ * mobile overlay (where the submenu is always expanded) were unaffected.
+ *
+ * Setting the attribute is the whole fix; the stylesheet does the rest.
+ * Escape closes the submenu and returns focus to the toggle, and focus
+ * leaving the item closes it, as core did.
+ */
+const BLOCK_SUBMENU_TOGGLE = '.wp-block-navigation-submenu__toggle'
+
+function wireBlockSubmenu(toggle: Element): Teardown | null {
+  if (!(toggle instanceof HTMLElement)) return null
+  const item = toggle.closest<HTMLElement>('.wp-block-navigation-submenu, .has-child')
+  const container = item?.querySelector<HTMLElement>('.wp-block-navigation__submenu-container')
+  if (!item || !container || !container.querySelector('a')) return null
+
+  const isOpen = () => toggle.getAttribute('aria-expanded') === 'true'
+  const setOpen = (next: boolean) => toggle.setAttribute('aria-expanded', next ? 'true' : 'false')
+  setOpen(false)
+
+  const onClick = (event: Event) => {
+    event.preventDefault()
+    setOpen(!isOpen())
+  }
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' && event.key !== 'Esc') return
+    if (!isOpen()) return
+    setOpen(false)
+    toggle.focus()
+  }
+  // Closes when focus moves outside the item, so a keyboard visitor tabbing
+  // past the last submenu link does not leave it hanging open. `relatedTarget`
+  // is null when focus leaves the document; that closes it too.
+  const onFocusOut = (event: FocusEvent) => {
+    const next = event.relatedTarget
+    if (next instanceof Node && item.contains(next)) return
+    setOpen(false)
+  }
+
+  toggle.addEventListener('click', onClick)
+  item.addEventListener('keydown', onKeyDown as EventListener)
+  item.addEventListener('focusout', onFocusOut as EventListener)
+  return () => {
+    toggle.removeEventListener('click', onClick)
+    item.removeEventListener('keydown', onKeyDown as EventListener)
+    item.removeEventListener('focusout', onFocusOut as EventListener)
+  }
+}
+
+/**
  * Reveal Divi's scroll-in elements.
  *
  * Divi hides `.et-waypoint` at `opacity: 0` and reveals it from a scroll
@@ -320,6 +504,15 @@ export default function CloneEnhance() {
     // selector that matches nothing costs nothing.
     document.querySelectorAll(MK_TOGGLE).forEach((toggle) => {
       const off = wireMkMenu(toggle)
+      if (off) teardowns.push(off)
+    })
+    // Block themes (core navigation block) match neither of the above.
+    document.querySelectorAll(BLOCK_NAV_OPEN).forEach((opener) => {
+      const off = wireBlockNavigation(opener)
+      if (off) teardowns.push(off)
+    })
+    document.querySelectorAll(BLOCK_SUBMENU_TOGGLE).forEach((toggle) => {
+      const off = wireBlockSubmenu(toggle)
       if (off) teardowns.push(off)
     })
     const offWaypoints = wireWaypoints()

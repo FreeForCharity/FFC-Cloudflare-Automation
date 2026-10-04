@@ -651,6 +651,53 @@ RULES = [
          "gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'", ALLOW),
     ]),
 
+    # #1520 / ledger L195, sibling L224. `git branch -r` is the local ref CACHE;
+    # refs outside `remote.origin.fetch` (`refs/remotes/pr/*`) are unprunable and
+    # print as if they were branches on the server. Both polarities per #1027 --
+    # the silent half is doing most of the work here, because the rule's whole
+    # design is to leave a human looking at a clone alone.
+    Rule("git-branch-r-as-remote-list", '[#1520]', WARN_TIER, label='guard_bash / #1520 branch -r counted as the remote list:', cases=[
+        # The three historical shapes, each the literal a run actually sent.
+        ("run 198's orphan pipeline warns",
+         "git branch -r | sed 's#^ *origin/##' | grep -vE '^(HEAD|main)' | sort > allbr.txt", WARN),
+        ("run 137's count with the origin/HEAD filter warns",
+         "TOT=$(git branch -r | grep -v 'origin/HEAD' | wc -l)", WARN),
+        ("run 125's bare count warns", "git branch -r | wc -l", WARN),
+        # Spellings of the same flag, so tightening the regex cannot quietly
+        # drop one. `-a` is a superset: it prints the same unprunable namespaces.
+        ("--remotes long spelling warns", "git -C repos/hub branch --remotes | wc -l", WARN),
+        ("-a is the same defect with local branches added",
+         "git branch -a | sort | comm -23 - heads.txt", WARN),
+        ("backtick capture warns", "n=`git branch -r`", WARN),
+        # --- Silences, each for a stated reason. ---
+        # A human looking at a clone. The rule fires on the CLAIM, not the read.
+        ("a bare listing is silent", "git branch -r", SILENT),
+        # A different question, and the one docs/stale-branch-review-2026-08.md
+        # asks -- the single committed occurrence of the string in the tree.
+        ("--merged is a different question", "git branch -r --merged main | wc -l", SILENT),
+        ("--no-merged likewise", "git branch -r --no-merged | wc -l", SILENT),
+        # The remedy itself must not warn, or the rule argues with its own advice.
+        ("the ls-remote remedy is silent",
+         "git ls-remote --heads origin | awk '{print $2}' | wc -l", SILENT),
+        ("the for-each-ref remedy is silent",
+         "git for-each-ref refs/remotes/origin/ | wc -l", SILENT),
+        # Counting BOTH and comparing them is how run 198 found its own wrong
+        # number. Precedent: `set -o pipefail` anywhere clears the L50 rule.
+        ("counting both to compare them is silent",
+         "git branch -r | wc -l; git ls-remote --heads origin | wc -l", SILENT),
+        # No remote flag: a local branch count is a local question, answered
+        # correctly by the local cache.
+        ("local branch count is silent", "git branch | wc -l", SILENT),
+        ("--list glob without a remote flag is silent",
+         "git branch --list 'feature/*' | wc -l", SILENT),
+        ("a delete is not a listing", "git branch -d stale-thing", SILENT),
+        # The words inside quotes are prose, not a command -- the shape that
+        # makes a rule fire on its own documentation.
+        ("the same words quoted are silent", "echo 'git branch -r | wc -l'", SILENT),
+        # The tier itself: a warned command must still RUN.
+        ("a warned count is still allowed", "git branch -r | wc -l", ALLOW),
+    ]),
+
     # #1127 / ledger L193. Registered as a Rule rather than as flat check()
     # calls: test_refusal_site_coverage() derives every refusal from
     # guard_bash.py's AST and requires a registered signature to claim it, so

@@ -3401,6 +3401,32 @@ def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
             assert needle in out, (args, needle, out)
 
 
+def test_ffc_footer_renders_pending_fields_as_plain_text_placeholders():
+    """The migration footer honours `siteConfig.pending` (FFC-EX-iwilf.org#6).
+
+    Workflow 706 copies assets/ffc-footer.tsx into charity repos, so a
+    regenerated footer must keep the "awaiting information" placeholders the
+    template footers render for a pending EIN / Candid profile. It is copied
+    into repos whose site.config may predate `pending`, so it must read it
+    defensively and inline the text rather than import PENDING_TEXT/isPending.
+    Rendered and type-checked against both template PR branches when written
+    (FFC-IN-Footer_Only_Template#171); this pins the source shape.
+    """
+    src = (REPO_ROOT / "assets" / "ffc-footer.tsx").read_text(encoding="utf-8")
+    assert "const PENDING_TEXT = 'Awaiting information from the charity'" in src, src[:400]
+    assert "(siteConfig as unknown as { pending?: readonly string[] }).pending" in src
+    imports = [ln for ln in src.splitlines() if ln.startswith("import ")]
+    assert not any("PENDING_TEXT" in ln or "isPending" in ln for ln in imports), imports
+    assert "isPending('ein')" in src and "isPending('guidestar')" in src, src
+    # Placeholders are plain text: they sit outside the Candid <a>.
+    for marker in ("EIN: {PENDING_TEXT}", "Candid / GuideStar profile: {PENDING_TEXT}"):
+        at = src.index(marker)
+        before = src[:at]
+        assert before.count("<a") == before.count("</a>"), marker
+    css = (REPO_ROOT / "assets" / "ffc-footer.css").read_text(encoding="utf-8")
+    assert ".ffc-footer__pending" in css, css[:400]
+
+
 # Built HERE, at the end of the module, and not one line earlier. This is a
 # snapshot of `globals()` taken where it appears, so a roster placed mid-file
 # silently omits every test defined below it -- this module defined 108 and ran

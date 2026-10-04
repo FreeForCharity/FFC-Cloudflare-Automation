@@ -44,6 +44,13 @@
 .ffc-footer__identity {
   font-weight: 600;
 }
+/* A footer-standard field still awaiting the charity (siteConfig.pending):
+   visible, plain text, clearly a placeholder rather than a value. */
+.ffc-footer__pending {
+  font-style: italic;
+  font-weight: 400;
+  color: #3d3d3d;
+}
 .ffc-footer__legal {
   color: #3d3d3d;
   font-size: 0.85rem;

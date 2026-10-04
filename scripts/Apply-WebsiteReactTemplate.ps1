@@ -1,3 +1,29 @@
+<#
+.SYNOPSIS
+    Writes a charity's details into a newly provisioned FFC-EX-<domain> site
+    (701's content step). A field the charity did not provide is emptied --
+    never left at the template's Free For Charity value -- and listed in
+    siteConfig.pending where the template supports it.
+
+.PARAMETER FooterPhone
+    A US number in any common form ("(555) 010-0101", "555-010-0101",
+    "+1 555 010 0303"). Shown as given; the tel: link uses its digits, with a
+    leading + only when the input has one. Anything else is treated as missing.
+
+.PARAMETER FooterAddress
+    One address, one visual line per line. Separate lines with real line
+    breaks (PowerShell: "12 Main St`nSpringfield, IL 62701") or with a literal
+    backslash-n, which is what a bash caller passes without $'...' quoting:
+        -FooterAddress '12 Main St\nSpringfield, IL 62701'
+    A literal "\r\n" works too. Commas do NOT split lines: they belong to an
+    ordinary line such as "Springfield, IL 62701". A one-line address
+    ("St. Petersburg, FL") is a single footer line.
+
+.PARAMETER GuideStarProfileUrl
+    The charity's own Candid / GuideStar profile URL (https). Never derived
+    from the EIN: the footer's seal claims a Candid transparency level, so only
+    a URL the charity publishes is used. Blank -> empty and pending.
+#>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -9,7 +35,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CharityName,
 
-    [Parameter(Mandatory = $true)]
+    # Blank = pending (see siteConfig.pending below), never the template's.
     [string]$FooterEmail,
 
     [string]$FooterPhone,
@@ -40,10 +66,38 @@ param(
     # 701's IRS status value. Drives siteConfig.taxStatusLabel: the footer's
     # "a US 501c3 Non Profit" clause and the donation policy's deductibility
     # sentence are legal claims, made only for a recognized 501(c)(3).
-    [string]$IrsStatus
+    [string]$IrsStatus,
+
+    # Optional. When set, a JSON summary is written here:
+    #   { pendingFields: [...], pendingRendered: true|false }
+    # pendingFields names every footer-standard field the charity did not
+    # provide (siteConfig `PendingField` vocabulary); pendingRendered says
+    # whether the template renders them as visible placeholders. 701 records
+    # both in ffc-content.json, its completion comment and a call-to-action
+    # issue on the new repo.
+    [string]$SummaryPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Footer-standard fields the charity did not provide ("pending"). Each one is
+# EMPTIED -- never left at the template's value, which is Free For Charity's
+# own (EIN, phone, offices, GuideStar profile, social links, staff) -- AND
+# listed in siteConfig.pending, which the templates render as a visible
+# "Awaiting information from the charity" placeholder: a call to action, not a
+# silent gap in the footer standard. An empty value NOT listed in `pending`
+# means "the charity has none", which 701 can never know, so every field it
+# could not fill is listed. Names are the templates' `PendingField` union.
+$script:PendingFields = New-Object System.Collections.Generic.List[string]
+function Add-PendingField {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('email', 'phone', 'address', 'ein', 'guidestar', 'social', 'team', 'donationUrl', 'volunteerUrl')]
+        [string]$Name
+    )
+    if (-not $script:PendingFields.Contains($Name)) { $script:PendingFields.Add($Name) }
+}
+$script:PendingRendered = $false
 
 function Assert-FileExists {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -59,6 +113,27 @@ function Get-TelDigits {
     if ($digits.Length -eq 10) { return ('1' + $digits) }
     if ($digits.Length -eq 11 -and $digits.StartsWith('1')) { return $digits }
     return $null
+}
+
+function Get-PublishedTel {
+    # The tel: value for a published number: its digits, with a leading + only
+    # if the input began with one (after whitespace).
+    param([string]$Phone)
+    if ([string]::IsNullOrWhiteSpace($Phone)) { return '' }
+    $digits = ($Phone -replace '[^0-9]', '')
+    if ($Phone.TrimStart().StartsWith('+')) { return "+$digits" }
+    return $digits
+}
+
+function Split-AddressLine {
+    # One entry per visual line. Accepts real line breaks (CRLF / LF / CR) and
+    # their literal escaped forms ("\r\n", "\n"), which is what a bash caller or
+    # a JSON-ish issue-form value hands over. A comma is NOT a line break: it is
+    # part of an ordinary line ("Springfield, IL 62701"), so splitting on it
+    # would break every US city/state line.
+    param([string]$Address)
+    if ([string]::IsNullOrWhiteSpace($Address)) { return @() }
+    return @($Address -split '\r\n|\n|\r|\\r\\n|\\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 function Convert-AddressToHtml {
@@ -210,30 +285,19 @@ function Update-FooterComponent {
     # Make the seal alt text generic (avoid hard-coding a seal level).
     $text = $text -replace 'alt="GuideStar Platinum Seal of Transparency"', 'alt="Candid / GuideStar Seal of Transparency"'
 
-    # Social links (best-effort: parse "platform: url")
-    if ($Social -and $Social.Count -gt 0) {
-        $map = @{}
-        foreach ($line in $Social) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            $clean = ($line.Trim() -replace '^[\*-]\s+', '')
-            $m = [regex]::Match($clean, '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https://\S+)$')
-            if (-not $m.Success) { continue }
-            $key = $m.Groups['k'].Value.Trim().ToLowerInvariant()
-            $val = $m.Groups['v'].Value.Trim()
-            $map[$key] = $val
-        }
+    # Social links ("platform: url"), parsed exactly as the config-driven path
+    # and the legacy guard below parse them (Get-SocialEntries), so "X",
+    # "Twitter", "X (Twitter)" and "X / Twitter" all reach the X link.
+    $map = Get-LegacySocialMap -Social $Social
+    foreach ($k in @('facebook', 'x', 'linkedin', 'github')) {
+        if (-not $map.ContainsKey($k)) { continue }
+        $url = $map[$k]
 
-        foreach ($k in @('facebook', 'x', 'twitter', 'linkedin', 'github')) {
-            if (-not $map.ContainsKey($k)) { continue }
-            $url = $map[$k]
-
-            switch ($k) {
-                'facebook' { $text = $text -replace "href: 'https://www\.facebook\.com/[^']+'", "href: '$url'" }
-                'x' { $text = $text -replace "href: 'https://x\.com/[^']+'", "href: '$url'" }
-                'twitter' { $text = $text -replace "href: 'https://x\.com/[^']+'", "href: '$url'" }
-                'linkedin' { $text = $text -replace "href: 'https://www\.linkedin\.com/[^']+'", "href: '$url'" }
-                'github' { $text = $text -replace "href: 'https://github\.com/[^']+'", "href: '$url'" }
-            }
+        switch ($k) {
+            'facebook' { $text = $text -replace "href: 'https://www\.facebook\.com/[^']+'", "href: '$url'" }
+            'x' { $text = $text -replace "href: 'https://x\.com/[^']+'", "href: '$url'" }
+            'linkedin' { $text = $text -replace "href: 'https://www\.linkedin\.com/[^']+'", "href: '$url'" }
+            'github' { $text = $text -replace "href: 'https://github\.com/[^']+'", "href: '$url'" }
         }
     }
 
@@ -620,11 +684,56 @@ function Get-SocialEntries {
     return , $entries
 }
 
+function Clear-UnguardedIntegration {
+    # Single Page template: `siteConfig.integrations` holds FREE FOR CHARITY's
+    # own third-party endpoints (its Zeffy endowment form, Idealist page,
+    # events Facebook page, application Microsoft Form). Current versions only
+    # use them on FFC's own site (`isSupportingOrgSite()`), so a charity's site
+    # never renders them and the values are left for the template's own tests.
+    # Older versions (e.g. FFC-EX-vcof.org) have no such guard and embed them
+    # on every page -- a charity's Donate / Volunteer buttons going to FFC's
+    # pages -- so there every integration URL is emptied, and the FFC
+    # endowment section ("Support Free For Charity", whose only content is
+    # that Zeffy form) is switched off.
+    param([Parameter(Mandatory = $true)][string]$Source)
+    $props = Get-SiteConfigProperties -Source $Source
+    if (-not $props.ContainsKey('integrations')) { return $Source }
+    if ($Source -match 'function\s+isSupportingOrgSite\s*\(') { return $Source }
+
+    $span = $props['integrations']
+    $value = $Source.Substring($span.Start, $span.End - $span.Start)
+    # Every property's string value -> '' (keys and non-string values kept).
+    $emptied = [regex]::Replace($value, "(:\s*)'(?:[^'\\]|\\.)*'", { param($m) $m.Groups[1].Value + "''" })
+    $Source = $Source.Substring(0, $span.Start) + $emptied + $Source.Substring($span.End)
+    Write-Warning "This template embeds siteConfig.integrations on every site (no isSupportingOrgSite guard); Free For Charity's integration URLs were emptied and the FFC endowment section switched off."
+
+    $props = Get-SiteConfigProperties -Source $Source
+    if ($props.ContainsKey('sections')) {
+        $span = $props['sections']
+        $value = $Source.Substring($span.Start, $span.End - $span.Start)
+        $value = [regex]::Replace($value, '(\bshowEndowment\s*:\s*)true\b', '${1}false')
+        $Source = $Source.Substring(0, $span.Start) + $value + $Source.Substring($span.End)
+    }
+    return $Source
+}
+
+function Get-LegacySocialMap {
+    # The legacy footer's four networks, keyed facebook / x / linkedin / github,
+    # from the same parse the config-driven path uses (Get-SocialEntries).
+    param([string[]]$Social)
+    $keyByLabel = @{ 'Facebook' = 'facebook'; 'X (Twitter)' = 'x'; 'LinkedIn' = 'linkedin'; 'GitHub' = 'github' }
+    $map = @{}
+    foreach ($e in (Get-SocialEntries -Social $Social)) {
+        if ($keyByLabel.ContainsKey($e.Label)) { $map[$keyByLabel[$e.Label]] = $e.Href }
+    }
+    return $map
+}
+
 function Update-SiteConfig {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigFile,
         [Parameter(Mandatory = $true)][string]$CharityName,
-        [Parameter(Mandatory = $true)][string]$Email,
+        [string]$Email,
         [string]$Phone,
         [string]$Address,
         [string]$Ein,
@@ -639,6 +748,8 @@ function Update-SiteConfig {
 
     $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
 
+    # Not a footer-standard pending field: a generic sentence naming the
+    # charity is honest, and every page needs a mission line.
     $missionText = if ([string]::IsNullOrWhiteSpace($Mission)) {
         "$CharityName is a nonprofit organization."
     }
@@ -678,92 +789,187 @@ function Update-SiteConfig {
     # For Charity" parentOrg (Single Page template) is FFC's own relationship.
     # FFC attribution stays via the permanent supportedBy key.
     $text = Remove-SiteConfigValue -Source $text -Key 'parentOrg'
-    $text = Set-SiteConfigValue -Source $text -Key 'contactEmail' -ValueTs (ConvertTo-TsString $Email)
+    # Every field below that the charity did not provide is EMPTIED (never the
+    # template's FFC value) and listed as pending; see Add-PendingField.
+    $emailValue = if ([string]::IsNullOrWhiteSpace($Email)) {
+        Write-Warning 'No contact email supplied; siteConfig.contactEmail is left empty and pending (never the template address).'
+        Add-PendingField 'email'
+        ''
+    }
+    else { $Email.Trim() }
+    $text = Set-SiteConfigValue -Source $text -Key 'contactEmail' -ValueTs (ConvertTo-TsString $emailValue)
 
     foreach ($pair in @(@('donationUrl', $DonationUrl), @('volunteerUrl', $VolunteerUrl))) {
         $url = [string]$pair[1]
-        # Only https URLs; anything else keeps the template's mailto fallback.
+        # Only https URLs. Anything else is pending; until it is filled the
+        # template's fallback (a mailto: to the contact email) stays usable.
         $url = if ($url -match '^https://\S+$') { $url.Trim() } else { '' }
+        if (-not $url) { Add-PendingField $pair[0] }
         $text = Set-SiteConfigValue -Source $text -Key $pair[0] -ValueTs (ConvertTo-TsString $url) -Optional
     }
 
-    # The shared schema requires a non-empty EIN, so a blank cannot be written;
-    # keeping the template's would publish FFC's tax ID as the charity's.
-    if ([string]::IsNullOrWhiteSpace($Ein)) {
-        throw 'No EIN supplied; refusing to leave the template EIN on the charity site.'
+    # No EIN: empty and pending. Keeping the template's would publish FFC's tax
+    # ID (46-2471893) as the charity's -- a false legal claim.
+    $einValue = if ([string]::IsNullOrWhiteSpace($Ein)) {
+        Write-Warning 'No EIN supplied; siteConfig.ein is left empty and pending (never the template EIN).'
+        Add-PendingField 'ein'
+        ''
     }
-    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $Ein.Trim())
+    else { $Ein.Trim() }
+    $text = Set-SiteConfigValue -Source $text -Key 'ein' -ValueTs (ConvertTo-TsString $einValue)
 
-    # An empty phone is the template's documented "no phone" state (no block).
-    $telDigits = Get-TelDigits -Phone $Phone
-    $phoneTs = if ($telDigits) {
-        '{ display: ' + (ConvertTo-TsString $Phone) + ', tel: ' + (ConvertTo-TsString $telDigits) + ' }'
+    # Get-TelDigits only VALIDATES (a US number, 10 digits or 1 + 10). The
+    # tel: value is the number as published, digits only: no country code is
+    # invented, and a leading + is kept only when the charity wrote one
+    # ("(555) 010-0101" -> 5550100101, "+1 555 010 0303" -> +15550100303).
+    $phoneTs = if (Get-TelDigits -Phone $Phone) {
+        '{ display: ' + (ConvertTo-TsString $Phone.Trim()) + ', tel: ' + (ConvertTo-TsString (Get-PublishedTel -Phone $Phone)) + ' }'
     }
-    else { "{ display: '', tel: '' }" }
+    else {
+        Add-PendingField 'phone'
+        "{ display: '', tel: '' }"
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'phone' -ValueTs $phoneTs
 
-    $addrLines = @()
-    if (-not [string]::IsNullOrWhiteSpace($Address)) {
-        # Also split a literal backslash-n: 701's issue-form path emitted one
-        # until it was fixed, and a re-run on its recorded data must not
-        # render "\n" in the footer.
-        $addrLines = @($Address -split "`r`n|`n|\\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    }
+    # Real or literal ("\n") line breaks; see Split-AddressLine and the
+    # -FooterAddress help.
+    $addrLines = @(Split-AddressLine -Address $Address)
     $addressesTs = if ($addrLines.Count -gt 0) {
         $mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + (Convert-AddressToMapsQuery -Address ($addrLines -join ' '))
         $linesTs = ($addrLines | ForEach-Object { ConvertTo-TsString $_ }) -join ', '
         "[`n    {`n      label: 'Main Address',`n      lines: [$linesTs],`n      mapUrl: $(ConvertTo-TsString $mapUrl),`n    },`n  ]"
     }
-    else { '[]' }
+    else {
+        # Never the template's Raleigh / State College offices.
+        Add-PendingField 'address'
+        '[]'
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'addresses' -ValueTs $addressesTs
 
-    # The shared SiteConfig schema requires both Candid URLs, so blanks cannot
-    # be written. When 701 has none (pre-501(c)(3) applications may omit them)
-    # use Candid's profile-by-EIN URL -- the same form as FFC's own -- rather
-    # than leaving FFC's profile on the charity's site.
-    $candidByEin = if (-not [string]::IsNullOrWhiteSpace($Ein)) { "https://www.guidestar.org/profile/$($Ein.Trim())" } else { '' }
-    $profileUrl = if ($GuideStarProfileUrl -match '^https://\S+$') { $GuideStarProfileUrl.Trim() } else { $candidByEin }
+    # Candid / GuideStar. The footer shows a seal whose alt text claims a
+    # Candid "Platinum" transparency level, so it only ever links a profile
+    # URL the charity itself provided -- never one derived from its EIN (a
+    # profile existing is not the seal level the footer claims, and a
+    # pre-501(c)(3) org has no profile at all), and never FFC's (46-2471893 /
+    # bbbe173a-...), which is what the template ships. No URL given -> both
+    # empty, and pending.
+    $profileUrl = if ($GuideStarProfileUrl -match '^https://\S+$') { $GuideStarProfileUrl.Trim() } else { '' }
     $directUrl = if ($GuideStarDirectProfileUrl -match '^https://\S+$') { $GuideStarDirectProfileUrl.Trim() } else { $profileUrl }
-    if ($profileUrl) {
-        # Keep whatever keys the template's own guidestar object declares. The
-        # Footer-Only template added a REQUIRED `sealUrl` (Candid's live seal
-        # widget, keyed to an organization's own Candid id). Replacing the whole
-        # object without it fails `tsc`, so the charity's site never builds and
-        # never deploys -- measured on every sample charity in 748 run
-        # 37164489698. It cannot be derived from an EIN, and FFC's own widget
-        # URL is a transparency claim about FFC, so it is written EMPTY: the
-        # template renders the seal only when it is set.
-        $sealTs = ''
-        $existing = Get-SiteConfigProperties -Source $text
-        if ($existing.ContainsKey('guidestar')) {
-            $guidestarSpan = $existing['guidestar']
-            $currentGuidestar = $text.Substring(
-                $guidestarSpan.Start, $guidestarSpan.End - $guidestarSpan.Start)
-            if ($currentGuidestar -match '(?m)^\s*sealUrl\s*:') {
-                $sealTs = "`n    sealUrl: '',"
-            }
+    if (-not $profileUrl) {
+        # A direct link alone still names the charity's own profile.
+        $profileUrl = $directUrl
+    }
+    if (-not $profileUrl) {
+        Write-Warning 'No Candid / GuideStar profile for this charity; siteConfig.guidestar is left empty and pending (never the template profile).'
+        Add-PendingField 'guidestar'
+    }
+    # Keep whatever keys the template's own guidestar object declares. The
+    # Footer-Only template added a REQUIRED `sealUrl` (Candid's live seal
+    # widget, keyed to an organization's own Candid id). Replacing the whole
+    # object without it fails `tsc`, so the charity's site never builds and
+    # never deploys -- measured on every sample charity in 748 run
+    # 37164489698. It cannot be derived from an EIN, and FFC's own widget URL
+    # is a transparency claim about FFC, so it is written EMPTY: the template
+    # renders the seal only when it is set. Read before the write below, which
+    # replaces the span this inspects.
+    $sealTs = ''
+    $existing = Get-SiteConfigProperties -Source $text
+    if ($existing.ContainsKey('guidestar')) {
+        $guidestarSpan = $existing['guidestar']
+        $currentGuidestar = $text.Substring(
+            $guidestarSpan.Start, $guidestarSpan.End - $guidestarSpan.Start)
+        if ($currentGuidestar -match '(?m)^\s*sealUrl\s*:') {
+            $sealTs = "`n    sealUrl: '',"
         }
-        $guidestarTs = "{$sealTs`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
-        $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
     }
-    else {
-        Write-Warning 'No Candid URL and no EIN; siteConfig.guidestar keeps the template value.'
-    }
+    $guidestarTs = "{$sealTs`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"
+    $text = Set-SiteConfigValue -Source $text -Key 'guidestar' -ValueTs $guidestarTs
 
+    # Only the links the charity gave; none of FFC's (facebook.com/freeforcharity,
+    # x.com/freeforcharity1, linkedin.com/company/freeforcharity, the template repo).
     $socialEntries = Get-SocialEntries -Social $Social
     $socialTs = if ($socialEntries.Count -gt 0) {
         "[`n" + (($socialEntries | ForEach-Object {
                     "    { label: $(ConvertTo-TsString $_.Label), href: $(ConvertTo-TsString $_.Href) },"
                 }) -join "`n") + "`n  ]"
     }
-    else { '[]' }
+    else {
+        Add-PendingField 'social'
+        '[]'
+    }
     $text = Set-SiteConfigValue -Source $text -Key 'social' -ValueTs $socialTs
+
+    $text = Clear-UnguardedIntegration -Source $text
 
     $xLink = $socialEntries | Where-Object { $_.Label -eq 'X (Twitter)' } | Select-Object -First 1
     $handle = if ($xLink) { [regex]::Match($xLink.Href, '^https://(?:www\.)?(?:x|twitter)\.com/@?(?<h>[A-Za-z0-9_]{1,15})(?:[/?#]|$)').Groups['h'].Value } else { '' }
     $text = Set-SiteConfigValue -Source $text -Key 'twitterHandle' -ValueTs (ConvertTo-TsString ($(if ($handle) { "@$handle" } else { '' })))
 
     Write-LfFile -Path $ConfigFile -Text $text
+}
+
+function Test-SiteConfigDeclaresPending {
+    # True when the repo's `SiteConfig` type declares the optional `pending`
+    # key (templates from FFC-IN-Footer_Only_Template#169 /
+    # FFC-IN-FFC_Single_Page_Template#482 on). Writing the key into a template
+    # whose type lacks it would fail the TypeScript build.
+    param([Parameter(Mandatory = $true)][string]$Source)
+    $m = [regex]::Match($Source, 'export type SiteConfig\s*=\s*\{')
+    if (-not $m.Success) { return $false }
+    $start = $m.Index + $m.Length
+    $end = Get-TsScanEnd -Source $Source -Start $start -StopChars @('}')
+    $typeBody = $Source.Substring($start, $end - $start)
+    # Only top-level members: strip nested { ... } blocks and comments first.
+    $flat = [regex]::Replace($typeBody, '(?s)/\*.*?\*/|//[^\n]*', '')
+    while ($flat -match '\{[^{}]*\}') { $flat = [regex]::Replace($flat, '\{[^{}]*\}', '') }
+    return [regex]::IsMatch($flat, '(?m)^\s*pending\??\s*:')
+}
+
+function Update-SiteConfigPending {
+    # Writes siteConfig.pending (or removes it when nothing is pending, e.g. a
+    # re-run after the charity supplied everything). Returns whether the
+    # template renders the placeholders.
+    param([Parameter(Mandatory = $true)][string]$ConfigFile, [string[]]$Pending = @())
+
+    $text = Get-Content -LiteralPath $ConfigFile -Raw -Encoding utf8
+    if (-not (Test-SiteConfigDeclaresPending -Source $text)) {
+        if ($Pending.Count -gt 0) {
+            Write-Warning ("This template's SiteConfig has no 'pending' key yet (FFC-IN-Footer_Only_Template#169 / FFC-IN-FFC_Single_Page_Template#482), so the footer cannot show an 'awaiting information' placeholder. The fields are still emptied (never FFC's values) and recorded for 701: {0}." -f ($Pending -join ', '))
+        }
+        return $false
+    }
+
+    $props = Get-SiteConfigProperties -Source $text
+    $pendingComment = "  // Footer-standard fields still awaiting the charity; each renders a visible`n  // 'awaiting information' placeholder until it is filled in.`n"
+    if ($Pending.Count -eq 0) {
+        $text = Remove-SiteConfigValue -Source $text -Key 'pending'
+        $text = $text.Replace($pendingComment, '')
+    }
+    else {
+        $valueTs = '[' + (($Pending | ForEach-Object { ConvertTo-TsString $_ }) -join ', ') + ']'
+        if ($props.ContainsKey('pending')) {
+            $text = Set-SiteConfigValue -Source $text -Key 'pending' -ValueTs $valueTs
+        }
+        else {
+            # Append as the last property of the literal.
+            $last = $props.Values | Sort-Object End -Descending | Select-Object -First 1
+            if ($last -and $text[$last.End] -ne ',') {
+                $text = $text.Substring(0, $last.End) + ',' + $text.Substring($last.End)
+            }
+            $m = [regex]::Match($text, 'export const siteConfig\s*(?::\s*SiteConfig)?\s*=\s*\{')
+            if (-not $m.Success) {
+                throw 'Could not find "export const siteConfig ... = {" in src/lib/site.config.ts while writing pending.'
+            }
+            $bodyEnd = Get-TsScanEnd -Source $text -Start ($m.Index + $m.Length) -StopChars @('}')
+            $lineStart = $text.LastIndexOf("`n", $bodyEnd - 1) + 1
+            $at = if ([string]::IsNullOrWhiteSpace($text.Substring($lineStart, $bodyEnd - $lineStart))) { $lineStart } else { $bodyEnd }
+            $line = $pendingComment + "  pending: $valueTs,`n"
+            if ($at -eq $bodyEnd) { $line = "`n" + $line }
+            $text = $text.Substring(0, $at) + $line + $text.Substring($at)
+        }
+    }
+    Write-LfFile -Path $ConfigFile -Text $text
+    return $true
 }
 
 function Update-SecurityTxtContact {
@@ -801,11 +1007,12 @@ function Update-TeamData {
         $m = Parse-LeadershipLine -Line $line
         if ($null -ne $m) { $members += $m }
     }
-    # Neither outcome of carrying on is acceptable: keeping the template's
-    # sample members publishes FFC's own people as the charity's leadership,
-    # and an empty team breaks the templates' own team tests and /#team link.
+    # No usable lines: an EMPTY team, pending -- never the template's sample
+    # members, who are FFC's own people; publishing them as the charity's
+    # leadership is a false claim.
     if ($members.Count -eq 0) {
-        throw 'No usable leadership lines (each needs a name); refusing to leave the template team on the charity site.'
+        Write-Warning 'No usable leadership lines (each needs a name); the team is left empty and pending (never the template team).'
+        Add-PendingField 'team'
     }
 
     # One card per person. Small boards often give one person two offices
@@ -835,8 +1042,10 @@ function Update-TeamData {
     # on the same line (as prettier leaves a short array after an earlier run),
     # so a second run over the same repo matches too.
     $arrayRe = '(?s)(export const team\s*(?::\s*TeamMember\[\])?\s*=\s*\[).*?(\s*\])'
-    if (-not [regex]::IsMatch($indexText, $importRe) -or -not [regex]::IsMatch($indexText, $arrayRe)) {
-        throw 'src/data/team.ts no longer has ./team/*.json imports and an "export const team = [ ... ]" array; the template changed shape.'
+    # The imports may legitimately be absent: a repo whose team was left empty
+    # by an earlier run has none. The array must always be there.
+    if (-not [regex]::IsMatch($indexText, $arrayRe)) {
+        throw 'src/data/team.ts no longer has an "export const team = [ ... ]" array; the template changed shape.'
     }
 
     # Replace the template's sample members (FFC's own team).
@@ -861,12 +1070,28 @@ function Update-TeamData {
         $vars.Add("  $var,")
     }
 
-    # Drop the old imports, then put the new ones where the first one was.
-    $firstImport = [regex]::Match($indexText, $importRe).Index
+    # Drop the old imports, then put the new ones where the first one was (or,
+    # with no old imports, just before the first export).
+    $firstImportMatch = [regex]::Match($indexText, $importRe)
     $withoutImports = [regex]::Replace($indexText, $importRe, '')
-    $teamTs = $withoutImports.Substring(0, $firstImport) + ($imports -join "`n") + "`n" + $withoutImports.Substring($firstImport)
-    $arrayBody = "`n" + ($vars -join "`n")
-    $teamTs = [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + "`n]" }, 'None')
+    $insertAt = if ($firstImportMatch.Success) { $firstImportMatch.Index } else {
+        $firstExport = [regex]::Match($withoutImports, '(?m)^export\s')
+        if ($firstExport.Success) { $firstExport.Index } else { 0 }
+    }
+    $importBlock = if ($imports.Count -gt 0) {
+        ($imports -join "`n") + "`n" + $(if ($firstImportMatch.Success) { '' } else { "`n" })
+    }
+    else { '' }
+    $teamTs = $withoutImports.Substring(0, $insertAt) + $importBlock + $withoutImports.Substring($insertAt)
+    $teamTs = if ($vars.Count -gt 0) {
+        $arrayBody = "`n" + ($vars -join "`n")
+        [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + $arrayBody + "`n]" }, 'None')
+    }
+    else {
+        [regex]::Replace($teamTs, $arrayRe, { param($m) $m.Groups[1].Value + ']' }, 'None')
+    }
+    # Removing every import can leave a run of blank lines; collapse to one.
+    $teamTs = [regex]::Replace($teamTs, "\n{3,}", "`n`n")
     Write-LfFile -Path $teamIndexFile -Text $teamTs
 }
 
@@ -877,8 +1102,8 @@ function Invoke-RepoPrettier {
     param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string[]]$Paths)
 
     $pkgFile = Join-Path $RepoRoot 'package.json'
-    if (-not (Get-Command npx -ErrorAction SilentlyContinue) -or -not (Test-Path -LiteralPath $pkgFile)) {
-        Write-Warning 'npx or package.json not available; generated files were not run through prettier.'
+    if (-not (Test-Path -LiteralPath $pkgFile)) {
+        Write-Warning 'No package.json; generated files were not run through prettier.'
         return
     }
     $pkg = Get-Content -LiteralPath $pkgFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -886,10 +1111,36 @@ function Invoke-RepoPrettier {
     $version = ($version -replace '^[\^~>=\s]+', '')
     $spec = if ($version -match '^\d+\.\d+\.\d+$') { "prettier@$version" } else { 'prettier@3' }
 
+    # 1. The repo's own installed prettier, when node_modules exists (a local
+    #    re-run over an installed checkout): exactly the pinned version.
+    # 2. Otherwise npx. On Windows call npx.cmd, not the npx.ps1 shim that
+    #    pwsh resolves `npx` to: with `--yes <spec>` the shim fails with "npm
+    #    error could not determine executable to run" (measured locally, npm
+    #    10 / node 22), while npx.cmd runs the same command fine. Linux is
+    #    unaffected (plain `npx`).
+    $localBin = @('node_modules/.bin/prettier.cmd', 'node_modules/.bin/prettier') |
+        ForEach-Object { Join-Path $RepoRoot $_ } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    $isWin = $IsWindows -or $env:OS -eq 'Windows_NT'
+    $npx = if ($isWin -and (Get-Command npx.cmd -ErrorAction SilentlyContinue)) { 'npx.cmd' }
+    elseif (Get-Command npx -ErrorAction SilentlyContinue) { 'npx' }
+    else { $null }
+    if (-not $localBin -and -not $npx) {
+        Write-Warning ("Neither the repo's prettier nor npx is available; generated files were not formatted. Run: npx --yes {0} --write {1}" -f $spec, ($Paths -join ' '))
+        return
+    }
+
     Push-Location $RepoRoot
     try {
-        & npx --yes $spec --write @Paths 2>&1 | Out-Host
-        if ($LASTEXITCODE -ne 0) { Write-Warning "prettier exited $LASTEXITCODE; generated files may need formatting." }
+        if ($localBin) { & $localBin --write @Paths 2>&1 | Out-Host }
+        else { & $npx --yes $spec --write @Paths 2>&1 | Out-Host }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning ("prettier exited {0}; generated files may need formatting. Run in the repo: npx --yes {1} --write {2}" -f $LASTEXITCODE, $spec, ($Paths -join ' '))
+            # Best-effort by design: do not let npx's code become the script's
+            # own exit status (a caller reading it would see a failed apply).
+            $global:LASTEXITCODE = 0
+        }
     }
     finally { Pop-Location }
 }
@@ -915,17 +1166,58 @@ if (Test-Path -LiteralPath $siteConfigFile) {
         -VolunteerUrl $VolunteerUrl `
         -IrsStatus $IrsStatus
 
-    Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail
+    if (-not [string]::IsNullOrWhiteSpace($FooterEmail)) {
+        Update-SecurityTxtContact -RepoRoot $repoRoot -Email $FooterEmail.Trim()
+    }
+    else {
+        # security.txt must name a reachable address. The template's is FFC's
+        # (which hosts and maintains the site), so it is left until the
+        # charity's arrives; the templates' drift check flags the mismatch.
+        Write-Warning 'No contact email; security.txt Contact is left as the template ships it until the email is filled in.'
+    }
 
     Update-TeamData -RepoRoot $repoRoot -LeadershipLines $LeadershipLines
 
+    $script:PendingRendered = Update-SiteConfigPending -ConfigFile $siteConfigFile -Pending @($script:PendingFields)
+
     Invoke-RepoPrettier -RepoRoot $repoRoot -Paths @('src/lib/site.config.ts', 'src/data/team.ts', 'src/data/team')
+
+    if ($script:PendingFields.Count -gt 0) {
+        Write-Warning ("Awaiting information from the charity (emptied, never FFC's values): {0}." -f ($script:PendingFields -join ', '))
+    }
+    if ($SummaryPath) {
+        $summary = [ordered]@{
+            pendingFields   = @($script:PendingFields)
+            pendingRendered = [bool]$script:PendingRendered
+        }
+        Write-LfFile -Path $SummaryPath -Text ($summary | ConvertTo-Json -Depth 3)
+    }
 
     Write-Host 'Config-driven template content updated successfully.' -ForegroundColor Green
     return
 }
 
 # Legacy hard-coded footer (pre-site.config.ts repos).
+# Its regex patch can only REPLACE the template's hard-coded values, not blank
+# them, so a missing field would leave Free For Charity's own phone, address,
+# EIN, social link or staff on the charity's site. Refuse instead (701 reports
+# content_status=failed) rather than publish FFC's identity as the charity's.
+$legacyMissing = @()
+if ([string]::IsNullOrWhiteSpace($FooterEmail)) { $legacyMissing += 'email' }
+if (-not (Get-TelDigits -Phone $FooterPhone)) { $legacyMissing += 'phone' }
+if ([string]::IsNullOrWhiteSpace($FooterAddress)) { $legacyMissing += 'address' }
+if ([string]::IsNullOrWhiteSpace($FooterEin)) { $legacyMissing += 'EIN' }
+if (@($LeadershipLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) { $legacyMissing += 'leadership' }
+# Same parse Update-FooterComponent applies, so the guard accepts exactly the
+# links the patch can replace ("X (Twitter): https://..." included).
+$legacySocial = Get-LegacySocialMap -Social $FooterSocial
+foreach ($k in @('facebook', 'x', 'linkedin', 'github')) {
+    if (-not $legacySocial.ContainsKey($k)) { $legacyMissing += "$k link" }
+}
+if ($legacyMissing.Count -gt 0) {
+    throw ("Legacy hard-coded footer (no src/lib/site.config.ts) cannot blank missing fields, so it would keep Free For Charity's own values for: {0}. Edit src/components/footer/index.tsx by hand." -f ($legacyMissing -join ', '))
+}
+
 $footerFile = Join-Path $repoRoot 'src/components/footer/index.tsx'
 
 Update-FooterComponent `

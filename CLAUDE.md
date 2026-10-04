@@ -776,6 +776,51 @@ the command text alone and stay here as judgment.
   class as L42's `origin\main;…`, but on a `gh` endpoint rather than a git ref. Drop the slash:
   `gh api markdown`. Blocked by `guard_bash.py` rule 8 (run 61).
 
+## A runs read can return an OLD run in the NEWEST position (run 184, 2026-09-29)
+
+`actions/.../runs` occasionally serves a **stale slice**: a run from days or weeks earlier arrives
+at index 0, where the newest run belongs. It is not a `per_page` defect and it does not reproduce.
+
+Two independent observations, same repository, **three minutes apart**:
+
+- **13:27Z, by hand.** 228's scheduled runs returned `35102633795` (09-16) and `34975710558` (09-15)
+  as the two newest. Re-read immediately at `per_page` 2/3/6/10 — **all four agreed** on
+  `36429913014` (09-28). Caught only because a read ten minutes earlier had said otherwise.
+- **13:30:00Z, in production.** 740's scheduled sweep `36575514742` opened alert #1444 against 502
+  citing `34450257554` — **created 2026-09-10**, same `workflow_id`, same path — while 502's true
+  newest completed run on `main` was `36537865899` (same day, 07:38:42Z, **success**). A false
+  "scheduled workflow failing" alert on a healthy workflow. Filed as #1447.
+
+**Why it is dangerous:** the stale payload is internally perfect — real run ids, correct descending
+order, plausible conclusions, fully consistent with the workflow's known baseline. **Nothing inside
+the response can falsify it.** This is the `labels=` / `label=` failure _shape_ (plausible data that
+is wrong) reached by a different route: there the parameter was wrong and silently ignored, here the
+parameter was right and the data was stale. A parameter-spelling check does not catch it.
+
+- **Never take a dated claim from a single read.** Score a prediction on two reads separated in
+  time, or re-read immediately before writing the verdict.
+- **`per_page: 1` is the trap.** With one element there is no second item to disagree with the head,
+  so a stale slice is undetectable by construction. Ask for ~5 and select **`max(created_at)`**
+  rather than trusting index 0. It costs no extra request.
+- **…but `max(created_at)` is necessary, not sufficient — the stale page can be stale all the way
+  down.** Run 185 read 740's own runs at `per_page=5` and got **five elements, all from 2026-09-11,
+  eighteen days stale**, in correct descending order. `max()` over that page returns
+  `2026-09-11T11:42:44Z`: the correct maximum of a wholly stale page. Selecting the max defends
+  against one stale element sitting beside fresh siblings; it does **not** defend against a
+  uniformly stale page, and nothing inside such a response can falsify it.
+- **The tell is contradiction, never the payload.** If a read disagrees with one you took minutes
+  ago, the newer read is not automatically right — re-read a third time before concluding.
+- **Where you already hold a prior observation, compare against it — it is free and it is
+  decisive.** A "newest" run **older** than one you recorded on an earlier pass is impossible on a
+  live workflow, so any caller that already keeps a watermark (740 keeps `last-recorded-run` in its
+  rolling issue) can detect a stale page with **no second request**. Monotonicity is the cheapest
+  staleness check available and the only one that survives a page that is stale in every element.
+- **`per_page` is not the variable; time is.** Run 184's two sightings each re-read at a _different_
+  `per_page` than the read that went stale, which leaves the parameter under suspicion. Run 185 held
+  it fixed: the **same** `per_page=5` returned 09-11 on one read and 09-29 about sixty seconds
+  later, same endpoint, same branch filter. Three distinct `workflow_id`s have now shown it, so it
+  is not a property of one workflow either.
+
 ## Measuring health: a run count is not a time window (run 61, 2026-07-31)
 
 `gh api ".../actions/runs?per_page=N"` returns the newest N runs, so on a busy repo the **time span

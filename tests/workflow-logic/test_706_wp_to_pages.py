@@ -804,7 +804,7 @@ def test_deliver_refuses_a_partial_or_form_bearing_capture():
     published page. Both would otherwise review as capture problems."""
     run = step_run(WORKFLOW, "deliver", "Verify the downloaded capture is intact")
     assert "site/index.html" in run, run
-    assert "<form" in run, run
+    assert "replace-forms-with-mailto.mjs --check" in run, run
     assert "exit 1" in run, run
 
 
@@ -915,6 +915,24 @@ def test_a_form_bearing_site_without_a_contact_address_fails_closed():
     proc = _run_forms_step({"contact/index.html": '<form action="/x"><input></form>'})
     assert proc.returncode != 0, proc.stdout
     assert "contact_email was not set" in proc.stdout, proc.stdout
+
+
+def test_a_search_only_site_needs_no_contact_address():
+    """A search form sends nothing, so it is kept, and no address is needed."""
+    search = '<form method="get" action="/"><input name="s"></form>'
+    proc = _run_forms_step({"index.html": search})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "pages_with_forms=1" in proc.outputs, proc.outputs  # type: ignore[attr-defined]
+
+
+def test_a_sign_in_only_site_needs_no_contact_address():
+    """A sign-in form is removed, not replaced, so no address is needed."""
+    login = (
+        '<form method="post" action="/wp-login.php">'
+        '<input name="log"><input type="password" name="pwd"></form>'
+    )
+    proc = _run_forms_step({"index.html": login})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_forms_are_actually_replaced_when_an_address_is_given():

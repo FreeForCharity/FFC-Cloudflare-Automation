@@ -322,10 +322,59 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
 # the ledger writes one — `720-create-repo.yml:193,274` cites two reproductions
 # in a single token, and a pattern accepting only `N` and `N-M` reads it as
 # prose. Both halves of that citation were stale when this guard was written.
+_SPEC = r"\d+(?:-\d+)?(?:,:?\d+(?:-\d+)?)*"
+
+# The `,:?` in `_SPEC` is not cosmetic. L223 writes
+# `502-google-analytics-report.yml:230,:239` — a second line with its own colon
+# inside one token — and a spec accepting only `,\d` fails to match the WHOLE
+# token, so both halves went unchecked rather than one. `_CITATION_SHAPED` does
+# not see it either (its tail is `(?:[-,]\d+)*`), so the coverage test below was
+# silent about it too: two extractors disagreeing is the alarm this module
+# relies on, and they agreed on skipping it. Both citations were stale (#1443).
 _CITATION = re.compile(
-    r"^(?P<path>[^\s:`]+\.[A-Za-z][A-Za-z0-9]{0,7})"
-    r":(?P<spec>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$"
+    r"^(?P<path>[^\s:`]+\.[A-Za-z][A-Za-z0-9]{0,7})" rf":(?P<spec>{_SPEC})$"
 )
+
+# Gap 1 of #1443: a citation whose file is named by an EARLIER citation in the
+# same row and not repeated — `740-…yml:515` renders … while `:468` already
+# computes `failed`. The ledger writes this constantly (26 tokens across 15 rows
+# when the rule was added) and `_CITATION` cannot match one, because there is no
+# path to match. So the strongest-looking guard in this module was resolving
+# roughly half of the coordinates in the rows that carry more than one.
+#
+# It is not a corner case: on #1441 both of L222's citations shifted by the same
+# +14 from the same edit, the anchored one was caught by CI and the bare one
+# passed, twice. The bare form is attached to the nearest preceding `path:LINE`
+# in the same ROW (not merely the same cell — the Evidence column routinely
+# continues a sentence the Lesson column started).
+#
+# A bare citation with NO preceding anchor stays unresolved, deliberately. That
+# is the shape L196 and L155 use on purpose: L196 narrates six coordinates that
+# were WRONG and writes them split so the guard does not chase them, and L155
+# cites three offsets in a tree pinned to a SHA that is not this one. Neither is
+# a coordinate into the current tree, and a guard that resolved them anyway
+# would report a row for being accurate. `test_the_ledger_still_carries_bare
+# _citations_that_resolve` is what stops that exemption becoming a silent zero.
+_BARE_CITATION = re.compile(rf"^:(?P<spec>{_SPEC})$")
+
+# Gap 2 of #1443: `_has_content` asks only whether the cited line is blank or a
+# lone comment marker, so a coordinate that drifts onto real code passes — and
+# most lines in a file are real code, so that is the COMMON shift, not the rare
+# one. `:454` on #1441 landed on `let gateNote = '';` and shipped green.
+#
+# The line cannot be checked semantically (that is #1087/#1334's undecidable
+# half). What can be checked is an author's own quotation of it, which the
+# ledger already writes as ordinary prose: `check-environment-protection.py:221`
+# (`HTTPError`). So the convention is the existing house style, given a meaning
+# — a backticked token separated from a citation by nothing but whitespace or an
+# opening bracket is an ANCHOR, and some cited line must contain it verbatim.
+#
+# Opt-in by construction: a token with a word in front of it is prose and is not
+# read as an anchor. That keeps the 400-odd existing backticks out of it, and it
+# is why the rule is documented in the ledger's own "Adding a lesson" section
+# (#1443 AC5) — an author who does not know the adjacency is meaningful is the
+# only way to get a false positive here.
+_ANCHOR_GAP = re.compile(r"^[\s(\[]*$")
 
 # Deliberately looser than `_CITATION`: anything with a `/` or a `.` in front of
 # a `:LINE` is citation-SHAPED. Nothing acts on it except the coverage test
@@ -420,17 +469,45 @@ def citation_problems(
 
     problems: list[str] = []
     for lid, cells in _rows_from_text(text):
+        # Reset per ROW, not per cell: the bare form continues a sentence, and
+        # the ledger's sentences run across the column boundary.
+        anchor_path: str | None = None
         for column, cell in enumerate(cells):
-            for token in _PATHISH.findall(cell):
-                m = _CITATION.match(token.strip())
-                if not m:
+            tokens = list(_PATHISH.finditer(cell))
+            for index, match in enumerate(tokens):
+                token = match.group(1).strip()
+                full = _CITATION.match(token)
+                bare = _BARE_CITATION.match(token)
+                if full:
+                    anchor_path = full.group("path")
+                    cited, spec = full.group("path"), full.group("spec")
+                elif bare:
+                    if anchor_path is None:
+                        continue
+                    cited, spec = anchor_path, bare.group("spec")
+                else:
                     continue
-                cited = m.group("path")
                 parts = []
-                for piece in m.group("spec").split(","):
-                    first, _, last = piece.partition("-")
+                for piece in spec.split(","):
+                    first, _, last = piece.lstrip(":").partition("-")
                     parts.append((int(first), int(last or first)))
-                where = f"{label}: {lid} (column {column + 1}) cites `{token.strip()}`"
+                shown = token if full else f"{cited}{token}"
+                where = f"{label}: {lid} (column {column + 1}) cites `{shown}`"
+
+                # The anchor, if the author wrote one. Read before resolution so
+                # the "which line" and "what it says" checks report separately:
+                # a row can be right about the file and wrong about the line.
+                quoted = None
+                if index + 1 < len(tokens):
+                    between = cell[match.end() : tokens[index + 1].start()]
+                    following = tokens[index + 1].group(1)
+                    if (
+                        _ANCHOR_GAP.match(between)
+                        and following.strip()
+                        and not _CITATION.match(following.strip())
+                        and not _BARE_CITATION.match(following.strip())
+                    ):
+                        quoted = following
 
                 if cited in CROSS_REPO_CITATIONS:
                     continue
@@ -455,6 +532,7 @@ def citation_problems(
                     resolved = candidates[0]
 
                 lines = files[resolved]
+                covered: list[str] = []
                 for start, end in parts:
                     if end < start:
                         problems.append(
@@ -467,12 +545,23 @@ def citation_problems(
                             f"the cited range {start}-{end} is outside the file"
                         )
                         continue
+                    covered.extend(lines[start - 1 : end])
                     if not _has_content(lines[start - 1]):
                         problems.append(
                             f"{where} -> {resolved}:{start}, which is blank or a bare "
                             "comment marker. Content moved above it and the citation "
                             "did not follow; re-derive the line from what the row "
                             "describes"
+                        )
+                if quoted is not None and covered:
+                    if not any(quoted in line for line in covered):
+                        problems.append(
+                            f"{where} -> {resolved}, and the row quotes "
+                            f"`{quoted}` beside it — which none of the cited lines "
+                            "contains. Either the coordinate drifted onto a "
+                            "different line (re-derive it from the quote) or the "
+                            "quote is not an anchor, in which case put a word "
+                            "between it and the citation"
                         )
     return problems
 
@@ -676,6 +765,212 @@ def test_the_citation_guard_leaves_good_citations_and_non_citations_alone():
     assert not citation_problems(clean, _CITE_FILES, label="planted.md"), (
         "exact paths, unique basenames, ranges, and tokens that are not citations "
         "must all pass"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1443 gap 1 — the bare `:NNN` sibling
+# ---------------------------------------------------------------------------
+_BARE_FILES = {
+    "scripts/thing.py": ["import os", "", "def main():", "    return 1"],
+    "docs/notes.md": ["# Notes", "prose"],
+}
+
+
+def test_the_citation_guard_resolves_a_bare_line_against_the_rows_earlier_path():
+    """AC1. `path.py:1` then `:2` — both resolved against the same file."""
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` and also `:2`", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _BARE_FILES, label="planted.md")
+    assert len(problems) == 1, f"exactly the bare one must fail: {problems}"
+    assert "scripts/thing.py:2" in problems[0], (
+        f"the finding must name the file the bare form resolved to: {problems}"
+    )
+    # The discriminator: identical row, bare line moved onto content.
+    good = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` and also `:3`", "#1", "`doc — why`"
+    )
+    assert not citation_problems(good, _BARE_FILES, label="planted.md"), (
+        "a bare citation onto a real line must pass — otherwise the rule above "
+        "is `report every bare token`"
+    )
+
+
+def test_a_bare_citation_with_no_earlier_path_in_the_row_is_left_alone():
+    """The L196/L155 exemption, which is the whole reason it is opt-in.
+
+    Those rows write coordinates that were WRONG, or that belong to a tree
+    pinned to another SHA. Resolving them against this tree would report a row
+    for being accurate — the direction that gets a guard switched off (#1432).
+    """
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "drifted onto a blank at `:2` on that branch", "#1", "`doc — why`"
+    )
+    assert not citation_problems(planted, _BARE_FILES, label="planted.md"), (
+        "a bare `:NNN` with no path anywhere before it names no file and must "
+        "not be guessed at"
+    )
+
+
+def test_the_bare_form_carries_across_the_column_boundary():
+    """Scoped to the ROW, not the cell: L228's sentence runs across it."""
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1`", "and the repair at `:2`", "`doc — why`"
+    )
+    problems = citation_problems(planted, _BARE_FILES, label="planted.md")
+    assert len(problems) == 1 and "column 2" in problems[0], (
+        f"the Evidence cell's bare citation must resolve too: {problems}"
+    )
+
+
+def test_the_comma_colon_spec_is_parsed_rather_than_skipped_whole():
+    """L223 writes `…yml:230,:239`. The old spec matched neither half.
+
+    The failure mode was not a missed line but a missed TOKEN: `_CITATION`
+    rejected the whole thing, `_CITATION_SHAPED` rejected it too, and the
+    coverage test that exists to catch exactly that disagreement was silent
+    because they agreed. Both cited lines were stale.
+    """
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1,:2`", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _BARE_FILES, label="planted.md")
+    assert len(problems) == 1 and ":2" in problems[0], (
+        f"the second element of a `N,:M` spec must be checked: {problems}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1443 gap 2 — the quoted anchor
+# ---------------------------------------------------------------------------
+def test_a_quoted_anchor_beside_a_citation_must_appear_on_a_cited_line():
+    planted = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` (`import sys`)", "#1", "`doc — why`"
+    )
+    problems = citation_problems(planted, _BARE_FILES, label="planted.md")
+    assert len(problems) == 1 and "import sys" in problems[0], (
+        f"a quote the cited line does not contain must be reported: {problems}"
+    )
+    ok = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` (`import os`)", "#1", "`doc — why`"
+    )
+    assert not citation_problems(ok, _BARE_FILES, label="planted.md"), (
+        "the same shape with a quote that IS on the line must pass"
+    )
+    # A range anchors anywhere inside itself, not only on its first line.
+    span = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:3-4` (`return 1`)", "#1", "`doc — why`"
+    )
+    assert not citation_problems(span, _BARE_FILES, label="planted.md"), (
+        "an anchor on the last line of a cited range must satisfy it"
+    )
+
+
+def test_a_backticked_token_separated_by_a_word_is_not_read_as_an_anchor():
+    """AC3's false-positive control, and the convention's whole escape hatch.
+
+    The ledger carries several hundred backticked tokens; only the ones written
+    hard against a citation are claims about that line. If prose counted, every
+    row would be a finding and the guard would be switched off within a week.
+    """
+    prose = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` and then `npm ci` ran", "#1", "`doc — why`"
+    )
+    assert not citation_problems(prose, _BARE_FILES, label="planted.md"), (
+        "a word between the citation and the next token means it is prose"
+    )
+    # Nor may a second citation be eaten as the first one's anchor.
+    pair = _FIXTURE_HEADER + _cite_row(
+        "L90", "`scripts/thing.py:1` `docs/notes.md:2`", "#1", "`doc — why`"
+    )
+    assert not citation_problems(pair, _BARE_FILES, label="planted.md"), (
+        "two adjacent citations are two citations, not a citation and an anchor"
+    )
+
+
+def test_the_1441_regression_a_shifted_bare_citation_is_reported():
+    """AC2, derived from the shipped row rather than a hand-written before (L47).
+
+    On #1441 an inserted comment block shifted `740-…yml` by +14. L222 carries
+    two citations into that file; the anchored one landed on a blank line and CI
+    caught it, the bare one landed on `let gateNote = '';` and passed twice. The
+    fixture re-creates exactly that by walking the live row's bare citation back
+    to its pre-shift value, so the test decays with the ledger instead of
+    asserting against a frozen copy of it.
+
+    #1447 shifted the same file twice and reproduced the split precisely both
+    times. First by +39: the anchored `:515` landed on a blank line and CI
+    caught it, while the bare `:468` landed on a lone `}`. Then a review fix
+    added comments and shifted it again by +11, landing the anchored `:581` on
+    a blank line and the bare `:507` on a lone `try {`. Both bare coordinates
+    were real content, so the blank rule stayed silent for both and only the
+    quoted anchor caught them. The pre-shift coordinate below is therefore that
+    PR's own latest shift, not a number chosen to make the test pass — and the
+    fact that it recurred within one PR is the argument for the anchor rule.
+    """
+    row = next(
+        line
+        for line in LEDGER.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("| L222 ")
+    )
+    assert "`:518`" in row, (
+        "L222 no longer carries the bare citation this regression is about — "
+        "re-derive the fixture from whichever row does, or drop this test"
+    )
+    shifted = _FIXTURE_HEADER + row.replace("`:518`", "`:507`") + "\n"
+    problems = citation_problems(shifted, label="planted.md")
+    assert problems, (
+        "the pre-#1441 coordinate must be reported; it is real code, so only "
+        "the quoted anchor can catch it"
+    )
+    assert any("const failed" in p for p in problems), (
+        f"and it must be the ANCHOR that catches it, not the blank rule: {problems}"
+    )
+    assert not citation_problems(
+        _FIXTURE_HEADER + row + "\n", label="planted.md"
+    ), "the row as shipped must be clean — otherwise the above proves nothing"
+
+
+def test_the_ledger_still_carries_bare_citations_and_anchors_to_check():
+    """Both new rules are filters, so both can go silently green (#1055).
+
+    `test_the_ledger_actually_contains_citations_to_check` guards the anchored
+    form for exactly this reason; these two shapes need the same positive
+    control or a regex that stops matching reads as a clean ledger.
+    """
+    text = LEDGER.read_text(encoding="utf-8")
+    bare = anchors = 0
+    for _, cells in _rows_from_text(text):
+        seen_path = False
+        for cell in cells:
+            tokens = list(_PATHISH.finditer(cell))
+            for i, m in enumerate(tokens):
+                tok = m.group(1).strip()
+                if _CITATION.match(tok):
+                    seen_path = True
+                elif _BARE_CITATION.match(tok) and seen_path:
+                    bare += 1
+                else:
+                    continue
+                if i + 1 < len(tokens):
+                    nxt = tokens[i + 1].group(1).strip()
+                    if (
+                        _ANCHOR_GAP.match(cell[m.end() : tokens[i + 1].start()])
+                        and nxt
+                        and not _CITATION.match(nxt)
+                        and not _BARE_CITATION.match(nxt)
+                    ):
+                        anchors += 1
+    assert bare >= 10, (
+        f"expected the ledger's usual population of resolvable bare citations, "
+        f"saw {bare} — if they really are gone, lower this; until then it means "
+        "the bare extractor stopped matching"
+    )
+    assert anchors >= 3, (
+        f"saw {anchors} quoted anchors — the convention is documented in the "
+        "ledger's 'Adding a lesson' section and used by L222/L223/L244; a zero "
+        "here means the adjacency rule stopped firing, not that authors stopped"
     )
 
 

@@ -858,7 +858,11 @@ export function extractMetaDescription(html) {
   const m =
     /<meta[^>]*\bname\s*=\s*["']description["'][^>]*\bcontent\s*=\s*["']([^"']*)["']/i.exec(html) ??
     /<meta[^>]*\bcontent\s*=\s*["']([^"']*)["'][^>]*\bname\s*=\s*["']description["']/i.exec(html);
+  // Zero-width characters go too: a block editor leaves U+200B at the start of
+  // a paragraph, and Yoast copies it into the description, where it is an
+  // invisible first character of every share preview and search snippet.
   const v = decodeEntities(m?.[1] ?? '')
+    .replace(/[​-‍⁠﻿]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return v || null;
@@ -972,10 +976,33 @@ export function collectHeadings(html) {
       level: Number(m[1]),
       attrs: m[2],
       module: mods ? mods[mods.length - 1] : null,
-      inChrome: /_tb_(header|footer)$/.test(mods ? mods[mods.length - 1] : ''),
+      inChrome:
+        /_tb_(header|footer)$/.test(mods ? mods[mods.length - 1] : '') || isSiteTitleHeading(m[2]),
     });
   }
   return out;
+}
+
+/**
+ * Is this heading the theme's site title, i.e. chrome rather than content?
+ *
+ * The Divi detection above reads the template-part class off the enclosing
+ * module, which a block theme does not have. Twenty Twenty-Five renders the
+ * site name as `<h1 class="wp-block-site-title">` inside the header template
+ * part on every page, and classic themes use `site-title` for the same
+ * element. Measured on tamkeensports.org: with neither recognised as chrome,
+ * the plan made "Tamkeen Sports" the h1 of all 13 pages and demoted every
+ * page's own title -- "ABOUT US", "UPCOMING EVENTS" -- to h2. A site name is
+ * never what a page is about, which is exactly the rule the Divi branch
+ * already encodes.
+ *
+ * Tokens are split, not pattern-matched (the `widgettitle` lesson): a class
+ * such as `site-title-wrapper` is not the site title.
+ */
+function isSiteTitleHeading(attrs) {
+  const cls = /\sclass\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const tokens = (cls?.[2] ?? cls?.[3] ?? '').split(/\s+/).filter(Boolean);
+  return tokens.includes('wp-block-site-title') || tokens.includes('site-title');
 }
 
 /**
@@ -1460,7 +1487,19 @@ export function scopeCloneCss(css, wrapper = 'ffc-clone') {
     if (ch === '{') {
       const prelude = buf;
       buf = '';
-      const trimmed = prelude.trim();
+      // Comments are whitespace to the parser and must be to this test too.
+      // The prelude is copied with its comments intact (they are harmless in
+      // a selector list: `.ffc-clone /* c */ .a` reads as `.ffc-clone .a`),
+      // but an at-rule BEHIND a comment -- `/* Mobile */ @media (...)` --
+      // starts with `/`, not `@`, so it used to be scoped as a selector and
+      // emitted as `.ffc-clone /* Mobile */ @media (...){...}`. That is not a
+      // valid rule, and the browser drops the whole block without a word.
+      // Measured on tamkeensports.org: the WPForms block's only mobile rule
+      // (`max-width: unset` under 600px) went that way, the form stayed at
+      // its desktop 500px, and the home page overflowed a 393px phone by
+      // 137px -- which pushed the navigation overlay's close button off the
+      // screen.
+      const trimmed = prelude.replace(/\/\*[\s\S]*?\*\//g, '').trim();
       const isAtRule = trimmed.startsWith('@');
       const insideKeyframes = keyframesDepth !== -1 && depth > keyframesDepth;
       if (isAtRule || insideKeyframes) {
@@ -1726,6 +1765,93 @@ export function demoteCapturedFooters(bodyHtml) {
     }
   }
   return { html: out + bodyHtml.slice(last), demoted, keptNested };
+}
+
+/**
+ * Hosts whose "Powered by" credit stops being true the moment a site leaves
+ * them. Matched on the credit link's hostname, never on its text, so a
+ * "Powered by <a>our sponsors</a>" paragraph is not touched.
+ */
+const FORMER_HOST_CREDIT_HOSTS = [
+  'interserver.net',
+  'hostpapa.com',
+  'hostpapa.ca',
+  'bluehost.com',
+  'godaddy.com',
+  'siteground.com',
+  'hostgator.com',
+  'dreamhost.com',
+  'wordpress.org',
+  'wordpress.com',
+];
+
+/**
+ * Drop a paragraph that is nothing but a "Powered by / Hosted by <host>"
+ * credit for the platform or host the site is migrating away from.
+ *
+ * After cutover the site is served by GitHub Pages, so the credit is false and
+ * is a live link to the old host. FFC-EX-tamkeensports.org#7 removed
+ * "Powered by InterServer" from 11 fragments by hand, and a re-delivery from a
+ * new capture put all 11 back. Only a WHOLE paragraph of credit goes, with the
+ * blank lines that separated it, so a sentence that merely mentions a host
+ * survives.
+ */
+export function removeFormerHostCredits(html) {
+  let removed = 0;
+  const out = html.replace(
+    /\s*<p\b[^>]*>\s*(?:Proudly\s+)?(?:Powered|Hosted)\s+by(?:\s|&nbsp;|&#160;)*<a\b([^>]*)>[^<]*<\/a>\s*\.?\s*<\/p>/gi,
+    (whole, attrs) => {
+      const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
+      let host = '';
+      try {
+        host = new URL(href, 'https://invalid.example/').hostname.toLowerCase();
+      } catch {
+        return whole;
+      }
+      const known = FORMER_HOST_CREDIT_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+      if (!known) return whole;
+      removed += 1;
+      return '';
+    },
+  );
+  return { html: out, removed };
+}
+
+/**
+ * Point the captured `<main>` at the id the root layout's skip link targets.
+ *
+ * The Footer-Only template's layout has a "Skip to main content" link to
+ * `#main-content` but no `<main>` of its own -- the page supplies it. A
+ * block-theme capture's `<main>` carries WordPress's
+ * `id="wp--skip-link--target"`, so the layout's skip link went nowhere on every
+ * page (fixed by hand in FFC-EX-tamkeensports.org c909b05, and undone by the
+ * next re-delivery). WordPress's own skip link inside the fragment is retargeted
+ * with it, so both links land on the same element.
+ *
+ * A no-op when the fragment already has an element with that id, or has no
+ * `<main>` to carry it.
+ */
+export function retargetSkipLinkTarget(html, targetId) {
+  if (!targetId) return { html, retargeted: false };
+  const has = new RegExp(`\\bid\\s*=\\s*["']${escapeRe(targetId)}["']`, 'i');
+  if (has.test(html)) return { html, retargeted: false };
+  const mainTag = /<main\b([^>]*)>/i.exec(html);
+  if (!mainTag) return { html, retargeted: false };
+  const oldId = /\bid\s*=\s*["']([^"']+)["']/i.exec(mainTag[1])?.[1];
+  const newAttrs = oldId
+    ? mainTag[1].replace(/\bid\s*=\s*["'][^"']+["']/i, `id="${targetId}"`)
+    : ` id="${targetId}"${mainTag[1]}`;
+  let out =
+    html.slice(0, mainTag.index) +
+    `<main${newAttrs}>` +
+    html.slice(mainTag.index + mainTag[0].length);
+  if (oldId) {
+    out = out.replace(
+      new RegExp(`(\\bhref\\s*=\\s*["'])#${escapeRe(oldId)}(["'])`, 'gi'),
+      `$1#${targetId}$2`,
+    );
+  }
+  return { html: out, retargeted: true };
 }
 
 /**
@@ -2006,6 +2132,7 @@ export function routeSource({
   wrapperClass = 'ffc-clone',
   absoluteTitle = false,
   pageMetadataHelper = false,
+  brandTitle = false,
 }) {
   // The trailing slash is not cosmetic. The export runs with
   // `trailingSlash: true`, because the source WordPress served every page at a
@@ -2031,9 +2158,42 @@ export function routeSource({
   // downgrades `twitter:card` to `summary`. Measured too, on the first attempt
   // at this fix. The template's own `pageMetadata()` helper already solves
   // both halves and is where this belongs, so use it when the repo has it.
-  if (pageMetadataHelper) {
+  //
+  // `pageMetadataHelper` names which template's helper the repo has:
+  // `'page-metadata'` (Single-Page, takes `canonical`) or `'pageMetadata'`
+  // (Footer-Only, takes `path`). `true` is the older spelling of the first.
+  const helperModule =
+    pageMetadataHelper === 'pageMetadata' ? '@/lib/pageMetadata' : '@/lib/page-metadata';
+  const helperPathKey = pageMetadataHelper === 'pageMetadata' ? 'path' : 'canonical';
+  if (pageMetadataHelper === 'pageMetadata' && brandTitle) {
+    // The Footer-Only helper builds the social title as
+    // `${title} | ${siteConfig.name}`. A page titled with the site's own name
+    // -- the front page, in practice -- then shares as "Tamkeen Sports |
+    // Tamkeen Sports", which is what FFC-EX-tamkeensports.org#7 fixed by hand.
+    // Override the three titles after the spread, keeping the helper's
+    // canonical, description, og:image and twitter:card.
     lines.push(
-      "import { pageMetadata } from '@/lib/page-metadata'",
+      "import { pageMetadata } from '@/lib/pageMetadata'",
+      "import { siteConfig } from '@/lib/site.config'",
+      '',
+      '// Generated by workflow 706 from the live site capture. Edit the source site,',
+      '// or the converter in FFC-Cloudflare-Automation, rather than this file.',
+      'const base = pageMetadata({',
+      '  title: siteConfig.name,',
+      `  description: ${tsString(description || title)},`,
+      `  path: ${tsString(canonical)},`,
+      '})',
+      '',
+      'export const metadata: Metadata = {',
+      '  ...base,',
+      '  title: { absolute: siteConfig.name },',
+      '  openGraph: { ...base.openGraph, title: siteConfig.name },',
+      '  twitter: { ...base.twitter, title: siteConfig.name },',
+      '}',
+    );
+  } else if (pageMetadataHelper) {
+    lines.push(
+      `import { pageMetadata } from '${helperModule}'`,
       '',
       '// Generated by workflow 706 from the live site capture. Edit the source site,',
       '// or the converter in FFC-Cloudflare-Automation, rather than this file.',
@@ -2045,7 +2205,7 @@ export function routeSource({
       // back to its own title rather than to the site-wide blurb, which is the
       // thing this whole block exists to stop appearing on 587 pages.
       `    description: ${tsString(description || title)},`,
-      `    canonical: ${tsString(canonical)},`,
+      `    ${helperPathKey}: ${tsString(canonical)},`,
       '  }),',
     );
     // NOTHING between the spread and the title override. An earlier version
@@ -2855,6 +3015,33 @@ function selfTest() {
     [1],
   );
   eq('a page with no headings plans nothing', planHeadingLevels(collectHeadings('<p>hi</p>')), []);
+  // A block theme's site title is chrome: the page's own heading stays the
+  // h1 and the site name nests under it. Without this every page of a
+  // Twenty Twenty-Five capture was titled by the site name.
+  eq(
+    'a block-theme site title is chrome, not the primary heading',
+    planHeadingLevels(
+      collectHeadings(
+        '<header><h1 class="wp-block-site-title">Site</h1></header><main><h1 class="wp-block-heading">About</h1><h2>Sub</h2></main>',
+      ),
+    ).map((h) => h.newLevel),
+    [2, 1, 2],
+  );
+  eq(
+    'a classic-theme site-title class is chrome too, and a look-alike token is not',
+    [
+      planHeadingLevels(collectHeadings('<h1 class="site-title">Site</h1><h1>Page</h1>')).map(
+        (h) => h.newLevel,
+      ),
+      planHeadingLevels(
+        collectHeadings('<h1 class="site-title-wrapper">First</h1><h1>Second</h1>'),
+      ).map((h) => h.newLevel),
+    ],
+    [
+      [2, 1],
+      [1, 2],
+    ],
+  );
 
   // --- the CSS half --------------------------------------------------
   // Measured regression: the front page's white h1 on the site's blue #1c75b9
@@ -3589,6 +3776,19 @@ function selfTest() {
     scopeCloneCss('@media (max-width:600px){h2{font-size:1rem}}').css,
     '@media (max-width:600px){.ffc-clone h2{font-size:1rem}}',
   );
+  // A comment ahead of the at-rule is whitespace to the browser; it must not
+  // turn the prelude into a "selector". Scoped, `.ffc-clone /* m */ @media`
+  // is invalid and the whole block is dropped silently.
+  eq(
+    'a comment before an at-rule does not get it scoped as a selector',
+    scopeCloneCss('/* m */ @media (max-width:600px){h2{font-size:1rem}}').css,
+    '/* m */ @media (max-width:600px){.ffc-clone h2{font-size:1rem}}',
+  );
+  eq(
+    'a comment before a selector still scopes the selector',
+    scopeCloneCss('/* c */ .a{x:y}').css,
+    '.ffc-clone /* c */ .a{x:y}',
+  );
   // Keyframe "selectors" are percentages; a prefix destroys the animation.
   eq(
     'keyframe steps are left alone',
@@ -4035,6 +4235,23 @@ function selfTest() {
   // Emitting `description: undefined` after the spread deleted that and cost
   // `/about-us/` its Lighthouse SEO score (100 -> 92, under the 98 error
   // threshold). Both directions are asserted so neither can come back.
+  // The Footer-Only template spells the helper `@/lib/pageMetadata` and its
+  // route argument `path`. Emitting the Single-Page spelling into such a repo
+  // is an import of a module that does not exist, and NOT using the helper
+  // there is a relative canonical that loses the GitHub Pages base path.
+  const footerOnly = routeSource({
+    slug: 'about-us',
+    title: 'About Us',
+    description: 'Who we are.',
+    pageMetadataHelper: 'pageMetadata',
+  });
+  eq(
+    'a Footer-Only repo imports its own helper and passes the route as `path`',
+    footerOnly.includes("import { pageMetadata } from '@/lib/pageMetadata'") &&
+      /pageMetadata\(\{[\s\S]*?path: '\/about-us\/',/.test(footerOnly) &&
+      !footerOnly.includes('canonical:'),
+    true,
+  );
   const noDesc = routeSource({ slug: 'about-us', title: 'About Us', pageMetadataHelper: true });
   eq(
     'the helper path substitutes the title when the capture gave no description',
@@ -4046,6 +4263,100 @@ function selfTest() {
     noDesc.includes('description: undefined'),
     false,
   );
+  const brandHome = routeSource({
+    slug: '',
+    title: 'Tamkeen Sports',
+    description: 'Women-only sports events.',
+    pageMetadataHelper: 'pageMetadata',
+    brandTitle: true,
+  });
+  eq(
+    'a page titled with the site name overrides the helper\'s "name | name" social titles',
+    brandHome.includes("import { siteConfig } from '@/lib/site.config'") &&
+      brandHome.includes('title: { absolute: siteConfig.name },') &&
+      brandHome.includes('openGraph: { ...base.openGraph, title: siteConfig.name },') &&
+      brandHome.includes('twitter: { ...base.twitter, title: siteConfig.name },') &&
+      brandHome.includes("path: '/',"),
+    true,
+  );
+  eq(
+    'brandTitle on the Single-Page helper keeps the ordinary shape (its social title has no suffix)',
+    routeSource({
+      slug: '',
+      title: 'X',
+      description: 'd',
+      pageMetadataHelper: 'page-metadata',
+      brandTitle: true,
+    }).includes('siteConfig'),
+    false,
+  );
+
+  // Zero-width characters a block editor leaves in a Yoast description.
+  eq(
+    'zero-width characters are stripped from the meta description',
+    extractMetaDescription('<meta name="description" content="​Tamkeen‍ Sports﻿">'),
+    'Tamkeen Sports',
+  );
+
+  // Former-host credits.
+  const credit =
+    '<p class="x">EIN: 1</p>\n\n\n\n<p class="has-small-font-size">Powered by&nbsp;<a href="http://www.interserver.net/" data-type="link">InterServer</a></p>\n</div>';
+  const cr = removeFormerHostCredits(credit);
+  eq(
+    'an InterServer credit paragraph is removed with its blank lines',
+    cr.html,
+    '<p class="x">EIN: 1</p>\n</div>',
+  );
+  eq('and counted', cr.removed, 1);
+  eq(
+    'a "Powered by" link to anything else is kept',
+    removeFormerHostCredits(
+      '<p>Powered by <a href="https://sponsor.example.org/">our sponsors</a></p>',
+    ).removed,
+    0,
+  );
+  eq(
+    'a sentence that only mentions a host is kept',
+    removeFormerHostCredits(
+      '<p>We moved from <a href="https://www.interserver.net/">InterServer</a> in 2026.</p>',
+    ).removed,
+    0,
+  );
+  eq(
+    'a WordPress credit is a former-platform credit too',
+    removeFormerHostCredits(
+      '<p>Proudly powered by <a href="https://wordpress.org/">WordPress</a>.</p>',
+    ).removed,
+    1,
+  );
+  eq(
+    'a look-alike host is not matched by suffix alone',
+    removeFormerHostCredits('<p>Powered by <a href="https://notinterserver.net/">X</a></p>')
+      .removed,
+    0,
+  );
+
+  // Skip-link target.
+  const wpMain =
+    '<a class="skip-link" href="#wp--skip-link--target">Skip</a><main id="wp--skip-link--target" class="m">x</main>';
+  const rt = retargetSkipLinkTarget(wpMain, 'main-content');
+  eq(
+    "the captured <main> takes the layout's skip-link id, and WordPress's own link follows it",
+    rt.html,
+    '<a class="skip-link" href="#main-content">Skip</a><main id="main-content" class="m">x</main>',
+  );
+  eq(
+    'a <main> without an id gains one',
+    retargetSkipLinkTarget('<main class="m">x</main>', 'main-content').html,
+    '<main id="main-content" class="m">x</main>',
+  );
+  eq(
+    'a fragment that already carries the id is left alone',
+    retargetSkipLinkTarget('<div id="main-content"></div><main id="a">x</main>', 'main-content')
+      .retargeted,
+    false,
+  );
+  eq('no target id means no change', retargetSkipLinkTarget(wpMain, null).html, wpMain);
 
   console.log(failures ? `\n${failures} self-test failure(s)` : '\nall self-tests passed');
   return failures ? 1 : 0;

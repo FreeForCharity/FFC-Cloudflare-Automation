@@ -330,19 +330,44 @@ def test_a_template_requiring_sealUrl_keeps_the_key_and_gets_it_empty():
     # rather than silently testing the shape this test exists to cover.
     assert "sealUrl:" in footer_only_shape, "fixture substitution did not apply"
 
-    td, repo, proc = applied(site_config=footer_only_shape)
+    # The Candid URL is passed explicitly rather than left to FULL_ARGS. This
+    # branch deliberately stopped DERIVING a profile URL from the EIN, so
+    # FULL_ARGS -- an EIN and no URL -- now takes the empty/pending path, and
+    # asserting a derived URL here would assert the behaviour this PR removes.
+    args = {
+        **FULL_ARGS,
+        "GuideStarProfileUrl": "https://www.guidestar.org/profile/12-3456789",
+    }
+    td, repo, proc = applied(args, site_config=footer_only_shape)
     try:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         cfg = read(repo, "src/lib/site.config.ts")
         assert "sealUrl: ''," in cfg, cfg
         # FFC's own Candid organization id must not survive under the charity.
         assert "9326392" not in cfg, cfg
-        # The other two keys still get the charity's derived profile.
+        # The other two keys still get the charity's own profile.
         assert "profileUrl: 'https://www.guidestar.org/profile/12-3456789'," in cfg, cfg
         assert (
             "directProfileUrl: 'https://www.guidestar.org/profile/12-3456789',"
             in cfg
         ), cfg
+    finally:
+        shutil.rmtree(td)
+
+    # The pending path must carry sealUrl too. This is the combination neither
+    # parent produced: main wrote guidestar only when a profile URL was present
+    # (so a required sealUrl was never emitted on the empty path), and this
+    # branch writes it always but had no sealUrl at all. Without this case the
+    # TS2741 break survives for exactly the charity #1431 exists to serve -- one
+    # with no Candid profile yet.
+    td, repo, proc = applied(site_config=footer_only_shape)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "sealUrl: ''," in cfg, cfg
+        assert "\n    profileUrl: '',"  in cfg, cfg
+        assert "\n    directProfileUrl: '',"  in cfg, cfg
+        assert "9326392" not in cfg, cfg
     finally:
         shutil.rmtree(td)
 

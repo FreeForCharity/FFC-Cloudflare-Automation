@@ -249,6 +249,61 @@ def test_blank_candid_urls_derive_from_the_ein_not_ffc():
         shutil.rmtree(td)
 
 
+def test_a_template_requiring_sealUrl_keeps_the_key_and_gets_it_empty():
+    # The Footer-Only template declares `guidestar: { sealUrl; profileUrl;
+    # directProfileUrl }`, all REQUIRED. Replacing the object without sealUrl
+    # produced TS2741 and `next build` failed, so the provisioned site never
+    # deployed -- all three sample charities, 748 run 37164489698. The seal is
+    # keyed to an organization's own Candid id, so it cannot be derived from an
+    # EIN; FFC's own widget URL would be a transparency claim about FFC. It is
+    # therefore written EMPTY, and the template renders the seal only when set.
+    footer_only_shape = SITE_CONFIG.replace(
+        "  guidestar: {\n"
+        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+        "  },",
+        "  guidestar: {\n"
+        "    sealUrl: 'https://widgets.guidestar.org/prod/v1/pdp/"
+        "transparency-seal/9326392/svg',\n"
+        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+        "  },",
+    )
+    # Guard the substitution itself: a fixture reshuffle must fail loudly here
+    # rather than silently testing the shape this test exists to cover.
+    assert "sealUrl:" in footer_only_shape, "fixture substitution did not apply"
+
+    td, repo, proc = applied(site_config=footer_only_shape)
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "sealUrl: ''," in cfg, cfg
+        # FFC's own Candid organization id must not survive under the charity.
+        assert "9326392" not in cfg, cfg
+        # The other two keys still get the charity's derived profile.
+        assert "profileUrl: 'https://www.guidestar.org/profile/12-3456789'," in cfg, cfg
+        assert (
+            "directProfileUrl: 'https://www.guidestar.org/profile/12-3456789',"
+            in cfg
+        ), cfg
+    finally:
+        shutil.rmtree(td)
+
+
+def test_a_template_without_sealUrl_does_not_gain_one():
+    # The Single Page template has no sealUrl. Writing one would be an excess
+    # property against its SiteConfig and fail `tsc` there -- the same break in
+    # the opposite direction, so the key set is read from the template, never
+    # assumed.
+    td, repo, proc = applied()
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert "sealUrl" not in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
+
 def test_keeps_ffc_attribution_and_drops_the_parent_org():
     td, repo, proc = applied()
     try:

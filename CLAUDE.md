@@ -1902,24 +1902,45 @@ the page at **`/agentic-os/`**. Run 187 404'd on `/automation/agentic-os-status.
 on `/automation/agentic-os/`. Both read as an outage for about a minute. **`/automation/` is the
 workflow catalog — a different page.**
 
-## Two ledger citations into this file are stale, and the guard cannot see either (validated 2026-10-03, Conductor run 189)
+## A citation's line number is the one claim that cannot be carried between revisions (run 189, 2026-10-03; re-derived 2026-10-05)
 
+`docs/lessons-ledger.md` cites this file as `CLAUDE.md:<line>`, and those coordinates drift silently
+whenever anything above them moves. The blank-line half of
 `test_lessons_ledger.py::test_every_source_citation_in_the_ledger_resolves_and_points_at_content`
-fires only when a cited line is **blank or a bare comment marker**. A citation that drifts onto any
-other text passes. Two rows are wrong on `main` right now:
+fires only when a cited line is **blank or a bare comment marker** — a coordinate that drifts onto
+any other text passes it. That half is still blind, and #1455 measured the exposure: **8 of the
+ledger's 53 resolvable citations carry a quoted anchor**, and the other 45 have only the blank-line
+rule standing behind them.
 
-| row               | cites                       | actually at                       | what is at the cited line instead   |
+**Snapshot, pinned to `ad4013c` (run 189's base) — since repaired, and _not_ by the guard:**
+
+| row               | cited then                  | correct line then                 | what sat at the cited line          |
 | ----------------- | --------------------------- | --------------------------------- | ----------------------------------- |
 | L180 (×2 columns) | `CLAUDE.md:547`             | **615**                           | merge-queue `--delete-branch` prose |
 | L147              | `CLAUDE.md:544,550,952,980` | `550` ✓, else **556, 1035, 1063** | unrelated lines at 544 / 952 / 980  |
 
 L180's drift surfaced only by accident: run 189 shifted lines by 24 and happened to move `:547` onto
-a blank line, which fired the guard. Had the shift been 23 or 25 it would still be hidden. L147's
-comma-list form appears not to be validated per-element at all.
+a blank line, which fired the guard. Had the shift been 23 or 25 it would still be hidden. Both were
+**anchors, not content** — the rows' prose was right, the line numbers were not. `9cbbefc2`
+("re-measure L147/L180 citations instead of offsetting wrong anchors") repaired them by hand, and
+#1443/#1455 then gave the quoted-anchor rule a message that names where a drifted anchor actually
+is. Re-derived on `main` 55 commits later: the ledger cites **L180 → `CLAUDE.md:658`** and **L147 →
+`CLAUDE.md:593,599,1096,1124`**, and all five resolve to the content their rows describe. Both
+tracking issues (#1455, #1095) are **closed**.
 
-Both are **anchors, not content** — the rows' prose is right, the line numbers are not. Tracked on
-**#1455** (naming where a drifted anchor actually is) and **#1095** (the citation check).
-Deliberately not repaired here: `docs/lessons-ledger.md` is held by in-flight **#1500**, and run 188
-learned the hard way that "repairing" citations against the wrong revision breaks the suite. The
-lasting fix is to make the guard check that the line contains what the row describes — the two
-acceptance criteria above are the test cases.
+### ⚠️ The table above was carried forward once without re-deriving, and was false on arrival
+
+This is the part worth keeping. #1510 wrote those numbers when they were **correct against its own
+base**; #1527 re-applied the section onto a base 55 commits newer and restated a repaired defect as
+a present-tense claim — _"two rows are wrong on `main` right now"_ — about two rows that were by
+then both right. Copilot caught it on #1527; the suite could not, because a ledger guard validates
+the **ledger's** citations and nothing validates a line number quoted in prose. The PR description
+carried the correct values (`:593`, `:658`) in the same breath, measured minutes earlier, which is
+the tell: the figures were re-derived for the cover note and copied for the content.
+
+So the file's own corollary — _verify a citation against the tree it lives in_ — failed on the very
+section that exists to warn about citation drift, and failed in the flattering direction: the stale
+numbers describe a defect, so restating them reads as diligence rather than as an error. **A
+`path:line` coordinate is a claim about one revision.** Re-derive it in the tree the text will land
+in, or write it as a snapshot naming that revision, as the table above now does. Never carry one
+across a rebase, a supersession or a cherry-pick on the strength of having measured it before.

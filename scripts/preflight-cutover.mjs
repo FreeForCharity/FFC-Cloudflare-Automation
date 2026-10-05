@@ -428,16 +428,6 @@ async function selfTest() {
     computeVerdict({ originHealthy: true, pointedAtPages: true, blockerCount: 1 }).ok,
     false,
   );
-
-  // #766: a blocker-driven no-go must name the blockers, NOT the origin. A
-  // healthy origin plus a non-apex-ready artifact used to read "NOT READY —
-  // Pages origin unhealthy" (run 37244478280), which sends the operator to the
-  // wrong system. Assert on the label, because the code was already right.
-  for (const pointedAtPages of [false, true]) {
-    const label = computeVerdict({ originHealthy: true, pointedAtPages, blockerCount: 1 }).label;
-    assert.ok(label.includes('blocker'), `blocker-driven label must say so, got: ${label}`);
-    assert.ok(!/origin/i.test(label), `a healthy origin must not be blamed, got: ${label}`);
-  }
   assert.equal(
     computeVerdict({
       originHealthy: true,
@@ -709,16 +699,7 @@ async function preflightDomain(domain, origin, marker, originWarning = '') {
         ? `${bp.count} root-relative /${repoName}/ href/src ref(s) — rebuild with the custom-domain switch before cutover`
         : 'exported HTML is root-relative-clean',
     );
-    // Deliberately NOT folded into `originHealthy`. The `record(false, …)` above
-    // already counts this as a blocker (blockerCount is every ok === false), so
-    // the verdict is still a no-go either way. Folding it in cost accuracy for
-    // nothing: `computeVerdict` short-circuits on `!originHealthy` and returns
-    // "NOT READY — Pages origin unhealthy", and `originHealthy` is also what the
-    // table's "Pages origin" column renders. Measured on run 37244478280
-    // (tamkeensports.org), which printed "✓ Pages origin healthy … HTTP 200" and
-    // then "Verdict: NOT READY — Pages origin unhealthy | UNHEALTHY" — pointing
-    // the operator at a Pages deployment that was fine, when the fix was to
-    // rebuild the artifact with the custom-domain switch.
+    if (bp.mismatch) originHealthy = false;
   }
 
   // 2. Where does the apex resolve now, and is it Pages-ready?

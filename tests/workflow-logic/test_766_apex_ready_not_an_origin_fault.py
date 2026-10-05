@@ -41,6 +41,7 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
+import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "preflight-cutover.mjs"
@@ -128,3 +129,19 @@ def test_a_blocker_driven_verdict_names_blockers_not_the_origin():
         assert not re.search(r"origin", line, re.I), (
             f"a healthy origin must not be blamed for a blocker: {line}"
         )
+
+
+# Keep this roster BELOW every test: the comprehension reads `globals()`, so a
+# test defined after this line is never collected (run_all.py guards for it).
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+
+if __name__ == "__main__":
+    failures = 0
+    for t in TESTS:
+        try:
+            t()
+            print(f"  PASS {t.__name__}")
+        except AssertionError as e:
+            failures += 1
+            print(f"  FAIL {t.__name__}: {str(e)[:400]}")
+    sys.exit(1 if failures else 0)

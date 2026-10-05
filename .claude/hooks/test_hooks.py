@@ -660,7 +660,7 @@ RULES = [
         # The three historical shapes, each the literal a run actually sent.
         ("run 198's orphan pipeline warns",
          "git branch -r | sed 's#^ *origin/##' | grep -vE '^(HEAD|main)' | sort > allbr.txt", WARN),
-        ("run 137's count with the origin/HEAD filter warns",
+        ("run 138's count with the origin/HEAD filter warns",
          "TOT=$(git branch -r | grep -v 'origin/HEAD' | wc -l)", WARN),
         ("run 125's bare count warns", "git branch -r | wc -l", WARN),
         # Spellings of the same flag, so tightening the regex cannot quietly

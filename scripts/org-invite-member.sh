@@ -173,6 +173,22 @@ for raw in $users; do
     rm -f "$put_err"
     new_state="$(printf '%s' "$resp" | jq -r '.state // empty' 2>/dev/null || echo '')"
     new_role="$(printf '%s' "$resp" | jq -r '.role // empty' 2>/dev/null || echo '')"
+    # The PUT body is not the only source of truth, and on 2026-10-02 (run
+    # 36948974596) it carried no `.state` at all for a successful invitation --
+    # the invite had been sent, and a later read showed `pending`. So when the
+    # body yields nothing, re-read the membership the PUT should have changed
+    # (the AGENTS.md rule: confirm a GitHub write by re-reading its state), and
+    # only when THAT fails too fall back to the requested role, saying so.
+    if [ -z "$new_state" ]; then
+      if reread="$(api_get "orgs/$org/memberships/$u" --jq '"\(.state) \(.role)"' 2>/dev/null)"; then
+        new_state="${reread%% *}"
+        new_role="${reread#* }"
+        echo "PUT for $u returned no membership state; re-read membership: state=$new_state role=$new_role."
+      else
+        excerpt="$(printf '%s' "$resp" | tr '\n' ' ' | cut -c1-200)"
+        echo "::warning::PUT for $u returned no membership state and the re-read failed; PUT body (first 200 chars): '${excerpt}'"
+      fi
+    fi
     case "$new_state" in
       pending)
         echo "Invited $u to $org as ${new_role:-$role}; pending acceptance."
@@ -183,7 +199,7 @@ for raw in $users; do
         done_list+=("$u (${new_role:-$role})")
         ;;
       *)
-        echo "::warning::PUT for $u succeeded but returned no membership state; reporting the requested role '$role'."
+        echo "::warning::PUT for $u succeeded but no membership state could be read; reporting the requested role '$role'."
         done_list+=("$u ($role, state unconfirmed)")
         ;;
     esac

@@ -100,6 +100,24 @@ def test_content_rehearses_on_a_dry_run_against_the_template_when_no_repo_exists
     assert guard not in body[write_guard + 1 : at["push"]], "another dry-run branch opened before the push"
 
 
+def test_content_patch_needs_only_the_charity_name():
+    # The gate used to demand every footer field and all four social links;
+    # any gap skipped the patch, and a sparse charity (FFC-EX-iwilf.org#6)
+    # went live showing Free For Charity's EIN, phone, offices, GuideStar seal
+    # and staff. The script now empties what is missing and marks it pending,
+    # so only the name gates it.
+    step = next(s for s in JOBS["content"]["steps"] if s.get("id") == "apply")
+    body = step["run"]
+    start = body.index("$canApplyTemplate =")
+    gate = body[start : body.index("\n", start)]
+    assert gate.strip() == "$canApplyTemplate = -not [string]::IsNullOrWhiteSpace($charityName)", gate
+    assert "Test-SocialLinksPresent" not in body
+    assert body.count("$canApplyTemplate = $canApplyTemplate") == 0, "a later clause re-narrows the gate"
+    # The pending list the script reports reaches the step's outputs.
+    assert "-SummaryPath $summaryPath" in body, body
+    assert "content_pending_fields=" in body, body
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

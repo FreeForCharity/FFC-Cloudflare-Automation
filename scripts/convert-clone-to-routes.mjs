@@ -72,6 +72,9 @@ import {
   ensureSingleH1,
   repairSocialShareChrome,
   stripLayoutDuplicates,
+  uaDefaultsStyle,
+  removeFormerHostCredits,
+  retargetSkipLinkTarget,
   removeDeadConsentUi,
   ensureImageAlt,
   nameAnonymousLinks,
@@ -277,7 +280,27 @@ function main() {
   // site_name). Prefer it when the repo has it; a repo without it gets the
   // inline form. Checked rather than assumed, because these routes are written
   // into whatever repo the workflow is pointed at.
-  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'));
+  //
+  // The two FFC templates spell the helper differently and that is not
+  // cosmetic: the Single-Page template has `src/lib/page-metadata.ts` taking
+  // `canonical`, the Footer-Only template has `src/lib/pageMetadata.ts` taking
+  // `path`. Checking only the first spelling sent every Footer-Only repo down
+  // the inline path, whose relative `canonical: '/about/'` resolves against
+  // `metadataBase` -- the bare origin -- and so loses the GitHub Pages base
+  // path. Measured on FFC-EX-tamkeensports.org: every converted page
+  // canonicalised to `https://freeforcharity.github.io/about/`, a URL that
+  // serves FFC's own 404, while the template's own pages (through the helper)
+  // were right.
+  const pageMetadataHelper = existsSync(join(repo, 'src', 'lib', 'page-metadata.ts'))
+    ? 'page-metadata'
+    : existsSync(join(repo, 'src', 'lib', 'pageMetadata.ts'))
+      ? 'pageMetadata'
+      : false;
+
+  // The id the root layout's skip link targets, when the layout does not
+  // render that element itself -- the Footer-Only template, whose page
+  // supplies the <main>. Every fragment's <main> must then carry it.
+  const layoutSkipTarget = readLayoutSkipTarget(repo);
 
   const { assigned, collisions, duplicates } = assignSlugs(htmlFiles);
   // Link rewriting is keyed on the path the capture actually wrote, because
@@ -325,6 +348,8 @@ function main() {
     footersDemoted: 0,
     footersKeptNested: 0,
     consentUiRemoved: 0,
+    hostCreditsRemoved: 0,
+    skipTargetsRetargeted: 0,
     consentUiBytes: 0,
     headDropped: 0,
     assetRefs: 0,
@@ -378,6 +403,12 @@ function main() {
     out = consent.html;
     tally.consentUiRemoved += consent.removed;
     tally.consentUiBytes += consent.bytes;
+    const credits = removeFormerHostCredits(out);
+    out = credits.html;
+    tally.hostCreditsRemoved += credits.removed;
+    const skip = retargetSkipLinkTarget(out, layoutSkipTarget);
+    out = skip.html;
+    if (skip.retargeted) tally.skipTargetsRetargeted += 1;
 
     // 4. Paths: page-relative in a file, base-relative in a route.
     const assetsTok = tokenizeAssetPaths(out, assetsDir);
@@ -452,7 +483,11 @@ function main() {
     // Share chrome first: the capture strips scripts, and a share plugin is
     // almost entirely script -- its links keep their destinations in data
     // attributes and its modal triggers keep nothing at all.
-    const share = repairSocialShareChrome(`${fragmentCss.html}\n${out}`.trim() + '\n');
+    // The browser defaults the template's CSS reset strips go FIRST, so every
+    // captured rule -- all of them heavier -- still overrides them.
+    const share = repairSocialShareChrome(
+      `${uaDefaultsStyle(WRAPPER_CLASS)}\n${fragmentCss.html}\n${out}`.trim() + '\n',
+    );
     tally.shareLinksRepaired += share.repaired;
     tally.shareChromeRemoved += share.removed;
     tally.shareLinksRefused += share.rejected;
@@ -508,6 +543,8 @@ function main() {
           wrapperClass,
           absoluteTitle: !rebranded,
           pageMetadataHelper,
+          brandTitle:
+            !!configuredName && title.trim().toLowerCase() === configuredName.trim().toLowerCase(),
         }),
       );
     }
@@ -624,6 +661,10 @@ function main() {
     `dead consent banners removed  ${tally.consentUiRemoved}` +
       `  (${(tally.consentUiBytes / 1024 / 1024).toFixed(1)} MB)`,
   );
+  console.log(`former-host credits removed  ${tally.hostCreditsRemoved}`);
+  console.log(
+    `<main> retargeted at the layout skip link (#${layoutSkipTarget ?? 'n/a'})  ${tally.skipTargetsRetargeted}`,
+  );
   console.log(`head elements dropped (owned by Next)  ${tally.headDropped}`);
   console.log(`inline <style> blocks scoped  ${tally.inlineStyles}`);
   console.log(`stylesheet links dropped (file never captured)  ${tally.missingSheetsDropped}`);
@@ -642,6 +683,9 @@ function main() {
     console.log(`FFC template routes restored  ${shape.templateRoutes.restored.length}`);
     for (const c of shape.templateRoutes.collided) {
       console.log(`  NOT restored (a captured page owns this slug): ${c}`);
+    }
+    for (const c of shape.templateRoutes.superseded) {
+      console.log(`  superseded (an earlier 706 conversion's route, regenerated): ${c}`);
     }
   }
   if (shape.trailingSlash) {
@@ -844,16 +888,69 @@ function mergeRouteDirectory(from, to) {
   if (!readdirSync(from).length) rmSync(from, { recursive: true, force: true });
 }
 
+const GENERATED_ROUTE_MARK = '// Generated by workflow 706 from the live site capture.';
+
+/**
+ * Delete parked pages that an EARLIER run of this converter wrote and this run
+ * has just written again.
+ *
+ * integrate parks every `page.*` under `src/app`, and on a repo that was
+ * already converted those are 706's own routes, not the template's. Each one
+ * then collides with the route this run regenerated and stays parked, and
+ * deliver's `git add -A` commits the whole stale set under
+ * `_disabled_template_routes/` -- measured on a re-run against
+ * FFC-EX-tamkeensports.org: all 12 routes of the previous conversion. A page is
+ * superseded only if it carries the generated-route marker AND its slot under
+ * `src/app` holds a page again; anything else falls through to the restore
+ * logic below unchanged.
+ */
+function removeSupersededGeneratedRoutes(parked, appDir) {
+  const superseded = [];
+  const visit = (dir, rel) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const from = join(dir, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        visit(from, childRel);
+        if (!readdirSync(from).length) rmSync(from, { recursive: true, force: true });
+        continue;
+      }
+      if (!/^page\.(tsx|ts|jsx|js)$/.test(entry.name) || !rel) continue;
+      let src = '';
+      try {
+        src = readFileSync(from, 'utf8');
+      } catch {
+        continue;
+      }
+      if (src.includes(GENERATED_ROUTE_MARK) && hasRoutablePage(join(appDir, rel))) {
+        rmSync(from, { force: true });
+        superseded.push(rel);
+      }
+    }
+  };
+  visit(parked, '');
+  return superseded;
+}
+
 function restoreTemplateRoutes(repo) {
   const parked = join(repo, '_disabled_template_routes');
   const restored = [];
   const collided = [];
   const skipped = [];
+  const superseded = existsSync(parked)
+    ? removeSupersededGeneratedRoutes(parked, join(repo, 'src', 'app'))
+    : [];
   let entries;
   try {
     entries = readdirSync(parked, { withFileTypes: true });
   } catch {
-    return { restored, collided, skipped };
+    return { restored, collided, skipped, superseded };
   }
   for (const entry of entries) {
     const from = join(parked, entry.name);
@@ -916,7 +1013,7 @@ function restoreTemplateRoutes(repo) {
     restored.push(entry.name);
   }
   if (!readdirSync(parked).length) rmSync(parked, { recursive: true, force: true });
-  return { restored, collided, skipped };
+  return { restored, collided, skipped, superseded };
 }
 
 /**
@@ -1039,10 +1136,22 @@ function wireGeneratedComponents(repo) {
     done.push('clone-enhance already wired');
   } else {
     if (!hasCloneImport) {
+      // Anchor on the header import where there is one, else on the footer
+      // import. The Footer-Only template (FFC-IN-Footer_Only_Template) ships
+      // no header component at all -- its layout imports Footer, CookieConsent
+      // and GoogleTagManager and renders `{children}` straight after the skip
+      // link -- and a repo scaffolded from it (FFC-EX-tamkeensports.org, 706
+      // run 37065299694) failed the conversion on this anchor alone while the
+      // capture was 13/13. The footer import is matched in EITHER spelling
+      // because step 1 above has usually just repointed it at ffc-footer.
       const headerImport = /^([ \t]*import\s+Header\s+from\s+)(['"])([^'"]*components\/)header\2/m;
-      const m = headerImport.exec(source);
+      const footerImport =
+        /^([ \t]*import\s+Footer\s+from\s+)(['"])([^'"]*components\/)(?:ffc-)?footer\2/m;
+      const m = headerImport.exec(source) ?? footerImport.exec(source);
       if (!m) {
-        done.push('WARNING: no `import Header from .../header` to anchor the import to');
+        done.push(
+          'WARNING: no `import Header from .../header` or `import Footer from .../footer` to anchor the import to',
+        );
       } else {
         source = source.replace(
           m[0],
@@ -1051,15 +1160,28 @@ function wireGeneratedComponents(repo) {
       }
     }
     if (!hasCloneRender) {
-      // Rendered right after <Header />, which every FFC layout has.
+      // Rendered right after <Header /> where the layout has one. A
+      // Footer-Only layout has none, so there the runtime is rendered right
+      // before the `{children}` slot instead: still inside <body>, still on
+      // every route, which is all the component needs. `{children}` on its
+      // own line only -- a `<main>{children}</main>` is the header-template
+      // shape, and the <Header /> branch has already handled it.
       const render = /(\n?[ \t]*)<Header\s*\/>/;
+      const childrenSlot = /(\n[ \t]*)\{children\}/;
       if (render.test(source)) {
         source = source.replace(
           render,
           (_m2, indent) => `${indent}<Header />${indent}<CloneEnhance />`,
         );
+      } else if (childrenSlot.test(source)) {
+        source = source.replace(
+          childrenSlot,
+          (_m2, indent) => `${indent}<CloneEnhance />${indent}{children}`,
+        );
       } else {
-        done.push('WARNING: no `<Header />` to render `<CloneEnhance />` beside');
+        done.push(
+          'WARNING: no `<Header />` or `{children}` line to render `<CloneEnhance />` beside',
+        );
       }
     }
     // Reported from what the file NOW holds, not from which branch ran: a
@@ -1202,6 +1324,27 @@ function safeDecode(value) {
 }
 
 /** `siteConfig.name` from the target repo, or null if it cannot be read. */
+/**
+ * The fragment id the layout's skip link points at, or null when the layout
+ * has no skip link or renders the target itself (the Single-Page template's
+ * `<main id="main-content">`).
+ */
+function layoutSkipTargetFrom(layoutSrc) {
+  const link = /<a\b[^>]*\bhref\s*=\s*["']#([\w-]+)["'][^>]*>/i.exec(layoutSrc);
+  if (!link || !/skip/i.test(link[0])) return null;
+  const id = link[1];
+  const owns = new RegExp(`\\bid\\s*=\\s*(?:["']|\\{\\s*["'])${id}["']`);
+  return owns.test(layoutSrc) ? null : id;
+}
+
+function readLayoutSkipTarget(repo) {
+  try {
+    return layoutSkipTargetFrom(readFileSync(join(repo, 'src', 'app', 'layout.tsx'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function readSiteConfigName(repo) {
   try {
     const src = readFileSync(join(repo, 'src', 'lib', 'site.config.ts'), 'utf8');
@@ -1605,6 +1748,71 @@ function selfTest() {
         rmSync(half, { recursive: true, force: true });
       }
 
+      // FOOTER-ONLY TEMPLATE: no Header component anywhere, `{children}` on
+      // its own line between the skip link and <Footer />. This is the
+      // FFC-EX-tamkeensports.org layout, where 706 run 37065299694 captured
+      // 13/13 pages and then exited 1 on the missing <Header /> anchor.
+      const footerOnly = mkdtempSync(join(tmpdir(), 'ffc-wire-footer-only-'));
+      try {
+        mkdirSync(join(footerOnly, 'src', 'app'), { recursive: true });
+        const foPath = join(footerOnly, 'src', 'app', 'layout.tsx');
+        writeFileSync(
+          foPath,
+          [
+            "import './globals.css'",
+            "import Footer from './../components/footer'",
+            "import CookieConsent from './../components/cookie-consent'",
+            'export default function RootLayout({ children }) {',
+            '  return (',
+            '    <html lang="en">',
+            '      <body>',
+            '        <a href="#main-content">Skip</a>',
+            '        {children}',
+            '        <Footer />',
+            '        <CookieConsent />',
+            '      </body>',
+            '    </html>',
+            '  )',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        );
+        const r = wireGeneratedComponents(footerOnly);
+        const fo = readFileSync(foPath, 'utf8');
+        eq('wire: a Footer-Only layout is edited', r.changed, true);
+        eq(
+          'wire: ...its footer import is repointed',
+          /import Footer from '\.\/\.\.\/components\/ffc-footer'/.test(fo),
+          true,
+        );
+        eq(
+          'wire: ...the runtime import is anchored on the footer import',
+          /ffc-footer'\nimport CloneEnhance from '\.\/\.\.\/components\/clone-enhance'/.test(fo),
+          true,
+        );
+        eq(
+          'wire: ...and rendered right before {children}',
+          /<CloneEnhance \/>\n[ \t]*\{children\}/.test(fo),
+          true,
+        );
+        eq('wire: ...with no warning', describeWiring(r).warnings.length, 0);
+        eq(
+          'wire: ...and reported as wired',
+          describeWiring(r).notes.includes('clone-enhance wired'),
+          true,
+        );
+        const again = wireGeneratedComponents(footerOnly);
+        eq('wire: a Footer-Only layout is idempotent', again.changed, false);
+        eq(
+          'wire: ...and the runtime is rendered exactly once',
+          (readFileSync(foPath, 'utf8').match(/<CloneEnhance \/>/g) || []).length,
+          1,
+        );
+      } finally {
+        rmSync(footerOnly, { recursive: true, force: true });
+      }
+
       // A layout that does not match the template shape must be reported, not
       // silently skipped: a WARNING note is how an operator learns the repo
       // needs a hand.
@@ -1673,11 +1881,77 @@ function selfTest() {
         'collided',
         'restored',
         'skipped',
+        'superseded',
       ]);
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
   }
+
+  // A RE-RUN on a repo that was already converted. integrate parks 706's own
+  // routes from the previous run; each collides with the route this run just
+  // regenerated. Before the superseded pass they stayed parked and deliver's
+  // `git add -A` committed them -- 12 stale routes, measured on
+  // FFC-EX-tamkeensports.org.
+  {
+    const rerun = mkdtempSync(join(tmpdir(), 'ffc-convert-rerun-'));
+    const P = join(rerun, '_disabled_template_routes');
+    const gen = `${GENERATED_ROUTE_MARK} Edit the source site,\nexport default function Page() {}\n`;
+    try {
+      write(join(P, 'about', 'page.tsx'), gen);
+      write(join(P, 'category', 'uncategorized', 'page.tsx'), gen);
+      write(join(P, 'gone', 'page.tsx'), gen);
+      write(join(P, 'events', 'page.tsx'), 'a hand-written page, no marker');
+      write(join(P, 'privacy-policy', 'page.tsx'), 'template policy');
+      write(join(rerun, 'src', 'app', 'about', 'page.tsx'), 'regenerated');
+      write(join(rerun, 'src', 'app', 'category', 'uncategorized', 'page.tsx'), 'regenerated');
+      write(join(rerun, 'src', 'app', 'events', 'page.tsx'), 'regenerated');
+      const r = restoreTemplateRoutes(rerun);
+      eq(
+        "rerun: a regenerated route's earlier copy is superseded, nested ones too",
+        [...r.superseded].sort(),
+        ['about', 'category/uncategorized'],
+      );
+      eq(
+        'rerun: ...and nothing of it is left parked',
+        existsSync(join(P, 'about')) || existsSync(join(P, 'category')),
+        false,
+      );
+      eq(
+        'rerun: an unmarked page in a regenerated slot is NOT deleted (it still collides)',
+        r.collided.includes('events') && existsSync(join(P, 'events', 'page.tsx')),
+        true,
+      );
+      eq(
+        'rerun: a generated route this run did not regenerate is restored, not deleted',
+        readFileSync(join(rerun, 'src', 'app', 'gone', 'page.tsx'), 'utf8'),
+        gen,
+      );
+      eq('rerun: the template route still comes back', r.restored.includes('privacy-policy'), true);
+    } finally {
+      rmSync(rerun, { recursive: true, force: true });
+    }
+  }
+
+  // The layout's skip-link target: Footer-Only links to #main-content and
+  // renders no <main>; Single-Page renders <main id="main-content"> itself.
+  eq(
+    'skip: a Footer-Only layout names the id its pages must supply',
+    layoutSkipTargetFrom('<a href="#main-content" className="skip-to-content">Skip</a>{children}'),
+    'main-content',
+  );
+  eq(
+    'skip: a layout that renders the target itself needs nothing from the page',
+    layoutSkipTargetFrom(
+      '<a href="#main-content" className="skip-to-content">Skip</a><main id="main-content" tabIndex={-1}>',
+    ),
+    null,
+  );
+  eq(
+    'skip: an in-page anchor that is not a skip link is ignored',
+    layoutSkipTargetFrom('<a href="#top" className="back">Top</a>'),
+    null,
+  );
 
   // --- the repo shape --------------------------------------------------
   const dir = mkdtempSync(join(tmpdir(), 'ffc-convert-'));

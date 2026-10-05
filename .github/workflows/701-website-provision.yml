@@ -1411,6 +1411,9 @@ jobs:
     continue-on-error: true
     outputs:
       content_status: ${{ steps.apply.outputs.content_status }}
+      content_pending_fields: ${{ steps.apply.outputs.content_pending_fields }}
+      content_pending_rendered: ${{ steps.apply.outputs.content_pending_rendered }}
+      content_pending_issue_url: ${{ steps.apply.outputs.content_pending_issue_url }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -1614,56 +1617,47 @@ jobs:
             generatedUtc = (Get-Date).ToUniversalTime().ToString('o')
           }
 
-          $json = $content | ConvertTo-Json -Depth 8
-          $json | Out-File -FilePath 'ffc-content.json' -Encoding utf8
-          # The site's CI runs `prettier --check .`, and ConvertTo-Json's layout of
-          # a short array is not prettier's, so an unformatted record turns the
-          # new repo red. Format it with the prettier version the repo pins.
-          # Best-effort: CI names the file if this fails.
-          try {
-            $pinned = [string]((Get-Content -Raw 'package.json' | ConvertFrom-Json).devDependencies.prettier)
-            $pinned = $pinned -replace '^[\^~>=\s]+', ''
-            $spec = if ($pinned -match '^\d+\.\d+\.\d+$') { "prettier@$pinned" } else { 'prettier@3' }
-            & npx --yes $spec --write ffc-content.json | Out-Host
-          } catch {
-            Write-Warning "Could not format ffc-content.json: $_"
+          function Save-ContentRecord {
+            param([Parameter(Mandatory = $true)]$Record)
+            $Record | ConvertTo-Json -Depth 8 | Out-File -FilePath 'ffc-content.json' -Encoding utf8
+            # The site's CI runs `prettier --check .`, and ConvertTo-Json's layout of
+            # a short array is not prettier's, so an unformatted record turns the
+            # new repo red. Format it with the prettier version the repo pins.
+            # Best-effort: CI names the file if this fails.
+            try {
+              $pinned = [string]((Get-Content -Raw 'package.json' | ConvertFrom-Json).devDependencies.prettier)
+              $pinned = $pinned -replace '^[\^~>=\s]+', ''
+              $spec = if ($pinned -match '^\d+\.\d+\.\d+$') { "prettier@$pinned" } else { 'prettier@3' }
+              # npx.cmd, not the npx.ps1 shim pwsh resolves `npx` to on Windows:
+              # with `--yes <spec>` the shim fails ("could not determine
+              # executable to run"). This job runs on windows-latest.
+              $npx = if (Get-Command npx.cmd -ErrorAction SilentlyContinue) { 'npx.cmd' } else { 'npx' }
+              & $npx --yes $spec --write ffc-content.json | Out-Host
+            } catch {
+              Write-Warning "Could not format ffc-content.json: $_"
+            }
           }
 
           # Patch the actual React template files in the newly provisioned repo.
-          function Test-SocialLinksPresent {
-            param([string[]]$Links)
-            if (-not $Links -or $Links.Count -eq 0) { return $false }
-            $map = @{}
-            foreach ($line in $Links) {
-              if ([string]::IsNullOrWhiteSpace($line)) { continue }
-              $m = [regex]::Match($line.Trim(), '^(?<k>[A-Za-z ]+)\s*:\s*(?<v>https://\S+)$')
-              if (-not $m.Success) { continue }
-              $k = $m.Groups['k'].Value.Trim().ToLowerInvariant()
-              $map[$k] = $m.Groups['v'].Value.Trim()
-            }
-            foreach ($k in @('facebook', 'x', 'linkedin', 'github')) {
-              if (-not $map.ContainsKey($k)) { return $false }
-            }
-            return $true
-          }
+          #
+          # Only the charity's name is required. Every footer-standard field the
+          # charity did not give (email, phone, address, EIN, Candid/GuideStar
+          # profile, social links, team, donation / volunteer URL) is EMPTIED by the
+          # script -- never left at the template's value, which is Free For
+          # Charity's own -- and listed as "pending": the template renders each as a
+          # visible "Awaiting information from the charity" placeholder (once it
+          # supports `siteConfig.pending`), the list is recorded in ffc-content.json
+          # and the completion comment, and a call-to-action issue asks the
+          # charity's technical POC for them. The gate used to demand every footer
+          # field (and all four social links), and any gap skipped the patch
+          # entirely, so a sparse application went live as FFC: FFC's EIN, phone,
+          # offices, GuideStar seal and staff under the charity's name
+          # (FFC-EX-iwilf.org#6).
+          $canApplyTemplate = -not [string]::IsNullOrWhiteSpace($charityName)
+          $summaryPath = Join-Path $workDir 'content-summary.json'
+          $pendingFields = @()
+          $pendingRendered = $false
 
-          $canApplyTemplate = (
-            -not [string]::IsNullOrWhiteSpace($charityName) -and
-            -not [string]::IsNullOrWhiteSpace($footerEmail) -and
-            -not [string]::IsNullOrWhiteSpace($footerPhone) -and
-            -not [string]::IsNullOrWhiteSpace($footerEin) -and
-            -not [string]::IsNullOrWhiteSpace($footerAddress) -and
-            ($leadership.Count -gt 0) -and
-            (Test-SocialLinksPresent -Links @($footerSocial))
-          )
-
-          # Same anchored test as the resolve step (see the comment there).
-          $is501c3 = $irsStatus -match '^\s*501\s*\(c\)\s*\(?3\)?'
-          if ($is501c3) {
-            $canApplyTemplate = $canApplyTemplate -and
-              -not [string]::IsNullOrWhiteSpace($guideStarProfileUrl) -and
-              -not [string]::IsNullOrWhiteSpace($guideStarDirectProfileUrl)
-          }
           # Content patching is cosmetic polish applied AFTER the repo, Pages, and DNS are
           # already provisioned by earlier jobs. A failure here must NEVER mark the whole
           # provision as failed — that historically showed live, serving sites as red runs
@@ -1692,15 +1686,26 @@ jobs:
                 -Mission $mission `
                 -DonationUrl $donationUrl `
                 -VolunteerUrl $volunteerUrl `
-                -IrsStatus $irsStatus
+                -IrsStatus $irsStatus `
+                -SummaryPath $summaryPath
               $contentStatus = 'applied'
+              if (Test-Path -LiteralPath $summaryPath) {
+                $summary = Get-Content -Raw -LiteralPath $summaryPath | ConvertFrom-Json
+                # The script's fixed PendingField vocabulary; anything else is dropped.
+                $pendingFields = @(@($summary.pendingFields) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^[A-Za-z]+$' })
+                $pendingRendered = [bool]$summary.pendingRendered
+              }
+              $content.pendingFields = @($pendingFields)
+              $content.pendingRendered = $pendingRendered
             } else {
               # 'skipped' refers to the React template patch only. ffc-content.json
-              # (provisioning metadata) was still written above and is committed below —
+              # (provisioning metadata) is still written and committed below —
               # that is long-standing intended behavior, and the finalize comment says so.
-              Write-Host 'Skipping React template patch: missing required footer/leadership inputs.' -ForegroundColor Yellow
+              Write-Host 'Skipping React template patch: no charity name was provided.' -ForegroundColor Yellow
               $contentStatus = 'skipped'
             }
+
+            Save-ContentRecord -Record $content
 
             git add -A
             # git diff --cached --quiet: 0 = no changes, 1 = changes, other = fatal error.
@@ -1731,7 +1736,79 @@ jobs:
             $contentStatus = 'failed'
           }
 
+          # Call to action: ask the charity's technical POC for every pending field,
+          # in an issue on the new repo. Only for a real (non-dry) run whose content
+          # landed, and only with a POC to mention. Non-fatal like the rest of the
+          # step. A re-run refreshes the open issue instead of opening another.
+          $pendingIssueUrl = ''
+          $pendingLabels = [ordered]@{
+            email = 'Public contact email'
+            phone = 'Public phone number'
+            address = 'Mailing or office address (a city and state is enough)'
+            ein = 'EIN (IRS tax ID)'
+            guidestar = 'Candid / GuideStar profile link'
+            social = 'Social media links'
+            team = 'Board / leadership names and titles'
+            donationUrl = 'Donation page link'
+            volunteerUrl = 'Volunteer sign-up page link'
+          }
+          $pocValid = $technicalPoc -match '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$'
+          if ($contentStatus -eq 'applied' -and $pendingFields.Count -gt 0 -and ([string]$env:DRY_RUN) -ne 'true') {
+            if (-not $pocValid) {
+              Write-Host '::notice::Fields are awaiting the charity, but no valid technical POC GitHub username was given, so no call-to-action issue was opened. The completion comment lists them.'
+            } else {
+              try {
+                $issueTitle = "Website details needed from $charityName"
+                $lines = @(
+                  '<!-- ffc-website-pending -->',
+                  "Hi @$technicalPoc, the website for **$charityName** (https://$domain) was set up with the details from the application. These were not in it, so they were left empty rather than filled with anyone else's details:",
+                  ''
+                )
+                foreach ($f in $pendingFields) {
+                  $label = if ($pendingLabels.Contains($f)) { $pendingLabels[$f] } else { $f }
+                  $lines += "- [ ] **$label** (``$f``)"
+                }
+                $lines += ''
+                $lines += if ($pendingRendered) {
+                  'Until each is filled in, the site shows "Awaiting information from the charity" in its place.'
+                } else {
+                  'Until each is filled in, the site leaves it out. (This template does not show an "awaiting information" placeholder yet.)'
+                }
+                $lines += ''
+                $lines += 'Reply here with the details, or say "none" for anything the charity does not have (for example, no public phone). They go in `src/lib/site.config.ts` (and `src/data/team/` for the team), and a pull request with them is welcome too.'
+                $bodyFile = Join-Path $workDir 'pending-issue.md'
+                ($lines -join "`n") | Out-File -FilePath $bodyFile -Encoding utf8
+
+                # Title search (not a first-N listing), then an exact-title match.
+                $existing = gh issue list -R $repoFull --state open --search 'in:title "Website details needed from"' --limit 20 --json number,title,url | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0) { throw "gh issue list failed (exit $LASTEXITCODE)." }
+                $match = @($existing | Where-Object { $_.title -eq $issueTitle }) | Select-Object -First 1
+                if ($match) {
+                  gh issue edit $match.number -R $repoFull --body-file $bodyFile | Out-Null
+                  if ($LASTEXITCODE -ne 0) { throw "gh issue edit failed (exit $LASTEXITCODE)." }
+                  $pendingIssueUrl = [string]$match.url
+                } else {
+                  $created = gh issue create -R $repoFull --title $issueTitle --body-file $bodyFile
+                  if ($LASTEXITCODE -ne 0) { throw "gh issue create failed (exit $LASTEXITCODE)." }
+                  $pendingIssueUrl = ([string]($created | Select-Object -Last 1)).Trim()
+                }
+                Write-Host "Call-to-action issue: $pendingIssueUrl"
+              } catch {
+                Write-Warning "Could not open the call-to-action issue (non-fatal): $_"
+                $pendingIssueUrl = ''
+              }
+            }
+          }
+          # Only a plain issue URL leaves the step.
+          if ($pendingIssueUrl -notmatch '^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/\d+$') { $pendingIssueUrl = '' }
+
           "content_status=$contentStatus" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "content_pending_fields=$($pendingFields -join ',')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "content_pending_rendered=$(if ($pendingRendered) { 'true' } else { 'false' })" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "content_pending_issue_url=$pendingIssueUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # The runner appends `exit $LASTEXITCODE`; a failed gh call above is
+          # already reported as a warning and must not fail the step (L303).
+          exit 0
 
   verify:
     runs-on: ubuntu-latest
@@ -1819,6 +1896,9 @@ jobs:
           SERVED: ${{ needs.verify.outputs.served }}
           SERVED_HOST: ${{ needs.verify.outputs.served_host }}
           CONTENT_STATUS: ${{ needs.content.outputs.content_status }}
+          CONTENT_PENDING_FIELDS: ${{ needs.content.outputs.content_pending_fields }}
+          CONTENT_PENDING_RENDERED: ${{ needs.content.outputs.content_pending_rendered }}
+          CONTENT_PENDING_ISSUE_URL: ${{ needs.content.outputs.content_pending_issue_url }}
         with:
           script: |
             const issueNumber = Number(process.env.ISSUE_NUMBER);
@@ -1846,13 +1926,48 @@ jobs:
                 : servedRaw === 'false'
                   ? `- ⚠️ Not serving yet (checked https://${domain} and https://www.${domain}) — DNS/cert may still be propagating. Re-check in a few minutes; the repo and DNS are in place.`
                   : `- ❔ Serving check did not run or did not record a result — verify https://${domain} manually (see the run log).`;
+            // Footer-standard fields the charity did not provide. The content script
+            // emptied each one (never Free For Charity's values) and listed it as
+            // pending, so it is a call to action rather than a silent gap.
+            const pendingLabels = {
+              email: 'public contact email',
+              phone: 'public phone number',
+              address: 'address',
+              ein: 'EIN',
+              guidestar: 'Candid / GuideStar profile',
+              social: 'social media links',
+              team: 'board / leadership',
+              donationUrl: 'donation page link',
+              volunteerUrl: 'volunteer sign-up link',
+            };
+            const pendingFields = (process.env.CONTENT_PENDING_FIELDS || '')
+              .split(',')
+              .map((f) => f.trim())
+              .filter(Boolean);
+            const pendingRendered = process.env.CONTENT_PENDING_RENDERED === 'true';
+            const pendingIssueUrl = process.env.CONTENT_PENDING_ISSUE_URL || '';
+            const pendingList = pendingFields
+              .map((f) => (pendingLabels[f] ? `\`${f}\` (${pendingLabels[f]})` : `\`${f}\``))
+              .join(', ');
+            const pendingNote = pendingFields.length
+              ? [
+                  '',
+                  `  - ⚠️ **Awaiting information from the charity:** ${pendingList}. Each was left empty, never filled with Free For Charity's values.`,
+                  pendingRendered
+                    ? '  - The site shows an "Awaiting information from the charity" placeholder in place of each one.'
+                    : '  - This template does not render the placeholder yet (FFC-IN-Footer_Only_Template#169 / FFC-IN-FFC_Single_Page_Template#482), so the fields are left out for now, and the site\'s own CI may fail on a value it does not accept empty (EIN, address, team, GuideStar), holding back its deploy.',
+                  pendingIssueUrl
+                    ? `  - Call to action for the charity's technical POC: ${pendingIssueUrl}`
+                    : '  - No call-to-action issue was opened (no technical POC GitHub username, a dry run, or the issue could not be created). Ask the charity for these details.',
+                ].join('\n')
+              : '';
             const contentNote =
               contentStatus === 'applied'
-                ? '- Content (footer + leadership) was applied to the React template and recorded in `ffc-content.json`.'
+                ? `- Content (footer + leadership) was applied to the React template and recorded in \`ffc-content.json\`.${pendingNote}`
                 : contentStatus === 'failed'
                   ? '- ⚠️ Content patch step did not complete (non-blocking) — the site is provisioned, but it still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until the charity\'s details are applied by re-running or editing `src/lib/site.config.ts`.'
                   : contentStatus === 'skipped'
-                    ? '- ⚠️ Content patch skipped: not every footer field was provided (contact email, phone, EIN, address, leadership and all four social links are needed; admin-minimal provisions give none). The site still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until those are added. Provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
+                    ? '- ⚠️ Content patch skipped: no charity name was provided (admin-minimal provisions give none). Every other missing field would have been emptied and marked as awaiting the charity, but without a name nothing was applied, so the site still shows the template\'s placeholder identity (Free For Charity\'s name, contact details and team) until it is added. Provisioning metadata (`ffc-content.json`) was still recorded in the repo.'
                     : '- ❔ Content step did not record a status (it may have been skipped or errored before reporting) — the site itself is provisioned.';
             const dnsManual = zoneControlled
               ? []

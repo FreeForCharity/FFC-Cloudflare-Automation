@@ -31,7 +31,7 @@
     },
     {
       "id": "st-marys-shelter",
-      "covers": "A pre-501(c)(3) charity with no Candid URLs (derived from the EIN), no donation or volunteer page (both links fall back to emailing the charity), and punctuation that must survive TypeScript string escaping: an apostrophe and an ampersand in the name.",
+      "covers": "A pre-501(c)(3) charity with no Candid URLs (left empty and pending: a Candid link is never derived from the EIN, and FFC's is never used), no donation or volunteer page (both links fall back to emailing the charity), and punctuation that must survive TypeScript string escaping: an apostrophe and an ampersand in the name.",
       "inputs": {
         "domain": "ffc-test-st-marys-shelter.org",
         "charity_name": "St. Mary's Shelter & Kitchen",
@@ -53,7 +53,7 @@
         "volunteer": "mailto",
         "twitter_handle": "@ffcteststmarys",
         "team_size": 3,
-        "candid": "derived-from-ein",
+        "candid": "blank",
         "tax_status_label": ""
       }
     },

@@ -227,6 +227,41 @@ def test_a_bad_login_in_a_list_does_not_stop_the_others():
     assert "octocat (invited as member, pending)" in summary, summary
 
 
+def test_an_empty_put_body_is_resolved_by_re_reading_the_membership():
+    """Run 36948974596 (2026-10-02): the live PUT exited 0 with no `.state` in
+    its body although the invitation HAD been sent -- a later read showed
+    `pending`. The script must re-read the membership it just changed rather
+    than report the requested role as unconfirmed."""
+    summary, out, err, log, rc = run_script(
+        {"TEST_ORG_MEMBERSHIP_PUT_BODY": "empty", "TEST_ORG_MEMBERSHIP_AFTER_PUT": "pending member"}
+    )
+    assert rc == 0, out + err
+    assert "-X PUT orgs/FreeForCharity/memberships/octocat" in log, log
+    # two reads: the plan's pre-read and the post-PUT confirmation
+    assert log.count("orgs/FreeForCharity/memberships/octocat --jq") == 2, log
+    assert "re-read membership: state=pending role=member" in out, out
+    assert "Invited octocat to FreeForCharity as member; pending acceptance." in out, out
+    assert "octocat (invited as member, pending)" in summary, summary
+    assert "unconfirmed" not in summary, summary
+    assert "::warning::" not in out, out
+
+
+def test_a_failed_re_read_falls_back_and_shows_the_put_body():
+    """Only when BOTH the PUT body and the re-read yield nothing does the script
+    fall back to the requested role -- and then it says so and shows what the
+    PUT actually returned, so the next reader can see the shape."""
+    summary, out, err, log, rc = run_script(
+        {"TEST_ORG_MEMBERSHIP_PUT_BODY": '{"id":1}', "TEST_ORG_MEMBERSHIP_AFTER_PUT": "error"}
+    )
+    assert rc == 0, out + err
+    assert "-X PUT orgs/FreeForCharity/memberships/octocat" in log, log
+    assert "PUT body (first 200 chars): '{\"id\":1}'" in out, out
+    assert "no membership state could be read; reporting the requested role 'member'" in out, out
+    assert "octocat (member, state unconfirmed)" in summary, summary
+    # the 403 from the re-read is never promoted to a membership state
+    assert "403" not in summary, summary
+
+
 # --- shape (#983: the dry run must never reach the gate) ---------------------
 
 

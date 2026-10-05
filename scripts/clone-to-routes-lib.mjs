@@ -1553,14 +1553,70 @@ function scopeSelectorList(prelude, dot) {
     // `html`, `body` and `:root` name the captured document's root, which is
     // now the wrapper — so they are REPLACED rather than prefixed. Prefixing
     // would produce `.ffc-clone body`, which matches nothing.
+    //
+    // `:root` becomes the wrapper class TWICE. Every other selector gains the
+    // prefix's (0,1,0); `:root` already weighed (0,1,0), so replacing it with a
+    // single class left it no heavier than before while its rivals grew. That
+    // inverted the block theme's cascade: `:root :where(.wp-block-site-title)`
+    // (0,1,0, weight 800) beat `h1` (0,0,1, weight 400) on the live site, and
+    // lost to `.ffc-clone h1` (0,1,1) once scoped -- measured on the
+    // tamkeensports.org export, where the site title rendered at 400. A doubled
+    // class matches the same element and restores the original ordering.
     const rooted = sel.replace(
       /^(?:html\b[^\s>+~]*\s*)?(?:body\b([^\s>+~]*)|:root\b([^\s>+~]*))/i,
-      (whole, bodyQual, rootQual) => `${dot}${bodyQual ?? rootQual ?? ''}`,
+      (whole, bodyQual, rootQual) =>
+        rootQual !== undefined ? `${dot}${dot}${rootQual}` : `${dot}${bodyQual ?? ''}`,
     );
     if (rooted !== sel) return `${lead}${rooted}${tail}`;
+    // `html` with no `body`/`:root` after it is the root too. Prefixed, it
+    // became `.ffc-clone html :where(.has-border-color)`, which matches nothing,
+    // and the block theme's `border-style:solid` for every bordered block was
+    // lost (measured: the about page's 3px accent border on tamkeensports.org).
+    // `:not(html)` matches the wrapper and carries the `html` token's own
+    // (0,0,1), for the same reason `:root` is doubled above.
+    const htmlRooted = sel.replace(
+      /^html\b([^\s>+~]*)/i,
+      (whole, htmlQual) => `${dot}:not(html)${htmlQual}`,
+    );
+    if (htmlRooted !== sel) return `${lead}${htmlRooted}${tail}`;
     return `${lead}${dot} ${sel}${tail}`;
   });
   return { selector: scoped.join(','), changed };
+}
+
+/**
+ * Browser defaults the host template's CSS reset removes, restored inside the
+ * clone at the lowest weight that still beats the reset.
+ *
+ * The FFC templates load Tailwind, whose preflight strips link underlines, list
+ * markers and indents, inline image display and the medium border width. A
+ * WordPress theme relies on the browser for all four, so the captured pages
+ * rendered without them: measured on the tamkeensports.org export by diffing
+ * the computed style of every element against the live site, content links
+ * lost their underline (39 elements), the refund policy's bullet list lost its
+ * bullets and indent, a 3px accent border vanished, images went block, and the
+ * navigation's icon buttons took the page font (`font: revert` hands form
+ * controls back to the browser's own font, as on the live site).
+ *
+ * Each selector is `:where(.wrapper) <type>` -- the specificity of a bare type
+ * selector, so any rule the captured site wrote (all of them carry the wrapper
+ * class after scoping) still wins, while this block, emitted first in the
+ * fragment and after the template's stylesheet, beats the reset. Outside a
+ * Tailwind host these lines restate the browser's own defaults and change
+ * nothing.
+ */
+export function uaDefaultsStyle(wrapper = 'ffc-clone') {
+  const w = `:where(.${wrapper})`;
+  return (
+    '<style data-ffc="ua-defaults">' +
+    `${w} a{text-decoration:underline}` +
+    `${w} ul{list-style:disc;padding-inline-start:40px}` +
+    `${w} ol{list-style:decimal;padding-inline-start:40px}` +
+    `${w} :is(img,svg,video,canvas,audio,iframe,embed,object){display:inline;vertical-align:baseline}` +
+    `${w} *,${w} *::before,${w} *::after{border-width:medium;border-style:none}` +
+    `${w} :is(button,input,select,textarea){font:revert;letter-spacing:revert;color:revert}` +
+    '</style>'
+  );
 }
 
 /** `<head>` inner HTML, or '' when the document has none. */
@@ -3768,7 +3824,70 @@ function selfTest() {
   eq(
     'html and :root are the same root, not ancestors of it',
     [scopeCloneCss('html body .x{color:red}').css, scopeCloneCss(':root{--a:1px}').css],
-    ['.ffc-clone .x{color:red}', '.ffc-clone{--a:1px}'],
+    ['.ffc-clone .x{color:red}', '.ffc-clone.ffc-clone{--a:1px}'],
+  );
+  // `:root` keeps its weight over a bare type selector once both are scoped.
+  // Block themes write their per-block styles as `:root :where(.wp-block-x)`
+  // precisely so they outrank the element defaults; a single replacement class
+  // made them tie on class count and lose on the type selector.
+  eq(
+    ':root keeps its edge over a type selector after scoping',
+    scopeCloneCss(':root :where(.wp-block-site-title){font-weight:800}h1{font-weight:400}').css,
+    '.ffc-clone.ffc-clone :where(.wp-block-site-title){font-weight:800}.ffc-clone h1{font-weight:400}',
+  );
+  eq(
+    'a bare html ancestor becomes the wrapper, keeping its type weight',
+    scopeCloneCss('html :where(.has-border-color){border-style:solid}').css,
+    '.ffc-clone:not(html) :where(.has-border-color){border-style:solid}',
+  );
+  eq(
+    '...and is left alone when scoped again',
+    scopeCloneCss('.ffc-clone:not(html) :where(.a){color:red}').css,
+    '.ffc-clone:not(html) :where(.a){color:red}',
+  );
+  eq(
+    'a selector merely starting with "html" letters is not the root',
+    scopeCloneCss('htmlx .a{color:red}').css,
+    '.ffc-clone htmlx .a{color:red}',
+  );
+  eq(
+    'a qualified :root keeps its qualifier',
+    scopeCloneCss(':root:not(.x) .y{color:red}').css,
+    '.ffc-clone.ffc-clone:not(.x) .y{color:red}',
+  );
+  // Browser defaults restored over the host's CSS reset.
+  const ua = uaDefaultsStyle();
+  eq(
+    'the UA-defaults block restores underline, list markers, inline media, border width and control fonts',
+    [
+      'text-decoration:underline',
+      'list-style:disc',
+      'list-style:decimal',
+      'display:inline',
+      'border-width:medium',
+      'font:revert',
+    ].every((d) => ua.includes(d)),
+    true,
+  );
+  eq(
+    'and every selector is wrapper-scoped through :where (no class weight of its own)',
+    ua
+      .replace(/^<style[^>]*>|<\/style>$/g, '')
+      .split('}')
+      .filter(Boolean)
+      .every((r) =>
+        r
+          .split('{')[0]
+          // Top-level commas only: `:is(img,svg,…)` is one selector.
+          .split(/,(?![^()]*\))/)
+          .every((sel) => sel.startsWith(':where(.ffc-clone) ')),
+      ),
+    true,
+  );
+  eq(
+    'and scoping it again changes nothing',
+    scopeCloneCss('.ffc-clone.ffc-clone :where(.a){color:red}').css,
+    '.ffc-clone.ffc-clone :where(.a){color:red}',
   );
   // Divi ships almost all of its layout inside media queries.
   eq(

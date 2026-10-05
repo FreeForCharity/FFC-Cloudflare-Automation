@@ -325,6 +325,18 @@ jobs:
           # checked against the SOURCE, where it is visible from every platform.
           python3 scripts/check-subprocess-encoding.py
 
+      - name: Validate docs hand out the CI-pinned prettier
+        shell: bash
+        run: |
+          # This job checks formatting with `npx --yes prettier@3.8.1` a few
+          # steps down. A doc that tells a reader to run `npx prettier` instead
+          # sends them to whatever minor is current, whose Markdown reflow
+          # disagrees with the pin — so a clean file reads as dirty and the
+          # "fix" is what CI then rejects. Measured on #1500. The rule was
+          # already written in CLAUDE.md and AGENTS.md contradicted it, which
+          # is why this is a check and not another paragraph.
+          python3 scripts/check-prettier-pin.py
+
       - name: Validate every working-directory exists
         shell: bash
         run: |

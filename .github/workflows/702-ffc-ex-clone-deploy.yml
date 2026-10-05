@@ -12,6 +12,13 @@ run-name:
 # Auth: uses CBM_TOKEN (cross-repo PAT, same secret create-repo.yml uses) to
 # check out the FFC-EX repo and push a branch + open a PR there. Non-destructive:
 # it never pushes to the FFC-EX default branch, only opens a PR for review.
+#
+# The github-prod approval is the only human stop, and the approver sees nothing
+# but the run name and the run summary before clicking "Approve". So the ungated
+# preflight writes the whole plan into that summary once every check has passed:
+# the resolved target repo, the credential the gate releases, every input, the
+# steps in order, and -- in one unmissable line -- whether this run writes
+# (dry_run=false: push a NEW branch + open a DRAFT PR) or writes nothing.
 
 on:
   workflow_dispatch:
@@ -73,6 +80,7 @@ jobs:
   # Added after the 2026-07-18 incident: a stale inventory led to a clone being dispatched
   # against FFC-EX-AllTypeTowing.com, a completed migration already cut over on its apex.
   preflight:
+    name: Preflight (read-only, ungated) - verify target, print what approval will run
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -86,6 +94,13 @@ jobs:
           IN_DOMAIN: ${{ inputs.domain }}
           IN_REPO: ${{ inputs.ffc_ex_repo }}
           IN_FORCE: ${{ inputs.force }}
+          # The remaining inputs are read here ONLY to print the approver's plan
+          # (below); the gated job reads them again itself. Through `env:` so
+          # they arrive as data, like the three above (#1080).
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          IN_BUILD_CHECK: ${{ inputs.build_check }}
+          IN_DEPTH: ${{ inputs.depth }}
+          IN_EXCLUDE: ${{ inputs.exclude }}
         shell: bash
         run: |
           set -euo pipefail
@@ -197,9 +212,74 @@ jobs:
             echo "- force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+          # --- the approver's plan: what approving the github-prod gate will run ----
+          # Everything above decides WHETHER the gated job may run; this decides
+          # whether the approver can tell WHAT it will do. Before "Approve" the
+          # reviewer sees the run name and this summary and nothing else, so the
+          # plan goes here in full, and only once every check has passed: a
+          # refused run must not carry a plan that reads as "safe to approve".
+          #
+          # The credential row below names the PAT by role and vault, not by its
+          # `wr-all-…` secret name: test_dry_run_skips_write_gates.py reads any
+          # such literal in a job body as that job LOADING a writer credential,
+          # and this job must stay a read-only, ungated preflight in that audit.
+          #
+          # Fail closed on an empty dry_run. The one line the approver most needs
+          # is whether this run writes; a blank there is the exact failure this
+          # section exists to remove, and the gated job would still write.
+          if [ -z "${IN_DRY_RUN:-}" ]; then
+            echo "::error::IN_DRY_RUN is empty: the step-level env: mapping is missing or misnamed. The approver's plan hinges on whether this run writes, so refusing rather than printing a plan with that line blank."
+            exit 1
+          fi
+          if [ "$IN_DRY_RUN" = "true" ]; then
+            write_line="**dry_run=true — nothing is written.** The clone, the integration and the build all run; the last step only lists the files it *would* have committed. No branch is pushed and no PR is opened."
+            notice="dry_run=true: approving runs the clone + build against FreeForCharity/$canonical_name and writes NOTHING (no branch, no PR)."
+          else
+            write_line="**dry_run=false — this run WRITES.** It commits the clone to a NEW branch \`clone/static-from-live-<timestamp>\`, pushes that branch to \`$canonical\`, and opens a **draft** pull request against \`main\` titled \`Static clone of live $IN_DOMAIN (replaces template scaffold)\`. Nothing is merged; the PR waits for review."
+            notice="dry_run=false: approving pushes a NEW branch clone/static-from-live-<timestamp> to FreeForCharity/$canonical_name and opens a DRAFT PR against main. It never pushes to main."
+          fi
+          build_line="runs \`next build\` and the self-contained gate (\`verify-no-legacy.mjs\`); a failure stops the run before any write"
+          if [ "${IN_BUILD_CHECK:-true}" != "true" ]; then
+            build_line="**skipped** (build_check=false) — the export is neither built nor verified before the write"
+          fi
+          depth_display="${IN_DEPTH:-8}"
+          exclude_display="${IN_EXCLUDE:-}"
+          if [ -z "$exclude_display" ]; then exclude_display="(none)"; fi
+          force_note=""
+          if [ "${IN_FORCE:-false}" = "true" ]; then
+            force_note=" — the live-site, probe-failure and sibling-repo guards above were SKIPPED"
+          fi
+          {
+            echo ""
+            echo "## ✅ Preflight passed — what approving the \`github-prod\` gate will run"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Source (read only) | \`https://$IN_DOMAIN/\` — mirrored with httrack and a headless browser; nothing on the live site is changed |"
+            echo "| Target repo | [\`$canonical\`](https://github.com/$canonical) |"
+            echo "| Credential the gate releases | the cross-repo GitHub PAT (CBM_TOKEN), loaded from Key Vault \`kv-ffc-admin-prod-cbm\` by the gated job and used only to check out, push a branch to, and open a PR on the target repo |"
+            echo "| dry_run | \`$IN_DRY_RUN\` |"
+            echo "| build_check | \`${IN_BUILD_CHECK:-true}\` |"
+            echo "| httrack depth / exclude | \`$depth_display\` / \`$exclude_display\` |"
+            echo "| force | \`${IN_FORCE:-false}\`$force_note |"
+            echo ""
+            echo "After approval, the \`clone-deploy\` job runs these steps in order:"
+            echo ""
+            echo "1. Clone \`https://$IN_DOMAIN/\` with httrack (depth $depth_display, exclude: $exclude_display), then mirror the assets the pages only request at runtime."
+            echo "2. Check out \`$canonical\` (its default branch) and integrate the clone into its Next.js app: the clone goes into \`public/\`, the template's page routes move to \`_disabled_template_routes/\`, and \`public/CNAME\` is written as \`$IN_DOMAIN\`."
+            echo "3. Build check: $build_line."
+            echo "4. Write: $write_line"
+            echo ""
+            echo "It never: pushes to or merges into \`main\` of the target; changes DNS, Cloudflare or GitHub Pages settings; modifies the live site; touches any repo other than \`$canonical\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The same verdict as an annotation, so it also shows at the top of the
+          # run page, beside the "Review deployments" button.
+          echo "::notice title=Approving github-prod will::$notice"
+
           echo "repo_name=$canonical_name" >> "$GITHUB_OUTPUT"
 
   clone-deploy:
+    name: Clone + deploy (github-prod gate - the preflight summary says exactly what it writes)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: preflight
@@ -549,7 +629,19 @@ jobs:
             -m "Replace template scaffold with faithful static clone of live $IN_DOMAIN" \
             -m "Generated by automation workflow 27 (clone-site-static.mjs + integrate-clone-into-nextjs.mjs). The Next.js output:'export' build now serves the exact live WordPress visuals; template page routes moved to _disabled_template_routes/."
           git push -u origin "$branch"
-          gh pr create --repo "FreeForCharity/$TARGET_REPO" \
+          pr_url=$(gh pr create --repo "FreeForCharity/$TARGET_REPO" \
             --base main --head "$branch" --draft \
             --title "Static clone of live $IN_DOMAIN (replaces template scaffold)" \
-            --body "Automated faithful static clone of the live WordPress site, served via the existing Next.js \`output: 'export'\` build. See the automation repo's docs/ffc-ex-static-clone-runbook.md. Review the visual fidelity against the live site before merging/cutover."
+            --body "Automated faithful static clone of the live WordPress site, served via the existing Next.js \`output: 'export'\` build. See the automation repo's docs/ffc-ex-static-clone-runbook.md. Review the visual fidelity against the live site before merging/cutover.")
+          # Close the loop the preflight plan opened: the approver was told a
+          # branch and a draft PR would be written, so the summary records
+          # exactly which ones were, not just the log.
+          {
+            echo "## 702 wrote to \`FreeForCharity/$TARGET_REPO\`"
+            echo ""
+            echo "- Branch pushed: \`$branch\`"
+            echo "- Draft PR opened: $pr_url"
+            echo ""
+            echo "Nothing was merged and \`main\` was not touched; review the PR's visual fidelity against the live site before merging."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=702 wrote::branch $branch pushed to FreeForCharity/$TARGET_REPO; draft PR $pr_url"

@@ -400,7 +400,7 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
 - **Safety-table conflicts are normal, not a red flag.** Prettier reflows every row of
   `docs/workflow-safety-and-approvals.md` when a new cell widens a column, so two PRs that each "add
   one row" conflict across the whole table. Resolve by taking `main`'s table, re-inserting your row
-  after its numeric neighbor, then `npx prettier --write` the file and re-run
+  after its numeric neighbor, then `npx --yes prettier@3.8.1 --write` the file and re-run
   `python3 scripts/check-workflow-doc-consistency.py` + the catalog generator to confirm no drift.
 
 ## Adding or changing a workflow

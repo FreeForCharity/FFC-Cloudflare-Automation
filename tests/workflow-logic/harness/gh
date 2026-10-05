@@ -39,7 +39,15 @@ case "$cmd" in
         # invitation, in the real shape: body on STDOUT, HTTP line on stderr.
         # "error" = a non-404 failure, body on STDOUT (ledger L02) — the script
         # must report that as UNKNOWN, never as a membership state.
-        case "${TEST_ORG_MEMBERSHIP:-404}" in
+        # TEST_ORG_MEMBERSHIP_AFTER_PUT, when set, answers every read AFTER a PUT
+        # was logged -- so a scenario can be "not a member" before and "pending"
+        # after, which is what the 749 re-read exists to observe.
+        membership="${TEST_ORG_MEMBERSHIP:-404}"
+        if [ -n "${TEST_ORG_MEMBERSHIP_AFTER_PUT:-}" ] && [ -n "${TEST_GH_LOG:-}" ] \
+           && grep -q -- "-X PUT orgs/" "$TEST_GH_LOG" 2>/dev/null; then
+          membership="$TEST_ORG_MEMBERSHIP_AFTER_PUT"
+        fi
+        case "$membership" in
           404)
             echo '{"message":"Not Found","status":"404"}'
             echo "gh: Not Found (HTTP 404)" >&2
@@ -50,7 +58,7 @@ case "$cmd" in
             exit 1
             ;;
           *)
-            printf '%s\n' "$TEST_ORG_MEMBERSHIP"
+            printf '%s\n' "$membership"
             ;;
         esac
         ;;
@@ -61,7 +69,11 @@ case "$cmd" in
           echo '{"message":"Resource not accessible by personal access token","status":"403"}'
           exit 1
         fi
-        if [ -n "${TEST_ORG_MEMBERSHIP_PUT_BODY:-}" ]; then
+        # "empty" reproduces run 36948974596: exit 0 with no body at all, for an
+        # invitation that WAS sent. The script must then re-read, not guess.
+        if [ "${TEST_ORG_MEMBERSHIP_PUT_BODY:-}" = "empty" ]; then
+          :
+        elif [ -n "${TEST_ORG_MEMBERSHIP_PUT_BODY:-}" ]; then
           printf '%s\n' "$TEST_ORG_MEMBERSHIP_PUT_BODY"
         else
           echo '{"state":"pending","role":"member"}'

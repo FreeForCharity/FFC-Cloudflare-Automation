@@ -778,7 +778,23 @@ GIT_BRANCH_RE = re.compile(
 )
 # Remote-listing flags. `-a`/`--all` is included because it is a superset: it
 # prints the same unprunable namespaces alongside the local branches.
-BRANCH_REMOTE_FLAG_RE = re.compile(r"(?<![\w-])(?:-[a-zA-Z]*[ra][a-zA-Z]*|--remotes|--all)(?![\w-])")
+#
+# `=` is in the negative lookbehind, not decoration. The short-flag alternative
+# matches any hyphen-led run containing `r` or `a`, so a DESCENDING-SORT VALUE
+# qualifies: in `git branch --sort=-committerdate` the `-committerdate` after the
+# `=` matches, and a purely local listing was warned at and advised to use
+# `git ls-remote` -- wrong guidance for a local-branch question, since `--sort`
+# has no remote-listing semantics. Blocking a match that begins right after `=`
+# keeps `-r` / `-a` / `--remotes` / `--all` matching (each begins after a space)
+# while a flag's VALUE can no longer be read as a flag.
+BRANCH_REMOTE_FLAG_RE = re.compile(
+    r"(?<![\w=-])(?:-[a-zA-Z]*[ra][a-zA-Z]*|--remotes|--all)(?![\w-])"
+)
+# Redirections that name a file descriptor: `2>/dev/null`, `2>&1`, `2>>log`.
+# These do NOT capture the branch listing as data -- they move stderr -- so they
+# must not satisfy the `captured` test below. Stripping them before looking for
+# `>` is what separates "capturing the listing" from "suppressing the noise".
+FD_REDIRECT_RE = re.compile(r"\d+>+&?\d*")
 # The flags that mean a DIFFERENT question -- "which of these is merged" rather
 # than "what branches are there". `docs/stale-branch-review-2026-08.md` asks
 # exactly that one, in prose, and it is the single committed occurrence of the
@@ -844,7 +860,17 @@ def git_branch_remote_count_violation(cmd):
         if BRANCH_MERGED_FLAG_RE.search(args):
             continue
         counted = bool(BRANCH_COUNTED_RE.search(bare))
-        captured = bool(re.search(r"\$\(\s*git\b|`\s*git\b", bare)) or ">" in bare
+        # Strip fd-numbered redirects BEFORE asking whether the listing is
+        # captured. A bare `">" in bare` also matches `2>/dev/null` and `2>&1`,
+        # which move stderr and capture nothing -- so `git branch -r 2>/dev/null`
+        # warned, although it is precisely the "bare listing shown to a human"
+        # case this rule is documented to leave alone, and noise suppression is
+        # the most common thing to append to a listing.
+        # Tradeoff, taken deliberately: an explicit `1>file` stdout capture no
+        # longer warns. That spelling is rare, and a false positive on a common
+        # idiom costs more than a false negative on an uncommon one.
+        redirects_stripped = FD_REDIRECT_RE.sub(" ", bare)
+        captured = bool(re.search(r"\$\(\s*git\b|`\s*git\b", bare)) or ">" in redirects_stripped
         if not (counted or captured):
             continue
         return (

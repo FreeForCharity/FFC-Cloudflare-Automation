@@ -691,6 +691,29 @@ RULES = [
         ("--list glob without a remote flag is silent",
          "git branch --list 'feature/*' | wc -l", SILENT),
         ("a delete is not a listing", "git branch -d stale-thing", SILENT),
+        # A flag's VALUE is not a flag. `-[a-zA-Z]*[ra][a-zA-Z]*` matches any
+        # hyphen-led run containing `r` or `a`, so `-committerdate` after the
+        # `=` qualified and a purely LOCAL listing was told to use ls-remote --
+        # wrong guidance, since --sort has no remote-listing semantics.
+        ("a descending --sort value is not a remote flag",
+         "git branch --sort=-committerdate > branches.txt", SILENT),
+        ("…nor when it is counted", "git branch --sort=-authordate | wc -l", SILENT),
+        # …and the flags themselves must survive that lookbehind.
+        ("-r still warns beside a --sort value",
+         "git branch --sort=-committerdate -r | wc -l", WARN),
+        ("--remotes still warns beside a --sort value",
+         "git branch --sort=-authordate --remotes > r.txt", WARN),
+        # An fd-numbered redirect moves stderr; it captures nothing. These are
+        # the bare-listing case with noise suppression appended, which is the
+        # most common thing to append to a listing.
+        ("2>/dev/null is noise suppression, not capture",
+         "git branch -r 2>/dev/null", SILENT),
+        ("2>&1 likewise", "git branch -r 2>&1 | head", SILENT),
+        ("2>>file likewise", "git branch -r 2>>err.log", SILENT),
+        # …but a real stdout capture beside one still warns, or the strip has
+        # swallowed the signal rather than the noise.
+        ("a real capture alongside 2>&1 still warns",
+         "git branch -r >all.txt 2>&1", WARN),
         # The words inside quotes are prose, not a command -- the shape that
         # makes a rule fire on its own documentation.
         ("the same words quoted are silent", "echo 'git branch -r | wc -l'", SILENT),

@@ -3,8 +3,12 @@
 `scripts/preflight-cutover.mjs` is the read-only go/no-go gate in front of every
 staging->apex cutover, and until this file existed NOTHING under
 tests/workflow-logic referenced it. Its 932 lines carry an internal `--self-test`
-battery over the pure functions; nothing in CI ran it and nothing guarded the
-imperative call sites that feed those functions. This file closes both halves.
+battery over the pure functions, and CI does run that battery --
+`scripts/tests/preflight-cutover.Tests.ps1` shells out to `--self-test`, and the
+required `Validate Repository` job runs Invoke-Pester over `scripts/tests`. What
+nothing guarded is the imperative call sites that feed those pure functions --
+the `originHealthy` fold below. This file closes that half, and adds the first
+tests/workflow-logic coverage this script has had.
 
 THE REGRESSION BEING PINNED
     The apex-ready check (#766) reads the exported HTML and fails the domain when

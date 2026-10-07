@@ -704,13 +704,35 @@ RULES = [
         ("bare endpoint with a bare trailing ? allowed",
          "gh api /repos/o/r/actions/runs?", ALLOW),
         # The regex fallback has to survive, and this is the row that proves it:
-        # the word reader tokenizes on whitespace, so a quoted flag operand with
-        # a space in it (`-H 'Accept: application/json'`) makes it return
-        # `application/json` and never reach the endpoint. It is already a BLOCK
-        # row above; this is its `?` sibling, which must NOT be exempted by a
-        # question mark sitting in an OPERAND rather than in the endpoint.
+        # the word reader used to tokenize on raw whitespace, so a quoted flag
+        # operand containing a space (`-H 'Accept: application/json'`) made it
+        # return `application/json` and never reach the endpoint. It is already a
+        # BLOCK row above; this is its `?` sibling, which must NOT be exempted by
+        # a question mark sitting in an OPERAND rather than in the endpoint.
         ("a ? in a flag operand does not exempt a mangled endpoint",
          "gh api -H 'Accept: application/vnd?x' /markdown", BLOCK),
+        # ...and the hole that the "fallback has to survive" framing left open,
+        # because it needed BOTH halves to be defeated at once. Round 13,
+        # Copilot. The spaced operand derails the word reader as described above,
+        # AND quoting the endpoint blanks it out of the text the regex reads, so
+        # neither layer sees it. All four one-condition spellings block, which is
+        # why twelve rounds of review walked past this. The fix is to split on
+        # UNQUOTED whitespace; these three were ALLOWED before it.
+        ("gh api spaced header operand then QUOTED leading slash endpoint",
+         "gh api -H 'Accept: application/vnd.github+json' \"/markdown\"", BLOCK),
+        ("gh api spaced --header operand then quoted leading slash endpoint",
+         "gh api --header \"X-Thing: a b\" '/repos/o/r'", BLOCK),
+        ("gh api spaced field operand then quoted leading slash endpoint",
+         "gh api -X POST -f 'name=a b' \"/repos/o/r/issues\"", BLOCK),
+        # The same cause ran in the over-block direction too, and these two are
+        # the controls that prove the fix is about tokenization rather than about
+        # loosening the rule: a slashed path inside a flag's OPERAND is data, and
+        # the whitespace split handed its tail to the loop as the endpoint. Both
+        # BLOCKED before the fix -- false positives on correct commands.
+        ("a slashed path in a header value is not the endpoint",
+         "gh api -H \"X: /markdown\" rate_limit", ALLOW),
+        ("a slashed path in a field value is not the endpoint",
+         "gh api -f 'body=see /markdown for this' repos/o/r/issues", ALLOW),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a

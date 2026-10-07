@@ -1090,7 +1090,36 @@ def _gh_api_endpoint(cmd):
               "--method", "-q", "--jq", "-t", "--template", "--input",
               "--cache", "--hostname"}
 
-    tokens = cmd[m.end():].split()
+    # Split on UNQUOTED whitespace only. `.split()` tore a quoted operand that
+    # contains a space into several tokens, and the damage was not that the
+    # endpoint got mis-skipped -- it was that a FRAGMENT of the operand looked
+    # like the endpoint. `gh api -H 'Accept: application/vnd.github+json'
+    # "/markdown"` split into four, the third being `application/vnd.github+json'`,
+    # which has a slash, so the loop returned THAT as the path and stopped. The
+    # real endpoint was never examined, and rule 8's regex fallback could not
+    # cover for it because the endpoint was quoted and so blanked out of the
+    # text the regex reads. Both halves had to be wrong at once, which is why
+    # all four neighbouring spellings blocked. Round 13, Copilot.
+    tokens = []
+    word = ""
+    quote = None
+    for ch in cmd[m.end():]:
+        if quote is not None:
+            word += ch
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            word += ch
+        elif ch.isspace():
+            if word:
+                tokens.append(word)
+                word = ""
+        else:
+            word += ch
+    if word:
+        tokens.append(word)
+
     skip_next = False
     for tok in tokens:
         if skip_next:

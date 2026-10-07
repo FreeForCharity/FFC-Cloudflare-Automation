@@ -30,11 +30,22 @@ public clone away.
 
 Several rules below are written as "`guard_bash.py` blocks / warns about X". That is true only for a
 session whose **project root is this repository**. Claude Code loads hooks from the project root and
-nowhere else, so `cd`-ing into a clone does not load its `.claude/hooks/`. Two scheduled sessions
-fail that condition today — the Conductor (its own workspace) and the **multi-repo cloud worker**,
-which clones five FFC repos side by side and is rooted at their _parent_, where there is no
-`.claude` at all. For those sessions every "the hook has this covered" sentence in this file is
-prose, and prose you have to actually follow.
+nowhere else, so `cd`-ing into a clone does not load its `.claude/hooks/`. The known unwired class
+is the **multi-repo cloud worker**, which clones five FFC repos side by side and is rooted at their
+_parent_, where there is no `.claude` at all. For a session in that state every "the hook has this
+covered" sentence in this file is prose, and prose you have to actually follow.
+
+**Do not read a list of session names here as current — including the one above.** Until run 212
+this paragraph also named the Conductor, and that had stopped being true: the Conductor workspace is
+**wired**, measured twice in one run. `guard_bash.py` blocked an L50 pipeline before the check was
+even reached, and `verify-conductor-hooks.py --workspace` on the session's stated root returned
+`HOOKS: wired, exit 0`. The error direction was the safe one — a run that believes its guards are
+prose follows them by hand — but it told every Conductor run to discount enforcement that was live,
+and a wired session that thinks it is unwired also mis-attributes a refusal it should have expected.
+
+The lesson generalises past this one sentence: **wiring is per-session state, so any enumeration of
+it in a tracked file is a cache with no invalidation.** The check is cheap and authoritative; this
+paragraph is neither. Run it, and believe it over anything written here.
 
 Establish which you are, in one command. **Run it bare — do not pass `--workspace "$PWD"`:**
 
@@ -357,8 +368,37 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
     un-enqueued, or sends a second merge command at a PR already in the queue. Ledger **L198**.
 
   `.auto_merge != null` confirms the enqueue took, but null does NOT prove a dequeue (it can read
-  null while queued — see below); the authoritative probe is the `enqueuePullRequest` mutation
-  ("already in the queue"). Or enqueue directly:
+  null while queued — see below).
+
+  **Probe with a read before reaching for the mutation — and note that this file and `CLAUDE.md`
+  have disagreed about which probe is authoritative.** `CLAUDE.md`'s merge-queue sections (see _"a
+  `null` `autoMergeRequest` does not mean the enqueue failed — `mergeQueueEntry` is the proof"_)
+  have always named the **`mergeQueueEntry` read** as the proof, and record it being decisive on
+  #905 and on runs 176/177. This line named the mutation. Both work; only one of them is a write.
+
+  Prefer the read. The per-PR form is in `CLAUDE.md`; the branch-level form additionally shows
+  **ordering**, which is what you want after enqueuing more than one PR:
+
+  ```bash
+  gh api graphql -f query='query{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+    mergeQueue(branch:"main"){entries(first:20){nodes{position state pullRequest{number}}}}}}'
+  ```
+
+  Preferring it is not stylistic: the command classifier latches after **any** write, so a mutation
+  used as a probe can cost the rest of a run's _reads_. Run 214 sent a `resolveReviewThread`
+  mutation and had the next call — a read-only `gh pr view --json headRefOid` — refused as
+  `External System Writes`.
+
+  Run 215 is the measurement for the silent case `CLAUDE.md` describes: `gh pr merge 1554 --auto`
+  and `gh pr merge 1555 --auto` each printed **nothing at all**, not even the advisory above, and
+  both PRs then read `auto_merge: null`, `mergeable_state: clean`, `merged: false` — byte-identical
+  to a refusal. The branch-level query showed them queued at positions **1 and 2**,
+  `AWAITING_CHECKS`. Silence plus a null is a **successful** enqueue; do not send a second merge
+  command on that evidence.
+
+  Keep the `enqueuePullRequest` mutation for the one case no read settles — an **empty** entry list,
+  where "never enqueued" and "already merged and dequeued" look the same. Its "already in the queue"
+  answer is also what you get when enqueuing directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
   - **Read the probe's answers apart, because some of them are failures wearing the wrong clothes —
     and do not treat the list below as closed.**

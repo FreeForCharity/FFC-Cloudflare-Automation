@@ -34,6 +34,20 @@
   `merge_group` run had reported success (722 success, 723 success, 727 skipped — a skip is a pass
   here). The merge landed on its own. Do not dequeue, re-push, or "fix" the branch on the strength
   of that state; poll `pulls/N --jq .merged` via REST and let it finish.
+- **Budget ~17 minutes from merge-group creation to merge, and do not read anything under that as a
+  stall.** The bullet above says `AWAITING_CHECKS` is not a stall; this gives it a number, so the
+  judgment call does not have to be made from feel. Measured 2026-10-07 over the last 38 successful
+  `722-ci.yml` runs: **median 16.6 min, mean 16.2, max observed 19.2.** The queue path is **not**
+  faster — `merge_group` runs mean 16.0 min against `pull_request`'s 16.2 (7 and 24 runs).
+
+  Do not reach for this file's other figure. The **"~8 minutes"** recorded further down is about
+  `python tests/workflow-logic/run_all.py` on the Conductor's **Windows host**; `722` in CI also
+  runs prettier, actionlint, PSScriptAnalyzer and the rest. Both numbers are right about their own
+  referent, and the trap is that a run waiting on the queue reaches for the one it has already read.
+  Run 215 spent attention on a merge-group `722` at 13 minutes that was dead normal. **Re-measure a
+  recorded duration rather than re-copying it** — this bullet's own figures were re-derived on a
+  larger sample than the run that first reported them, and they moved.
+
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.
@@ -1956,3 +1970,63 @@ numbers describe a defect, so restating them reads as diligence rather than as a
 `path:line` coordinate is a claim about one revision.** Re-derive it in the tree the text will land
 in, or write it as a snapshot naming that revision, as the table above now does. Never carry one
 across a rebase, a supersession or a cherry-pick on the strength of having measured it before.
+
+## A merge **conflict** is not incompatibility, the same way a clean merge is not compatibility (validated 2026-10-07, Conductor run 216)
+
+The companion to the rule above it. We already know a textually clean merge says nothing about
+whether two PRs can land together — only a real merge plus the suite on the merged tree answers
+that. **The converse is equally true and gets acted on far more often: a reported conflict is a
+statement about bytes at a position, not about whether the two changes can coexist.** Run 211 read
+four open `.claude/hooks/` PRs, found two conflicting pairs, and recorded that "two pairs of them
+cannot both land". Run 216 measured the same four and all four are landable in either order.
+
+Measured on `main` = `6181c5b8`, each merge a real `git merge` in a detached worktree:
+
+| probe                                                | result                                   |
+| ---------------------------------------------------- | ---------------------------------------- |
+| `main` + each of #1313 / #1336 / #1519 / #1521 alone | all four merge clean                     |
+| `main` + #1313 + #1336                               | CONFLICT — `docs/lessons-ledger.md` only |
+| `main` + #1519 + #1521                               | CONFLICT — `.claude/hooks/guard_bash.py` |
+| the other four pairs                                 | clean                                    |
+
+Both conflicts dissolve once you read _what_ collided:
+
+- **#1313 + #1336** never touch the same region of `guard_bash.py` at all — they implement different
+  rules. What collides is `docs/lessons-ledger.md` rows **L150** and **L158**, and the collision is
+  that _both PRs update the same citations' line numbers_, because each shifts `guard_bash.py` by a
+  different amount (#1313 rewrites `456`→`817` and `467`→`828`; #1336 moves the same anchors
+  elsewhere and additionally rewords L150). The hook logic is compatible, and the proof is the suite
+  on the merged tree: **`test_hooks.py` → 373 passed, 0 failed, rc=0.**
+- **#1519 + #1521** both insert a new warn-only rule at the _same_ point, `guard_bash.py:1003`
+  inside `main()`. `git` cannot know the two insertions are independent. Keeping both resolves it.
+
+So the honest sentence for a handoff is **"both land, in either order; whichever goes second needs
+its L150/L158 line-number citations recomputed against the merged file"** — not "cannot both land".
+The difference matters because the two sentences license opposite actions: the first is a landing
+order, the second is a reason to close one of them.
+
+**Do not hand-resolve the ledger conflict by union.** Dropping the conflict markers and keeping both
+sides is the obvious move and it is wrong: it ships duplicate `L150`/`L158` rows, and
+`tests/workflow-logic/test_lessons_ledger.py` fails three ways on the result (`test_ids_are_unique`,
+`test_every_lesson_id_is_present_well_formed_and_unique`, and
+`test_every_source_citation_in_the_ledger_resolves_and_points_at_content`). That guard exists
+because of exactly this (L43: a hand-resolved merge conflict once shipped a duplicate L36 with
+nothing to catch it). The merge queue builds a merge group and re-runs the required checks, so the
+validator does fire before anything lands — but it fires on the _merge group_, not on either PR, and
+neither PR looks wrong on its own.
+
+A corollary worth stating separately, since it cost a detour this run: **a `failure` check does not
+imply a blocked PR.** #1313 carries `copilot-pull-request-reviewer = failure` and still reads
+`mergeable_state: clean`, because ruleset `16768928` requires exactly `Validate Repository` and
+`Phantom Revert Guard` (the section above) and both are green. Read the required set before reading
+a red X; `gh pr checks` renders required and advisory failures identically.
+
+```bash
+# Pairwise landability, the only form that answers it. `git merge-tree` fed a tree OID
+# reports CONFLICT for every pair, convincingly (L: merge-tree takes commits, not trees).
+git -C "$H" fetch origin pull/$A/head:refs/ffc/pr$A pull/$B/head:refs/ffc/pr$B -f
+git -C "$H" worktree add --detach "$WT" origin/main
+git -C "$WT" merge --no-edit refs/ffc/pr$A
+git -C "$WT" merge --no-edit refs/ffc/pr$B || git -C "$WT" diff --name-only --diff-filter=U
+( cd "$WT" && PYTHONIOENCODING=utf-8 python .claude/hooks/test_hooks.py )   # the load-bearing step
+```

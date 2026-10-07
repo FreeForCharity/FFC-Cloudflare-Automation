@@ -115,6 +115,13 @@ HTTP_TIMEOUT = 30  # seconds; fail closed rather than hang the daily sync.
 # "a workflow run paused awaiting a human" is simply false, and because Copilot
 # reviews every push the window is open constantly.
 WORKFLOW_PATH_PREFIX = ".github/workflows/"
+# The branch the second waiting-run query shape is qualified by. `pending_gates`
+# is hub-only by design (see the module docstring), and the hub's default branch
+# is where every gated run lives — scheduled, dispatched and push alike. A gate
+# on some other branch is still found by the unqualified shape; this one exists
+# only as a floor under that shape's silent under-reporting. See
+# `collect_waiting_runs`.
+HUB_DEFAULT_BRANCH = "main"
 
 # The in-flight inclusion rule, stated in the feed itself. A public panel that
 # renders a bare count gives a reader no way to tell "nothing is in flight" from
@@ -620,18 +627,82 @@ def is_repo_workflow_run(run):
     return path.startswith(WORKFLOW_PATH_PREFIX)
 
 
+def _waiting_runs_one_shape(repo, token, params):
+    """The waiting-run rows one query shape returns, or ``[]`` if unusable.
+
+    Deliberately total: a shape that answers with a non-object, or with no
+    ``workflow_runs`` array, contributes nothing rather than raising. The union
+    in `collect_waiting_runs` is what provides the floor, and it can only do
+    that if one bad shape does not take the other down with it."""
+    payload = rest_get(f"repos/{repo}/actions/runs", token, params=params)
+    if not isinstance(payload, dict):
+        return []
+    runs = payload.get("workflow_runs")
+    return runs if isinstance(runs, list) else []
+
+
+def collect_waiting_runs(repo, token, default_branch=HUB_DEFAULT_BRANCH):
+    """Waiting runs, as the **union of two redundant query shapes**.
+
+    ``?status=waiting`` is not reliable, and its failure mode is to under-report
+    rather than to error. Measured on this repo 2026-10-07T13:14Z (Conductor run
+    219): ``?status=waiting&per_page=100`` returned ``total_count: 0`` on two
+    consecutive reads while **four** runs were provably waiting — each one read
+    back individually as ``status: waiting``, each with a live
+    ``pending_deployments`` entry. Adding ``&branch=main`` to the same call
+    returned all four. The unqualified shape had answered correctly six minutes
+    earlier, so this is transient and unpredictable, which is exactly why the fix
+    is redundancy rather than a replacement query.
+
+    Two shapes are unioned by run id, so the count can only ever be too high,
+    never too low. That direction is chosen to match `is_repo_workflow_run`:
+    hiding a gate that really is waiting on a reviewer is the worst outcome for
+    this feed, and an `[]` here hides **every** gate at once while the run that
+    produced it looks completely successful.
+
+    Filtering client-side over an unfiltered page is **not** an alternative and
+    was measured too: the newest 100 runs also yielded zero, because a held gate
+    is routinely days old (the four above spanned 10-01 to 10-05) and falls off
+    the page entirely.
+
+    A disagreement between the shapes is reported on stderr rather than
+    swallowed. The 502 job log is where the next person diagnosing this will
+    look, and a silent repair would hide that the upstream defect is still live.
+    """
+    base = {"status": "waiting", "per_page": "100"}
+    shapes = [dict(base), {**base, "branch": default_branch}]
+
+    by_id = {}
+    per_shape = []
+    for params in shapes:
+        rows = _waiting_runs_one_shape(repo, token, params)
+        per_shape.append(len(rows))
+        for run in rows:
+            rid = run.get("id")
+            if rid is not None:
+                by_id.setdefault(rid, run)
+
+    if len(set(per_shape)) > 1:
+        print(
+            "WARNING: waiting-run query shapes disagreed "
+            f"(unqualified={per_shape[0]}, branch={default_branch}:{per_shape[1]}); "
+            f"using the union of {len(by_id)}. "
+            "A short count from ?status=waiting is a known upstream defect.",
+            file=sys.stderr,
+        )
+
+    return list(by_id.values())
+
+
 def collect_pending_gates(repo, token):
     """Workflow runs waiting at an environment approval gate. The waiting run
     list names the workflow; the per-run pending_deployments call names the
     environment(s) still awaiting approval.
 
-    Only this repo's own workflows are reported — see `is_repo_workflow_run`."""
-    runs_payload = rest_get(
-        f"repos/{repo}/actions/runs",
-        token,
-        params={"status": "waiting", "per_page": "100"},
-    )
-    runs = runs_payload.get("workflow_runs", []) if isinstance(runs_payload, dict) else []
+    Only this repo's own workflows are reported — see `is_repo_workflow_run`.
+    The waiting-run list itself comes from `collect_waiting_runs`, which unions
+    redundant query shapes because a single one silently under-reports."""
+    runs = collect_waiting_runs(repo, token)
     gates = []
     for run in runs:
         if not is_repo_workflow_run(run):

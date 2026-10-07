@@ -30,11 +30,22 @@ public clone away.
 
 Several rules below are written as "`guard_bash.py` blocks / warns about X". That is true only for a
 session whose **project root is this repository**. Claude Code loads hooks from the project root and
-nowhere else, so `cd`-ing into a clone does not load its `.claude/hooks/`. Two scheduled sessions
-fail that condition today — the Conductor (its own workspace) and the **multi-repo cloud worker**,
-which clones five FFC repos side by side and is rooted at their _parent_, where there is no
-`.claude` at all. For those sessions every "the hook has this covered" sentence in this file is
-prose, and prose you have to actually follow.
+nowhere else, so `cd`-ing into a clone does not load its `.claude/hooks/`. The known unwired class
+is the **multi-repo cloud worker**, which clones five FFC repos side by side and is rooted at their
+_parent_, where there is no `.claude` at all. For a session in that state every "the hook has this
+covered" sentence in this file is prose, and prose you have to actually follow.
+
+**Do not read a list of session names here as current — including the one above.** Until run 212
+this paragraph also named the Conductor, and that had stopped being true: the Conductor workspace is
+**wired**, measured twice in one run. `guard_bash.py` blocked an L50 pipeline before the check was
+even reached, and `verify-conductor-hooks.py --workspace` on the session's stated root returned
+`HOOKS: wired, exit 0`. The error direction was the safe one — a run that believes its guards are
+prose follows them by hand — but it told every Conductor run to discount enforcement that was live,
+and a wired session that thinks it is unwired also mis-attributes a refusal it should have expected.
+
+The lesson generalises past this one sentence: **wiring is per-session state, so any enumeration of
+it in a tracked file is a cache with no invalidation.** The check is cheap and authoritative; this
+paragraph is neither. Run it, and believe it over anything written here.
 
 Establish which you are, in one command. **Run it bare — do not pass `--workspace "$PWD"`:**
 

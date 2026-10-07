@@ -103,7 +103,6 @@ block — verified to be the whole fix on that pair, 48 PASS / rc=0, nothing els
 touched.
 
 <!-- reserved-ids
-L340 open PR #1561 holds it on its own branch; run 219 took L341 so the two cannot land as duplicate ids and fail test_ids_are_unique in the merge group (L43). Remove when #1561 lands or closes.
 -->
 
 ## Verification and monitoring

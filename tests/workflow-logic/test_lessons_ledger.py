@@ -2050,7 +2050,8 @@ def test_a_reservation_must_name_who_holds_it():
 # `CLAUDE.md:<line>` and an insertion ABOVE the marker renumbers every one of
 # those anchors. Run 189 broke L180's citation in exactly that way, and runs
 # 216-217 each shipped a CLAUDE.md PR that had to be hand-placed against the
-# rule because nothing enforced it.
+# rule because nothing enforced it. #1560 then moved it for real (1795 -> 1809),
+# which this guard caught and which is why the pin reads 1809.
 #
 # The citation guard earlier in this module catches the CONSEQUENCE, but only
 # for rows carrying a quoted anchor — it is opt-in, so an un-enrolled row can
@@ -2066,7 +2067,7 @@ def test_a_reservation_must_name_who_holds_it():
 
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 _MARKER = "append-only on purpose"
-MARKER_LINE = 1795
+MARKER_LINE = 1809
 
 
 def marker_problems(text, label="CLAUDE.md", expected=MARKER_LINE):

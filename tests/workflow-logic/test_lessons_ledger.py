@@ -2043,6 +2043,119 @@ def test_a_reservation_must_name_who_holds_it():
     assert any("undeclared" in p for p in problems), problems
 
 
+# --- The append-only marker in CLAUDE.md, which no test held ----------------
+#
+# `CLAUDE.md` carries a marker reading "Everything below this line is
+# append-only on purpose", because `docs/lessons-ledger.md` cites that file by
+# `CLAUDE.md:<line>` and an insertion ABOVE the marker renumbers every one of
+# those anchors. Run 189 broke L180's citation in exactly that way, and runs
+# 216-217 each shipped a CLAUDE.md PR that had to be hand-placed against the
+# rule because nothing enforced it.
+#
+# The citation guard earlier in this module catches the CONSEQUENCE, but only
+# for rows carrying a quoted anchor — it is opt-in, so an un-enrolled row can
+# survive a shift by landing on another non-blank line (#1455: 45 of 53 rows
+# rested on that alone). This holds the RULE instead, which is cheaper and does
+# not depend on enrolment.
+#
+# The pin is the whole mechanism: appending BELOW the marker cannot move it, so
+# a correct change leaves this green, while any insertion above it fails with
+# the delta. If content above the marker is ever legitimately removed, updating
+# MARKER_LINE forces re-verifying the `CLAUDE.md:` citations in the same commit
+# — that coupled work is the point, not a chore the constant imposes.
+
+CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+_MARKER = "append-only on purpose"
+MARKER_LINE = 1795
+
+
+def marker_problems(text, label="CLAUDE.md", expected=MARKER_LINE):
+    problems = []
+    sites = [i for i, line in enumerate(text.splitlines(), 1) if _MARKER in line]
+    if not sites:
+        problems.append(
+            f"{label}: the append-only marker ({_MARKER!r}) is gone. It is the "
+            "only thing telling an agent that new sections go at the END of this "
+            "file, so without it every `CLAUDE.md:<line>` citation in the ledger "
+            "is one insertion away from pointing at the wrong line"
+        )
+        return problems
+    if len(sites) > 1:
+        problems.append(
+            f"{label}: the append-only marker appears on lines {sites} — it must "
+            "be unique, or 'below the marker' names more than one place and the "
+            "rule stops being checkable"
+        )
+    site = sites[0]
+    if site != expected:
+        moved = site - expected
+        where = "later" if moved > 0 else "earlier"
+        problems.append(
+            f"{label}: the append-only marker moved from line {expected} to "
+            f"{site} ({abs(moved)} line(s) {where}), so content was added or "
+            f"removed ABOVE it. Put your addition below line {site} instead — the "
+            "marker exists because the ledger cites this file by line number. If "
+            "you really did change content above it, update MARKER_LINE in "
+            "tests/workflow-logic/test_lessons_ledger.py and re-verify every "
+            "`CLAUDE.md:` citation in docs/lessons-ledger.md in the same commit"
+        )
+    return problems
+
+
+def test_the_append_only_marker_is_where_the_ledger_anchors_assume_it_is():
+    problems = marker_problems(CLAUDE_MD.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_claude_md_actually_carries_the_marker_this_guard_pins():
+    # Guards the guard (L09/L47): if the sentinel is ever reworded, the test
+    # above would report "the marker is gone" rather than going vacuous-green,
+    # but assert the real file carries it so the pin is never checked against a
+    # file that lost the rule entirely.
+    assert _MARKER in CLAUDE_MD.read_text(encoding="utf-8"), (
+        "CLAUDE.md no longer contains the append-only sentinel this guard pins"
+    )
+
+
+# The four self-tests below are what make the two above worth having (L09/L47):
+# neuter `marker_problems` and these flip red, while the real-file test stays
+# green vacuously.
+_MARKER_FIXTURE = (
+    "intro\n"
+    "section one\n"
+    "\n"
+    "> **Everything below this line is append-only on purpose.**\n"
+    "appended section\n"
+)  # the marker sits on line 4
+
+
+def test_the_marker_guard_sees_content_inserted_above_the_marker():
+    shifted = "preamble someone added\n" + _MARKER_FIXTURE
+    problems = marker_problems(shifted, label="planted.md", expected=4)
+    assert len(problems) == 1, problems
+    assert "moved from line 4 to 5" in problems[0], problems
+    assert "1 line(s) later" in problems[0], problems
+
+
+def test_the_marker_guard_leaves_an_append_below_the_marker_alone():
+    # The correct way to add to the file: everything after the marker.
+    appended = _MARKER_FIXTURE + "a brand new section\nand its body\n"
+    assert not marker_problems(appended, label="planted.md", expected=4)
+
+
+def test_the_marker_guard_sees_the_marker_deleted_outright():
+    problems = marker_problems("intro\nsection one\n", label="planted.md", expected=4)
+    assert len(problems) == 1, problems
+    assert "is gone" in problems[0], problems
+
+
+def test_the_marker_guard_sees_a_duplicated_marker():
+    doubled = _MARKER_FIXTURE + _MARKER_FIXTURE
+    problems = marker_problems(doubled, label="planted.md", expected=4)
+    assert any("must" in p and "unique" in p for p in problems), problems
+    assert any("[4, 9]" in p for p in problems), problems
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

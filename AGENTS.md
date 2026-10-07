@@ -357,8 +357,37 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
     un-enqueued, or sends a second merge command at a PR already in the queue. Ledger **L198**.
 
   `.auto_merge != null` confirms the enqueue took, but null does NOT prove a dequeue (it can read
-  null while queued — see below); the authoritative probe is the `enqueuePullRequest` mutation
-  ("already in the queue"). Or enqueue directly:
+  null while queued — see below).
+
+  **Probe with a read before reaching for the mutation — and note that this file and `CLAUDE.md`
+  have disagreed about which probe is authoritative.** `CLAUDE.md`'s merge-queue sections (see _"a
+  `null` `autoMergeRequest` does not mean the enqueue failed — `mergeQueueEntry` is the proof"_)
+  have always named the **`mergeQueueEntry` read** as the proof, and record it being decisive on
+  #905 and on runs 176/177. This line named the mutation. Both work; only one of them is a write.
+
+  Prefer the read. The per-PR form is in `CLAUDE.md`; the branch-level form additionally shows
+  **ordering**, which is what you want after enqueuing more than one PR:
+
+  ```bash
+  gh api graphql -f query='query{repository(owner:"FreeForCharity",name:"FFC-Cloudflare-Automation"){
+    mergeQueue(branch:"main"){entries(first:20){nodes{position state pullRequest{number}}}}}}'
+  ```
+
+  Preferring it is not stylistic: the command classifier latches after **any** write, so a mutation
+  used as a probe can cost the rest of a run's _reads_. Run 214 sent a `resolveReviewThread`
+  mutation and had the next call — a read-only `gh pr view --json headRefOid` — refused as
+  `External System Writes`.
+
+  Run 215 is the measurement for the silent case `CLAUDE.md` describes: `gh pr merge 1554 --auto`
+  and `gh pr merge 1555 --auto` each printed **nothing at all**, not even the advisory above, and
+  both PRs then read `auto_merge: null`, `mergeable_state: clean`, `merged: false` — byte-identical
+  to a refusal. The branch-level query showed them queued at positions **1 and 2**,
+  `AWAITING_CHECKS`. Silence plus a null is a **successful** enqueue; do not send a second merge
+  command on that evidence.
+
+  Keep the `enqueuePullRequest` mutation for the one case no read settles — an **empty** entry list,
+  where "never enqueued" and "already merged and dequeued" look the same. Its "already in the queue"
+  answer is also what you get when enqueuing directly:
   `gh api graphql -f query='mutation{enqueuePullRequest(input:{pullRequestId:"<node_id>"}){mergeQueueEntry{position state}}}'`
   - **Read the probe's answers apart, because some of them are failures wearing the wrong clothes —
     and do not treat the list below as closed.**

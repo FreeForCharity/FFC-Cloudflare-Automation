@@ -1159,25 +1159,33 @@ one that is obviously absent, because nothing about reading it feels like a risk
 ## Any session whose project root is not this repo runs with NONE of its hooks loaded (validated 2026-08-09 run 134; corrected 2026-09-08, #1237)
 
 `.claude/hooks/` protects a Claude Code session whose **project root is this repository**. That is
-the whole condition, and the population failing it is **not** the Conductor alone:
+the whole condition — the project root, never the job title. **Wiring is per-session state, so the
+list below is a cache with no invalidation: run the check, and believe it over this paragraph.**
 
+- the scheduled **multi-repo cloud worker** is **unwired**. It clones five FFC repos side by side
+  and runs with its project root set to their **parent**. Measured 2026-09-08 and re-measured
+  2026-10-06 by a cloud-worker session: project root `/home/user`, **no `/home/user/.claude` at
+  all**, `CLAUDE_PROJECT_DIR` unset, and the hub's `.claude/settings.json` present with all four
+  hook events and never loaded. This is the population that does the issue→PR work.
 - the scheduled **Conductor**, whose project root is its own workspace
-  (`C:\ClaudeCodeDesktop\Claude_AI_OS_Routine`), carrying a `permissions` block and **no `hooks`
-  block at all**. It `cd`s into the clone to work; that does not load the clone's hooks. So the
-  session with the most write authority in the system — the one that approves gates, merges PRs and
-  hand-delivers the public feed — runs with none of the enforcement every other agent gets.
-- the scheduled **multi-repo cloud worker**, which clones five FFC repos side by side and runs with
-  its project root set to their **parent**. Measured 2026-09-08: project root `/home/user`, **no
-  `/home/user/.claude` at all**, and the hub's `.claude/settings.json` present with all four hook
-  events and never loaded.
+  (`C:\ClaudeCodeDesktop\Claude_AI_OS_Routine`), **is wired** — and this bullet went on asserting
+  the opposite after that stopped being true. Measured twice in one Conductor run (run 212, #1554):
+  `guard_bash.py` blocked an L50 pipeline _before_ the wiring check was even reached, which is
+  enforcement **observed** rather than certified, and
+  `verify-conductor-hooks.py --workspace <the session's stated root>` returned `HOOKS: wired`,
+  exit 0. The historical reading is kept below, because it is what the triage rule is built on and
+  because a workstation config can regress without anything in this repo noticing.
 
-> **This line used to name the sandboxed agents as the protected class, and that is what expired.**
-> The cloud worker is the population that does the issue→PR work, and it is exempt for exactly the
-> Conductor's reason. So the triage rule below — "we put a hook on it" does not close a finding —
-> applies to **any** finding an unrooted session can hit, not only a Conductor-side one. The
-> Conductor's half is the harder one (its config lives on an operator workstation, in no
-> repository); the worker's half is **FFC-controlled**, because the session's project root is chosen
-> by the environment definition. Ledger **L261**.
+> **Twice now a session class named here has gone stale, and in opposite directions.** The row first
+> named the sandboxed agents as the protected class — corrected by L261, because the cloud worker
+> fails the condition for exactly the Conductor's reason — and then kept naming the Conductor as
+> unwired after it had in fact been wired. Both are one error: an enumeration of per-session state,
+> in a tracked file, with nothing to invalidate it. So the triage rule below — "we put a hook on it"
+> does not close a finding — is keyed on **whether the session you are in loads hooks, measured
+> now**, not on which name appears in a list. Where the fix lives still differs, and that part has
+> not expired: the Conductor's config is on an operator workstation, in no repository, so a
+> regression there is invisible from here; the worker's half is **FFC-controlled**, because the
+> session's project root is chosen by the environment definition. Ledger **L261**.
 
 This is not theoretical, and the demonstration is worth repeating rather than summarising. Run 134
 ran a board audit as `python3 scripts/audit-agentic-os-board.py 2>&1 | tail -25; echo "AUDIT rc=$?"`
@@ -1191,16 +1199,20 @@ Two things follow, and they are easy to collapse into one:
 
 1. **"We put a hook on it" does not close a finding for an unrooted session.** When triaging a
    lesson in step 7, a hook is the strongest tier _for a session rooted at the repo_ and no tier at
-   all for the Conductor or a multi-repo worker. If the mistake is one either can make, prose is the
-   real ceiling until that session loads hooks — so write it as prose that expects to be re-read,
-   and say in the ledger's tier column why prose is the ceiling.
-2. **Every future hook inherits this hole**, silently. For the Conductor nothing in the repo can
-   detect it, because the file that would fix it is on the operator's workstation and in no
-   repository. For the cloud worker the fix _is_ reachable — the session definition, or a
-   `/home/user/.claude/settings.json` rendered from the tracked template at clone time.
+   all for a session that is not — today, the multi-repo cloud worker. If the mistake is one such a
+   session can make, prose is the real ceiling until it loads hooks — so write it as prose that
+   expects to be re-read, and say in the ledger's tier column why prose is the ceiling. Decide that
+   by **measuring the session you are in**, not by reading the bullets above.
+2. **Every future hook inherits this hole**, silently, for whichever class is unwired at the time.
+   For the cloud worker the fix _is_ reachable — the session definition, or a
+   `/home/user/.claude/settings.json` rendered from the tracked template at clone time. For the
+   Conductor the fix shipped (#1042, below), but the file carrying it is on the operator's
+   workstation and in no repository, so this repo cannot detect a regression — only the bootstrap
+   check can, which is why it runs every run and prints in both directions.
 
 The fix is a `hooks` block in the Conductor workspace's own settings pointing at a clone's
-`.claude/hooks/`. Ledger **L218**.
+`.claude/hooks/` — shipped as a reviewable template by #1042 below, and **confirmed loaded in run
+212**. Ledger **L218**.
 
 ### The hub now ships that block, and a way to prove it loaded (#1042)
 

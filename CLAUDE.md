@@ -34,6 +34,20 @@
   `merge_group` run had reported success (722 success, 723 success, 727 skipped — a skip is a pass
   here). The merge landed on its own. Do not dequeue, re-push, or "fix" the branch on the strength
   of that state; poll `pulls/N --jq .merged` via REST and let it finish.
+- **Budget ~17 minutes from merge-group creation to merge, and do not read anything under that as a
+  stall.** The bullet above says `AWAITING_CHECKS` is not a stall; this gives it a number, so the
+  judgment call does not have to be made from feel. Measured 2026-10-07 over the last 38 successful
+  `722-ci.yml` runs: **median 16.6 min, mean 16.2, max observed 19.2.** The queue path is **not**
+  faster — `merge_group` runs mean 16.0 min against `pull_request`'s 16.2 (7 and 24 runs).
+
+  Do not reach for this file's other figure. The **"~8 minutes"** recorded further down is about
+  `python tests/workflow-logic/run_all.py` on the Conductor's **Windows host**; `722` in CI also
+  runs prettier, actionlint, PSScriptAnalyzer and the rest. Both numbers are right about their own
+  referent, and the trap is that a run waiting on the queue reaches for the one it has already read.
+  Run 215 spent attention on a merge-group `722` at 13 minutes that was dead normal. **Re-measure a
+  recorded duration rather than re-copying it** — this bullet's own figures were re-derived on a
+  larger sample than the run that first reported them, and they moved.
+
 - **Format with the CI-pinned prettier.** `722-ci.yml` checks with `npx --yes prettier@3.8.1`; plain
   `npx prettier` fetches the latest version, whose Markdown reflow differs — producing
   local-pass/CI-fail loops. Always run `npx --yes prettier@3.8.1 --write <files>`.

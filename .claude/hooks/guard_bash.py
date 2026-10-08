@@ -833,6 +833,25 @@ def _connector_segments(line):
             start = i
             continue
         if bare[i] == "&":
+            # `&` is a control operator EXCEPT inside a redirect operator:
+            # `2>&1`, `>&2`, `<&3` (preceded by `>`/`<`) and `&>`, `&>>`
+            # (followed by `>`). Splitting there tore the statement in half and
+            # lost the capture: `git branch -r 2>&1 | wc -l` segmented to
+            # ['git branch -r 2>', '1 | wc -l'], so the `| wc -l` landed in a
+            # segment that does not start with the listing and the rule went
+            # SILENT on a command that really does count it. Same for
+            # `git branch -r &> out.txt`. Both are false NEGATIVES, i.e. the
+            # direction that quietly removes the guard.
+            #
+            # The existing `2>&1` cases did not catch this: `... >all.txt 2>&1`
+            # puts the capture BEFORE the `&`, so it survives in segment one,
+            # and `... 2>&1 | head` is legitimately silent (paging, not
+            # counting). A guard's pass count only covers the shapes it ran.
+            prev = bare[i - 1] if i else ""
+            nxt = bare[i + 1] if i + 1 < n else ""
+            if prev in "><" or nxt == ">":
+                i += 1
+                continue
             parts.append(line[start:i])
             i += 1
             start = i

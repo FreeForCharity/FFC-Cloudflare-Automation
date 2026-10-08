@@ -773,6 +773,26 @@ RULES = [
          "git branch -r > all.txt && echo ok", WARN),
         ("a count in the SECOND segment still warns",
          "echo start && git branch -r | wc -l", WARN),
+        # The `&` inside a REDIRECT operator is not a connector. Splitting
+        # there tore `git branch -r 2>&1 | wc -l` into
+        # ['git branch -r 2>', '1 | wc -l'], losing the count into a segment
+        # that does not start with the listing -- a false NEGATIVE, the
+        # direction that silently removes the guard. Found by Copilot review on
+        # #1521; the `&>` form was found while confirming it.
+        #
+        # The cases above did NOT cover this: `>all.txt 2>&1` puts the capture
+        # before the `&` so it survives segment one, and `2>&1 | head` is
+        # legitimately silent (paging, not counting).
+        ("a count after 2>&1 still warns",
+         "git branch -r 2>&1 | wc -l", WARN),
+        ("…and the &> form captures stdout too",
+         "git branch -r &> all.txt", WARN),
+        ("…and >&2 is still only a redirect of a real capture",
+         "git branch -r >all.txt >&2", WARN),
+        # Both polarities: the fix must not turn a backgrounding `&` into a
+        # non-boundary, which would re-warn on the appended-command shape.
+        ("a backgrounding & is still a boundary",
+         "git branch -r & echo done > /tmp/marker2", SILENT),
         # The tier itself: a warned command must still RUN.
         ("a warned count is still allowed", "git branch -r | wc -l", ALLOW),
     ]),

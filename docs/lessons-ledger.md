@@ -103,7 +103,6 @@ block — verified to be the whole fix on that pair, 48 PASS / rc=0, nothing els
 touched.
 
 <!-- reserved-ids
-L347 open PR #1575 (a fail-open guard cannot report its own breakage)
 L348 open draft PR #1578 (an empty `gh search issues` result is not absence)
 L349 open draft PR #1578 (a measured number makes a wrong inference more persuasive)
 L350 open draft PR #1578 (a validator routing a row by one cell lets a malformed claim escape)

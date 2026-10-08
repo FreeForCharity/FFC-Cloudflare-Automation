@@ -807,6 +807,41 @@ BRANCH_COUNTED_RE = re.compile(
 )
 
 
+def _connector_segments(line):
+    """Split one statement on `&&`, `||` and a backgrounding `&`, outside quotes.
+
+    A pipe is NOT a boundary: `git branch -r | wc -l` is one command whose
+    output really is being counted, which is the whole point of the rule.
+    `&&` and `||` are, because the command after one has its own stdout --
+    `git branch -r && echo done > /tmp/marker` redirects *echo*, not the
+    listing. Attributing that `>` to the listing warned on the exact shape the
+    rule is documented to leave alone (a bare listing shown to a human with
+    something harmless appended), which is the most common way the idiom is
+    actually written. Found by Copilot review on #1521 and reproduced three
+    ways before this fix.
+
+    `_blank_quoted` preserves length, so offsets into the blanked copy index
+    the original and the returned slices keep their original text.
+    """
+    bare = _blank_quoted(line)
+    parts, start, i, n = [], 0, 0, len(bare)
+    while i < n:
+        two = bare[i:i + 2]
+        if two in ("&&", "||"):
+            parts.append(line[start:i])
+            i += 2
+            start = i
+            continue
+        if bare[i] == "&":
+            parts.append(line[start:i])
+            i += 1
+            start = i
+            continue
+        i += 1
+    parts.append(line[start:])
+    return [p for p in parts if p.strip()]
+
+
 def git_branch_remote_count_violation(cmd):
     """`git branch -r` is a local ref CACHE, not the remote's branch list.
 
@@ -849,7 +884,12 @@ def git_branch_remote_count_violation(cmd):
     whole = _blank_quoted(cmd)
     if "ls-remote" in whole or "for-each-ref" in whole:
         return None
-    for stmt in _statements(cmd):
+    # One statement can hold several commands joined by `&&`/`||`, each with its
+    # own stdout, so the counted/captured question below is asked of the segment
+    # the listing is in -- never of the whole statement (#1521 review).
+    for stmt in [
+        seg for s in _statements(cmd) for seg in _connector_segments(s)
+    ]:
         bare = _blank_quoted(stmt)
         m = GIT_BRANCH_RE.search(bare)
         if not m:

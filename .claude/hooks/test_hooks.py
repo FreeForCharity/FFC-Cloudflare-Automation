@@ -717,6 +717,24 @@ RULES = [
         # The words inside quotes are prose, not a command -- the shape that
         # makes a rule fire on its own documentation.
         ("the same words quoted are silent", "echo 'git branch -r | wc -l'", SILENT),
+        # A command after `&&`/`||`/`&` has its OWN stdout, so a redirect there
+        # is not the listing being captured. Before #1521's review these three
+        # warned -- i.e. on a bare listing with something harmless appended,
+        # the exact shape the rule is documented to leave alone, and the most
+        # common way the idiom is written.
+        ("a redirect after && belongs to that command, not the listing",
+         "git branch -r && echo done > /tmp/marker", SILENT),
+        ("…and after ||", "git branch -r || echo fail > /tmp/err", SILENT),
+        ("…and after a backgrounding &",
+         "git branch -r & echo done > /tmp/marker", SILENT),
+        # …but the narrowing must not buy those silences by going quiet on a
+        # real capture that merely sits beside a connector. Both polarities,
+        # and the second one proves the scan still reaches past the first
+        # segment rather than only examining it.
+        ("a real capture before && still warns",
+         "git branch -r > all.txt && echo ok", WARN),
+        ("a count in the SECOND segment still warns",
+         "echo start && git branch -r | wc -l", WARN),
         # The tier itself: a warned command must still RUN.
         ("a warned count is still allowed", "git branch -r | wc -l", ALLOW),
     ]),

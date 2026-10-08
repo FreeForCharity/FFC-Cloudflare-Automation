@@ -1051,27 +1051,15 @@ COLLECTION_SEGMENTS = {
 }
 
 
-def _blank_quoted(cmd):
-    """`cmd` with the CONTENTS of quoted spans replaced by spaces.
-
-    Length-preserving, so an offset into the result indexes the original
-    string. Used to ask "is this command really invoking `gh api`?" without
-    matching the same words quoted inside `echo '...'` or a heredoc payload --
-    the false-positive class that has now bitten three separate text-scanning
-    guards in this repo. The quote characters themselves are kept so argument
-    parsing can still see where a token began.
-    """
-    out = list(cmd)
-    quote = None
-    for i, ch in enumerate(cmd):
-        if quote is None:
-            if ch in "'\"":
-                quote = ch
-        elif ch == quote:
-            quote = None
-        else:
-            out[i] = " "
-    return "".join(out)
+# `_blank_quoted` lived here until round 14 and is deliberately GONE rather than
+# left unused. It blanked quoted spans without honouring backslash escapes, so
+# `\"` read as closing the span and exposed the prose after it; both of its call
+# sites (rule 8's endpoint anchor, rule 9's `--paginate` anchor) produced false
+# positives on that shape, and the second was found only by grepping for the
+# first's callers. `_strip_quoted` is the escape-aware equivalent, is also
+# length-preserving, and is what every scanner in this file now uses. Keeping a
+# dead escape-blind blanker around is an invitation to reintroduce the class, so
+# the function is removed; reach for `_strip_quoted`.
 
 
 def _gh_api_endpoint(cmd):
@@ -1081,7 +1069,17 @@ def _gh_api_endpoint(cmd):
     or a flag's value. Returns the path with any scheme/host and query string
     removed, plus the raw query, so the caller can inspect both.
     """
-    m = re.search(r"\bgh\s+api\b", _blank_quoted(cmd))
+    # The anchor search must be ESCAPE-aware, not merely quote-aware. An
+    # escape-blind scan reads the `\"` in `echo "x\" gh api /markdown"` as the
+    # END of the span, so the rest of the prose -- `gh api /markdown` included --
+    # becomes visible and rule 8 blocks a command the shell never invokes `gh`
+    # from. `_strip_quoted` honours the escape, so the span stays blanked.
+    #
+    # It is also stricter in the other direction, which is why this is not a
+    # loosening: on `gh api -f body=it\'s /markdown` the escape-blind scan takes
+    # the literal `'` as opening an unterminated span and blanks the endpoint
+    # away, while `_strip_quoted` keeps `/markdown` visible. Round 14, Copilot.
+    m = re.search(r"\bgh\s+api\b", _strip_quoted(cmd))
     if not m:
         return None, None
 
@@ -1452,7 +1450,11 @@ def main():
     #    The defect #989 describes is real, but it is "the output is not valid
     #    JSON *if you consume it as JSON*" -- which the command string alone
     #    cannot tell you.
-    bare = _blank_quoted(cmd)
+    # Escape-aware for the same reason as rule 8's anchor above: the review that
+    # found that defect named one call site, and this was the other. Measured
+    # before the fix, `echo "x\" gh api --paginate --jq '[.[] | .slug]'"` emitted
+    # this warning while its unescaped twin correctly stayed silent.
+    bare = _strip_quoted(cmd)
     if re.search(r"\bgh\s+api\b", bare) and "--paginate" in bare:
         expr = _jq_expression(cmd)
         if expr is not None and expr.lstrip().startswith("["):

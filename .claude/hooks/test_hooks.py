@@ -733,6 +733,25 @@ RULES = [
          "gh api -H \"X: /markdown\" rate_limit", ALLOW),
         ("a slashed path in a field value is not the endpoint",
          "gh api -f 'body=see /markdown for this' repos/o/r/issues", ALLOW),
+        # Round 14, Copilot. The rows above pin the escapes that would HIDE a
+        # real endpoint; this is the opposite direction, and it was live: the
+        # anchor search ran on an escape-BLIND blanker, so the `\"` here read as
+        # closing the span and exposed the prose after it. The shell sees one
+        # argument to `echo` and never invokes `gh`. BLOCKED before the fix.
+        ("an escaped quote in prose does not expose an embedded gh api",
+         'echo "x\\" gh api /markdown"', ALLOW),
+        # The discriminator for it: the same prose WITHOUT the escape was always
+        # allowed, so only a row carrying the escape can tell the two scanners
+        # apart. Without this pair the fix is untestable.
+        ("unescaped prose naming gh api stays allowed",
+         'echo "x gh api /markdown"', ALLOW),
+        # ...and the escape must not start hiding a real endpoint either, which
+        # is the direction a careless fix breaks. `_strip_quoted` is in fact
+        # STRICTER here than the blanker it replaced: the escape-blind scan took
+        # the literal `'` as opening an unterminated span and blanked the
+        # endpoint away entirely.
+        ("an escaped quote before a real endpoint still blocks",
+         "gh api -f body=it\\'s /markdown", BLOCK),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a
@@ -1044,6 +1063,15 @@ RULES = [
          "gh api --paginate --slurp repos/o/r/issues/719/comments", SILENT),
         ("gh pr list array jq is not gh api",
          "gh pr list --json number --jq '[.[]|.number]'", SILENT),
+        # Round 14. This rule's anchor shared rule 8's escape-blind blanker, so
+        # the same `\"` that exposed an endpoint there exposed `gh api` here and
+        # this advisory fired on prose. The review named only rule 8; this site
+        # was found by grepping that helper's callers, which is the whole reason
+        # the helper is now deleted rather than left unused. WARNED before the fix.
+        ("escaped quote in prose does not trigger the paginate advisory",
+         'echo "x\\" gh api --paginate --jq \'[.[] | .slug]\'"', SILENT),
+        ("unescaped prose with the same words was already silent",
+         'echo "x gh api --paginate --jq \'[.[] | .slug]\'"', SILENT),
         # The measured counter-example that decided this rule's tier: 726 reduces
         # each page to a scalar and re-joins downstream, so it is CORRECT. It still
         # warns -- an advisory tier is allowed to be noticed on correct code -- but

@@ -2030,3 +2030,48 @@ git -C "$WT" merge --no-edit refs/ffc/pr$A
 git -C "$WT" merge --no-edit refs/ffc/pr$B || git -C "$WT" diff --name-only --diff-filter=U
 ( cd "$WT" && PYTHONIOENCODING=utf-8 python .claude/hooks/test_hooks.py )   # the load-bearing step
 ```
+
+## A diff against `main` is not absence — the third member of the family (validated 2026-10-07, Conductor run 220)
+
+The two sections above establish that a clean merge is not compatibility and that a conflict is not
+incompatibility. This is the same mistake in a third place, and it is the one most likely to be made
+by a run doing routine hygiene rather than reviewing a PR.
+
+`git diff origin/main...<branch>` and `git log main..<branch>` compare **text**. So a branch whose
+work has already landed _in a different shape_ is byte-for-byte indistinguishable from a branch
+whose work was never merged at all — and the reading that the range invites is the alarming one.
+
+Measured while hunting orphan branches. `claude/sweet-hawking-i8uawy` was **1 commit ahead of
+`origin/main`** with no open PR, and its orphan commit `db3fa8d2` had been pushed **71 seconds after
+its own PR #1000 merged**. The commit message: _"a failed git command must not read as nothing
+staged (Refs #996)"_ — a fail-open fix to the **pre-commit secret scanner**, +57/-7 across
+`.githooks/scan_staged.py` and its test. `git diff origin/main...` printed the whole thing. The
+natural conclusion, and very nearly the filed one: an unlanded security fix, orphaned for 66 days.
+
+It is landed. `main` carries the same fix at `.githooks/scan_staged.py:27` (`GitFailed`) and `:79`
+(`returncode != 0`) — under the keyword `check=` where the orphan used `required=`. A rename of one
+keyword argument is all it took to make a textual comparison blind to it. #996 is closed; the branch
+is a **superseded earlier draft** of work that did land.
+
+The remedy is not a better range expression — there isn't one. It is to stop asking the range
+question:
+
+```bash
+# WRONG for "did this land?" -- answers "is this text present", which is a different question
+git diff origin/main...claude/sweet-hawking-i8uawy -- .githooks/scan_staged.py
+
+# RIGHT -- grep main for the MECHANISM the branch claims to add
+git grep -n 'class GitFailed' origin/main -- .githooks/
+git grep -n 'returncode != 0' origin/main -- .githooks/
+```
+
+Why this is prose and not a guard: the signature is **any** `git diff main...` or `git log main..`
+range read, which is legitimate in nearly every other use — a rule on it would fire constantly and
+train agents to dismiss it. The discriminator is not in the command but in what the reader concludes
+from it. Ledger **L342**.
+
+All three members of this family fail in the **flattering** direction: each makes the reader sound
+diligent while being wrong. A clean merge invites "these are compatible"; a conflict invites "these
+cannot both land"; a non-empty diff invites "this never landed". In each case the measurement is
+sound and the inference is the defect, which is why none of them produces an error, a crash or a
+non-zero exit to notice.

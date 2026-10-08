@@ -63,14 +63,6 @@ from test_dry_run_visible_in_run_name import (
 # (`Domains`, `RepoName`) and the newer ones do not.
 SCOPE_INPUT = re.compile(r"^(domains?|repos?|reponame|targets?|zones?|sites?)$", re.I)
 
-# Burn-down list, seeded with the offenders present when this guard landed.
-# Each entry is a gated workflow whose target input an approver cannot read.
-# Shrink it; never grow it. `test_the_allowlist_has_no_dead_entries` fails if an
-# entry is fixed and left here, so burning one down forces its removal.
-#
-# 120 is deliberately NOT here: it is the workflow that motivated the guard, it
-# had a live gate waiting when this was written, and a guard that exempts its
-# own worked example proves nothing.
 # Inputs that CANNOT reach `run-name`, because another guard forbids
 # interpolating them at all. Keyed (workflow, input) and deliberately tiny: this
 # is a statement that the two requirements genuinely conflict, not a place to
@@ -93,6 +85,14 @@ NON_INTERPOLABLE = {
     ("120-bulk-cutover-to-github-pages.yml", "domains"),
 }
 
+# Burn-down list, seeded with the offenders present when this guard landed.
+# Each entry is a gated workflow whose target input an approver cannot read.
+# Shrink it; never grow it. `test_the_allowlist_has_no_dead_entries` fails if an
+# entry is fixed and left here, so burning one down forces its removal.
+#
+# 120 is deliberately NOT here: it is the workflow that motivated the guard, it
+# had a live gate waiting when this was written, and a guard that exempts its
+# own worked example proves nothing.
 KNOWN_UNREADABLE_TARGETS = {
     "119-bulk-staging-cname-github-pages.yml",  # domains, target
     "301-m365-domain-preflight.yml",  # domain

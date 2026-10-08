@@ -794,6 +794,40 @@ RULES = [
         # escape there would run the span on and lose the endpoint.
         ("a backslash before a closing single quote does not extend the span",
          "gh api -f 'body=a\\' \"/markdown\"", BLOCK),
+        # Round 16, Copilot. bash allows a redirection anywhere in a simple
+        # command, so these really do call `gh api /markdown`. The reader treated
+        # `>` as an early stop and lost the endpoint after it; `<` was worse,
+        # falling through to the candidate test and returning "no endpoint". The
+        # regex fallback misses them structurally, not by luck -- its span is
+        # `[^\n|;&<>]*?`, which halts at the very `>` that moved the endpoint out
+        # of reach. All seven ALLOWED before the fix.
+        ("redirection before the endpoint, spaced",
+         "gh api > /tmp/out /markdown", BLOCK),
+        ("input redirection before the endpoint",
+         "gh api < /tmp/in /markdown", BLOCK),
+        ("fd-numbered redirection before the endpoint",
+         "gh api 2> /tmp/err /markdown", BLOCK),
+        ("redirection with a GLUED target before the endpoint",
+         "gh api >/tmp/out /markdown", BLOCK),
+        ("appending redirection before the endpoint",
+         "gh api >> /tmp/out /markdown", BLOCK),
+        ("fd duplication before the endpoint consumes no operand",
+         "gh api 2>&1 /markdown", BLOCK),
+        ("both-streams redirection before the endpoint",
+         "gh api &> /tmp/out /markdown", BLOCK),
+        # The redirect TARGET is a path and must never be read as the endpoint --
+        # the direction a fix that merely skipped the operator would break.
+        ("a redirect target is not the endpoint",
+         "gh api > /tmp/out markdown", ALLOW),
+        ("an input redirect target is not the endpoint",
+         "gh api < /tmp/in markdown", ALLOW),
+        # ...and a pipeline or a second statement must still STOP the scan, which
+        # is what the surviving `|`/`&` stop is for. `&&` must not match the
+        # redirection pattern.
+        ("a pipeline after a slash-less endpoint stays allowed",
+         "gh api markdown | tail -3", ALLOW),
+        ("a second statement's endpoint is still reached",
+         "gh api markdown && gh api /markdown", BLOCK),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a

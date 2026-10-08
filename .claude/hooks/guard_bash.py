@@ -1157,7 +1157,39 @@ def _gh_api_endpoint(cmd):
             continue
         if tok.startswith("-"):
             continue
-        if tok.startswith("|") or tok.startswith(">") or tok.startswith("&"):
+        # A REDIRECTION is not a stop and is not the endpoint -- bash allows it
+        # anywhere in a simple command, so `gh api > /tmp/out /markdown` really
+        # does call `gh api /markdown`. Treating `>` as an early stop lost the
+        # endpoint that FOLLOWED it, and `<` was worse: it fell through to the
+        # candidate test, had no slash, and returned "no endpoint" outright.
+        # Seven shapes bypassed, including `2>`, `>>`, `&>` and `2>&1`.
+        #
+        # The regex fallback could not cover for it either, and structurally
+        # rather than by accident: its span is `[^\n|;&<>]*?`, so it stops at the
+        # very `>` that moved the endpoint out of the reader's reach. Round 16,
+        # Copilot -- the fourth consecutive round whose hole needed both layers
+        # to miss at once.
+        #
+        # `(.*)`: a GLUED target (`>/tmp/out`, `2>&1`) is wholly inside this one
+        # token, so only the operator is skipped; a bare operator also consumes
+        # the token after it. `&&` does not match (no `<`/`>` after the `&`) and
+        # still falls through to the stop below, which is what keeps a second
+        # statement from being scanned as this one's endpoint.
+        redir = re.match(r"^(?:\d*|&)(?:>>|>|<<<|<<|<)(.*)$", tok)
+        if redir:
+            if not redir.group(1):
+                skip_next = True
+            continue
+        # Kept, and measured REDUNDANT rather than merely untested. Mutation
+        # review of round 16 removed this stop and nothing in the suite moved --
+        # not because no row covers it, but because a `|` or `&` token is itself
+        # slash-less, so the "no slash, stop scanning" return below terminates
+        # the loop on the operator anyway, with the identical result. A glued
+        # `|/usr/bin/x` ends the same way: the candidate starts with `|`, not `/`.
+        # No test can discriminate it, so none is claimed. It stays because
+        # stopping on an operator states the intent directly instead of relying
+        # on a side effect of the slash test.
+        if tok.startswith("|") or tok.startswith("&"):
             break
         candidate = tok.strip("'\"")
         if not candidate or "/" not in candidate.split("?")[0]:

@@ -2161,14 +2161,14 @@ def test_the_marker_guard_sees_a_duplicated_marker():
 # A leading backtick in an `Enforced by` cell swallows the prose behind it (#1567)
 # ---------------------------------------------------------------------------
 #
-# 102 of 343 rows — 30% of the ledger — opened their `Enforced by` cell with a
-# backtick that paired with a later one, so 200–340 characters of prose rendered
+# 101 of 343 rows — 29% of the ledger — opened their `Enforced by` cell with a
+# backtick that paired with a later one, so 39–691 characters of prose rendered
 # as a monospace blob mid-sentence. Copilot caught it on the single new row in
 # #1566; the row had been written by copying its neighbours, so this was never
-# 102 independent typos but a house style that was always broken, propagated by
+# 101 independent typos but a house style that was always broken, propagated by
 # imitation.
 #
-# Every one of the module's then-66 guards passed on all 102. The `doc —`
+# Every one of the module's then-66 guards passed on all 101. The `doc —`
 # prose-row contract is satisfied by the cell STARTING WITH `doc —`, and it did
 # — just inside a code span. The predicate was true for a reason unrelated to
 # what it protects, which is strictly worse than a guard that was never pointed

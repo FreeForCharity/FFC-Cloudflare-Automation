@@ -1,7 +1,8 @@
 name: '120. DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH]'
 run-name:
-  'Bulk cutover staging->apex (dry_run=${{ inputs.dry_run }}, skip_dns=${{ inputs.skip_dns }},
-  skip_cname=${{ inputs.skip_cname }})'
+  "Bulk cutover staging->apex (domains=${{ inputs.domains || 'fleet-default (13)' }},
+  legacy_apex_ip=${{ inputs.legacy_apex_ip || 'hostpapa-default' }}, dry_run=${{ inputs.dry_run }},
+  skip_dns=${{ inputs.skip_dns }}, skip_cname=${{ inputs.skip_cname }})"
 
 on:
   workflow_dispatch:

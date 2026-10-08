@@ -752,6 +752,48 @@ RULES = [
         # endpoint away entirely.
         ("an escaped quote before a real endpoint still blocks",
          "gh api -f body=it\\'s /markdown", BLOCK),
+        # Round 15, Copilot. Round 14 made the ANCHOR escape-aware; round 13's
+        # TOKENIZER was still escape-blind, so a `\"` inside a flag operand
+        # closed the span and split the words wrongly -- and with the endpoint
+        # also quoted, the regex fallback was blanked out again. Third round
+        # running where the hole needed two conditions at once. ALLOWED before.
+        ("escaped quote in a header operand then a quoted endpoint",
+         'gh api -H "Accept: a\\" b" "/markdown"', BLOCK),
+        ("escaped quote in a field operand then a quoted endpoint",
+         'gh api -f "body=a\\" b" "/markdown"', BLOCK),
+        # The three one-condition controls that all blocked before the fix, and
+        # so could not have caught it. Without these the row above pins a
+        # verdict rather than the discrimination that produces it.
+        ("same escaped operand with an UNQUOTED endpoint was already blocked",
+         'gh api -H "Accept: a\\" b" /markdown', BLOCK),
+        ("same quoted endpoint with an UNESCAPED operand was already blocked",
+         "gh api -H 'Accept: a' \"/markdown\"", BLOCK),
+        # An escaped BACKSLASH is not an escaped quote: the span really does
+        # close here, so a tokenizer that swallowed `\\` as an escape of the
+        # following `"` would read the rest of the line as quoted and lose the
+        # endpoint. This is the row that keeps the fix from over-consuming.
+        ("an escaped backslash still closes the span, so the endpoint is found",
+         'gh api -H "Accept: a\\\\" "/markdown"', BLOCK),
+        # ...and the over-block direction for the same shape: an escaped quote
+        # in an operand must not make a SLASH-LESS endpoint start blocking.
+        ("escaped operand with a slash-less endpoint stays allowed",
+         'gh api -H "Accept: a\\" b" repos/o/r', ALLOW),
+        # The escape rule has three branches and the rows above only exercised
+        # one. Mutation review caught that: disabling the UNQUOTED branch and
+        # making single quotes honour escapes both left the suite green, because
+        # rule 8's regex fallback covered for the reader. These two rows quote
+        # the endpoint, which blanks the fallback and leaves the tokenizer as the
+        # only thing that can decide -- so each branch now has to be right.
+        #
+        # Unquoted `\'` is one word to the shell. An escape-blind reader opens a
+        # span on that `'` and swallows the endpoint.
+        ("unquoted escaped quote in an operand, with a quoted endpoint",
+         "gh api -f body=a\\'b \"/markdown\"", BLOCK),
+        # ...and the opposite branch: inside SINGLE quotes bash treats `\` as a
+        # literal, so this `'` really does close. A reader that honoured the
+        # escape there would run the span on and lose the endpoint.
+        ("a backslash before a closing single quote does not extend the span",
+         "gh api -f 'body=a\\' \"/markdown\"", BLOCK),
         ("a bare newline stays a statement boundary",
          "gh api markdown\n/bin/true", ALLOW),
         # ...and the over-block direction, which the same review raised as a

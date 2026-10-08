@@ -1098,14 +1098,42 @@ def _gh_api_endpoint(cmd):
     # cover for it because the endpoint was quoted and so blanked out of the
     # text the regex reads. Both halves had to be wrong at once, which is why
     # all four neighbouring spellings blocked. Round 13, Copilot.
+    # Round 15, Copilot: quote-aware was not enough, this has to be ESCAPE-aware
+    # too, and for the third time the hole needed two conditions at once. Round
+    # 13's tokenizer closed a double-quoted span on a `\"`, so
+    # `gh api -H "Accept: a\" b" "/markdown"` split into words that put ` b` and
+    # the endpoint on the wrong side of the boundary -- and because the endpoint
+    # was also quoted, the regex fallback could not cover for it. Every
+    # one-condition spelling blocked: unescaped operand, unquoted endpoint, and
+    # an escaped BACKSLASH (where the span really does close) are all BLOCK.
+    #
+    # The rule matches `_strip_quoted`, deliberately: inside single quotes
+    # nothing is special and only `'` closes; inside double quotes and when
+    # unquoted, a backslash consumes the next character. Keeping one escape rule
+    # in this file is what stops the next round finding a fourth layer.
+    tail = cmd[m.end():]
     tokens = []
     word = ""
     quote = None
-    for ch in cmd[m.end():]:
-        if quote is not None:
+    i = 0
+    while i < len(tail):
+        ch = tail[i]
+        if quote == "'":
             word += ch
-            if ch == quote:
+            if ch == "'":
                 quote = None
+        elif quote == '"':
+            if ch == "\\" and i + 1 < len(tail):
+                word += ch + tail[i + 1]
+                i += 2
+                continue
+            word += ch
+            if ch == '"':
+                quote = None
+        elif ch == "\\" and i + 1 < len(tail):
+            word += ch + tail[i + 1]
+            i += 2
+            continue
         elif ch in "'\"":
             quote = ch
             word += ch
@@ -1115,6 +1143,7 @@ def _gh_api_endpoint(cmd):
                 word = ""
         else:
             word += ch
+        i += 1
     if word:
         tokens.append(word)
 

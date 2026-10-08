@@ -103,7 +103,6 @@ block — verified to be the whole fix on that pair, 48 PASS / rc=0, nothing els
 touched.
 
 <!-- reserved-ids
-L347 open draft PR #1575 (a fail-open guard cannot report its own breakage)
 -->
 
 ## Verification and monitoring

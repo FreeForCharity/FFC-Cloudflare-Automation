@@ -820,10 +820,10 @@ def _connector_segments(line):
     actually written. Found by Copilot review on #1521 and reproduced three
     ways before this fix.
 
-    `_blank_quoted` preserves length, so offsets into the blanked copy index
+    `_strip_quoted` preserves length, so offsets into the blanked copy index
     the original and the returned slices keep their original text.
     """
-    bare = _blank_quoted(line)
+    bare = _strip_quoted(line)
     parts, start, i, n = [], 0, 0, len(bare)
     while i < n:
         two = bare[i:i + 2]
@@ -881,7 +881,7 @@ def git_branch_remote_count_violation(cmd):
     # and compares them is doing the right thing -- that comparison is how run
     # 198 found its own wrong number -- and the precedent is rule L50, where a
     # `set -o pipefail` anywhere in the command clears it.
-    whole = _blank_quoted(cmd)
+    whole = _strip_quoted(cmd)
     if "ls-remote" in whole or "for-each-ref" in whole:
         return None
     # One statement can hold several commands joined by `&&`/`||`, each with its
@@ -890,7 +890,7 @@ def git_branch_remote_count_violation(cmd):
     for stmt in [
         seg for s in _statements(cmd) for seg in _connector_segments(s)
     ]:
-        bare = _blank_quoted(stmt)
+        bare = _strip_quoted(stmt)
         m = GIT_BRANCH_RE.search(bare)
         if not m:
             continue

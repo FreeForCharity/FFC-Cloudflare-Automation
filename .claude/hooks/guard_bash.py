@@ -1163,7 +1163,36 @@ def main():
                     "about the rest."
                 )
 
-    # 11. `git branch -r` counted or captured as if it were the remote's branch
+    # 11. Classic branch-protection read (#1518) -- WARN, do not block.
+    #
+    #     `repos/<o>/<r>/branches/<b>/protection` answers only about a CLASSIC
+    #     protection object. FFC protects branches with RULESETS, so across this
+    #     fleet the endpoint is structurally always 404 -- and its 404 body says
+    #     "Branch not protected", which reads as a finding rather than as a wrong
+    #     endpoint. Run 196 measured it on both template repos and was one
+    #     sentence from filing "neither template repo protects main" in a public
+    #     issue; both are protected, by three active rulesets each.
+    #
+    #     This is the same shape as the composed-URL trap and L240: a NEGATIVE
+    #     reading and an ABSENT reading are textually identical, so the cost is
+    #     paid by whoever believes the first one.
+    #
+    #     Advisory, because asking specifically whether a classic object exists
+    #     is a legitimate question. What must not pass unremarked is treating its
+    #     404 as "unprotected".
+    path, _query = _gh_api_endpoint(cmd)
+    if path and re.match(r"^repos/[^/]+/[^/]+/branches/[^/]+/protection(?:/.*)?$", path):
+        warn(
+            f"[#1518] `gh api {path}` reads CLASSIC branch protection only. FFC protects branches "
+            "with rulesets, so this endpoint 404s with \"Branch not protected\" even when the branch "
+            "IS protected -- a 404 here is NOT evidence that anything is unprotected.\n"
+            "  Read the rulesets instead:\n"
+            "    gh api repos/<o>/<r>/rulesets --jq '.[] | \"\\(.id) \\(.name) \\(.enforcement)\"'\n"
+            "    gh api repos/<o>/<r>/rulesets/<id> --jq '[.rules[].type]'\n"
+            "  Only a `required_status_checks` rule answers \"which checks are required\".\n"
+            "  Fine to ignore if you are deliberately asking whether a CLASSIC object exists."
+        )
+    # 12. `git branch -r` counted or captured as if it were the remote's branch
     #     list (#1520; ledger L195, sibling L224) -- WARN, do not block.
     #
     #     Full reasoning, the three measured instances and the false-positive

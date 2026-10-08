@@ -613,6 +613,44 @@ RULES = [
         ("warned list read is still allowed", "gh api repos/o/r/issues/719/comments", ALLOW),
     ]),
 
+    Rule("gh-api-classic-branch-protection", '[#1518]', WARN_TIER,
+         label='guard_bash / #1518 classic branch-protection read:', cases=[
+        ("the canonical call warns",
+         "gh api repos/o/r/branches/main/protection", WARN),
+        # The two commands run 196 actually issued, whose 404s were one sentence
+        # from being filed as "neither template repo protects main". Both repos
+        # carry three active rulesets.
+        ("run 196's Footer-Only read warns",
+         "gh api repos/FreeForCharity/FFC-IN-Footer_Only_Template/branches/main/protection", WARN),
+        ("run 196's Single-Page read warns",
+         "gh api repos/FreeForCharity/FFC-IN-FFC_Single_Page_Template/branches/main/protection", WARN),
+        # The defect is the ENDPOINT, not the branch name -- a rule keyed on
+        # `main` would miss every release branch and still read as covered.
+        ("a non-main branch warns too",
+         "gh api repos/o/r/branches/release%2F1.x/protection", WARN),
+        ("a sub-resource of it warns",
+         "gh api repos/o/r/branches/main/protection/required_status_checks", WARN),
+        ("the --jq spelling still warns",
+         "gh api repos/o/r/branches/main/protection --jq '.required_status_checks'", WARN),
+        # The CORRECT calls must never be warned at. A guard that nags at the
+        # remedy it just prescribed teaches people to ignore it.
+        ("the rulesets listing is silent", "gh api repos/o/r/rulesets", SILENT),
+        ("a single ruleset read is silent", "gh api repos/o/r/rulesets/16769005", SILENT),
+        ("org-level rulesets are silent", "gh api orgs/FreeForCharity/rulesets", SILENT),
+        # Declared overlap, not tolerated: the plural `branches` listing is a
+        # genuine unpaginated list read, so #971 fires and is right to, while
+        # this rule must stay quiet -- `protection` is not a COLLECTION_SEGMENT,
+        # which is what keeps the two rules disjoint.
+        ("the branches listing warns under #971, not this rule",
+         "gh api repos/o/r/branches", SILENT, ("[#971]",)),
+        ("a single branch read is silent", "gh api repos/o/r/branches/main", SILENT),
+        ("non-gh command with the same words is silent",
+         "echo 'repos/o/r/branches/main/protection returns 404'", SILENT),
+        # The tier itself: asking the classic question is allowed, just annotated.
+        ("warned protection read is still allowed",
+         "gh api repos/o/r/branches/main/protection", ALLOW),
+    ]),
+
     Rule("gh-api-paginate-array-jq", '[#989]', WARN_TIER, label='guard_bash / #989 paginate + array-jq:', cases=[
         ("paginate + array jq",
          "gh api --paginate repos/o/r/issues/719/comments --jq '[.[]|{body}]'", WARN),

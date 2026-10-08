@@ -1,8 +1,14 @@
 name: '120. DNS + GH Pages - Bulk Cutover staging -> Apex (FFC-EX) [CF+GH]'
+# `inputs.domains` is deliberately ABSENT from run-name. It is a free-text
+# dispatch input under a whole-file no-interpolation freeze (#1080, enforced by
+# test_120_cutover_gh_errors.py), whose only legal spelling in this file is the
+# `IN_DOMAINS:` env mapping. So the approver cannot read the domain list here by
+# design; a reviewed `dry_run=true` preview is the mechanism for that, not the
+# run title. See tests/workflow-logic/test_scope_inputs_visible_in_run_name.py.
 run-name:
-  "Bulk cutover staging->apex (domains=${{ inputs.domains || 'fleet-default (13)' }},
-  legacy_apex_ip=${{ inputs.legacy_apex_ip || 'hostpapa-default' }}, dry_run=${{ inputs.dry_run }},
-  skip_dns=${{ inputs.skip_dns }}, skip_cname=${{ inputs.skip_cname }})"
+  "Bulk cutover staging->apex (legacy_apex_ip=${{ inputs.legacy_apex_ip || 'hostpapa-default' }},
+  dry_run=${{ inputs.dry_run }}, skip_dns=${{ inputs.skip_dns }}, skip_cname=${{ inputs.skip_cname
+  }})"
 
 on:
   workflow_dispatch:

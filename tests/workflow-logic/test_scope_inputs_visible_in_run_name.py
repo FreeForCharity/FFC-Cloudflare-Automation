@@ -71,6 +71,28 @@ SCOPE_INPUT = re.compile(r"^(domains?|repos?|reponame|targets?|zones?|sites?)$",
 # 120 is deliberately NOT here: it is the workflow that motivated the guard, it
 # had a live gate waiting when this was written, and a guard that exempts its
 # own worked example proves nothing.
+# Inputs that CANNOT reach `run-name`, because another guard forbids
+# interpolating them at all. Keyed (workflow, input) and deliberately tiny: this
+# is a statement that the two requirements genuinely conflict, not a place to
+# park work.
+#
+# CI caught this the honest way. `inputs.domains` in 120 is a free-text dispatch
+# input under a whole-file no-interpolation freeze (#1080), enforced by
+# `test_120_cutover_gh_errors.py::test_the_domains_input_is_not_interpolated_anywhere_in_120`,
+# whose only legal spelling in that file is the `IN_DOMAINS:` env mapping — and
+# which additionally pins one mapping per consuming step, so even an extra legal
+# spelling fails it. A readability guard does not get to weaken an injection
+# guard, so the demand yields here.
+#
+# **The consequence is a real and unfixed operational gap, not a resolved one:**
+# an approver of a live 120 run cannot read its domain list from anywhere. The
+# mechanism for that is a reviewed `dry_run=true` preview, and on gate
+# `36847830029` the paired dry run was cancelled 93 seconds after dispatch, so
+# no preview ever existed. Tracked in #719's run-225 gate analysis.
+NON_INTERPOLABLE = {
+    ("120-bulk-cutover-to-github-pages.yml", "domains"),
+}
+
 KNOWN_UNREADABLE_TARGETS = {
     "119-bulk-staging-cname-github-pages.yml",  # domains, target
     "301-m365-domain-preflight.yml",  # domain
@@ -97,7 +119,11 @@ def unreadable_targets(workflows) -> dict[str, list[str]]:
         if not scope_inputs:
             continue
         run_name = str(doc.get("run-name") or "")
-        missing = [k for k in scope_inputs if k not in run_name]
+        missing = [
+            k
+            for k in scope_inputs
+            if k not in run_name and (path.name, k) not in NON_INTERPOLABLE
+        ]
         if missing:
             bad[path.name] = sorted(missing)
     return bad
@@ -155,16 +181,66 @@ def test_the_allowlist_has_no_dead_entries():
     )
 
 
-def test_120_is_not_exempt():
-    """The worked example stays measured.
+def test_120_is_never_blanket_exempt():
+    """The worked example stays measured for everything it CAN surface.
 
-    120 is why this guard exists. If a later edit drops `domains` from its
-    run-name, the guard above must catch it -- which it only does while 120 is
-    absent from the allowlist.
+    120 is why this guard exists, and `domains` turned out to be structurally
+    unable to reach its run-name (see NON_INTERPOLABLE). That is a carve-out for
+    one input, not for the workflow: `legacy_apex_ip` is surfaced and must stay
+    so, and any target input 120 gains later is demanded by default.
     """
     assert "120-bulk-cutover-to-github-pages.yml" not in KNOWN_UNREADABLE_TARGETS, (
-        "120 is the workflow this guard was written for; exempting it would leave "
-        "the guard with no worked example and no live subject."
+        "120 is the workflow this guard was written for; allowlisting the whole "
+        "file would leave the guard with no live subject. If one of its inputs "
+        "cannot be interpolated, carve out THAT INPUT in NON_INTERPOLABLE."
+    )
+    run_name = ""
+    for path, doc in _workflows():
+        if path.name == "120-bulk-cutover-to-github-pages.yml":
+            run_name = str(doc.get("run-name") or "")
+    assert "inputs.legacy_apex_ip" in run_name, (
+        "120's run-name must keep surfacing legacy_apex_ip -- a wrong value there "
+        "leaves the site's old apex record beside the Pages records and splits the "
+        "apex between two hosts, which is exactly the blast-radius fact an approver "
+        "needs and the one input of the two that CAN be rendered."
+    )
+
+
+def test_a_non_interpolable_input_is_not_demanded():
+    """The carve-out must actually suppress the demand, or 120 goes red again."""
+    doc = yaml.safe_load(
+        "name: fixture\n"
+        "run-name: 'Bulk thing (dry_run=${{ inputs.dry_run }})'\n"
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      domains:\n"
+        "        type: string\n"
+        "jobs:\n"
+        "  go:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    environment: github-prod\n"
+    )
+    pretend = pathlib.Path("120-bulk-cutover-to-github-pages.yml")
+    assert unreadable_targets([(pretend, doc)]) == {}
+    # ...and the carve-out is keyed on the PAIR, so the same input elsewhere is
+    # still demanded. A workflow-wide or input-wide key would silently exempt
+    # every `domains` in the repo.
+    assert unreadable_targets([(pathlib.Path("other.yml"), doc)]) == {
+        "other.yml": ["domains"]
+    }
+
+
+def test_the_carve_out_has_no_dead_entries():
+    """A freeze that is lifted must take its carve-out with it."""
+    live = set()
+    for path, doc in _workflows():
+        for k in _dispatch_inputs(doc):
+            live.add((path.name, k))
+    dead = sorted(NON_INTERPOLABLE - live)
+    assert not dead, (
+        f"{len(dead)} NON_INTERPOLABLE entr(y/ies) no longer name a declared input "
+        f"and must be deleted: {dead}"
     )
 
 

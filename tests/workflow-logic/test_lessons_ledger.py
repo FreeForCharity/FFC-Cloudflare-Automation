@@ -2043,6 +2043,299 @@ def test_a_reservation_must_name_who_holds_it():
     assert any("undeclared" in p for p in problems), problems
 
 
+# --- The append-only marker in CLAUDE.md, which no test held ----------------
+#
+# `CLAUDE.md` carries a marker reading "Everything below this line is
+# append-only on purpose", because `docs/lessons-ledger.md` cites that file by
+# `CLAUDE.md:<line>` and an insertion ABOVE the marker renumbers every one of
+# those anchors. Run 189 broke L180's citation in exactly that way, and runs
+# 216-217 each shipped a CLAUDE.md PR that had to be hand-placed against the
+# rule because nothing enforced it. #1560 then moved it for real (1795 -> 1809),
+# which this guard caught and which is why the pin reads 1809.
+#
+# The citation guard earlier in this module catches the CONSEQUENCE, but only
+# for rows carrying a quoted anchor — it is opt-in, so an un-enrolled row can
+# survive a shift by landing on another non-blank line (#1455: 45 of 53 rows
+# rested on that alone). This holds the RULE instead, which is cheaper and does
+# not depend on enrolment.
+#
+# The pin is the whole mechanism: appending BELOW the marker cannot move it, so
+# a correct change leaves this green, while any insertion above it fails with
+# the delta. If content above the marker is ever legitimately removed, updating
+# MARKER_LINE forces re-verifying the `CLAUDE.md:` citations in the same commit
+# — that coupled work is the point, not a chore the constant imposes.
+
+CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+_MARKER = "append-only on purpose"
+MARKER_LINE = 1809
+
+
+def marker_problems(text, label="CLAUDE.md", expected=MARKER_LINE):
+    problems = []
+    sites = [i for i, line in enumerate(text.splitlines(), 1) if _MARKER in line]
+    if not sites:
+        problems.append(
+            f"{label}: the append-only marker ({_MARKER!r}) is gone. It is the "
+            "only thing telling an agent that new sections go at the END of this "
+            "file, so without it every `CLAUDE.md:<line>` citation in the ledger "
+            "is one insertion away from pointing at the wrong line"
+        )
+        return problems
+    if len(sites) > 1:
+        problems.append(
+            f"{label}: the append-only marker appears on lines {sites} — it must "
+            "be unique, or 'below the marker' names more than one place and the "
+            "rule stops being checkable"
+        )
+    site = sites[0]
+    if site != expected:
+        moved = site - expected
+        where = "later" if moved > 0 else "earlier"
+        problems.append(
+            f"{label}: the append-only marker moved from line {expected} to "
+            f"{site} ({abs(moved)} line(s) {where}), so content was added or "
+            f"removed ABOVE it. Put your addition below line {site} instead — the "
+            "marker exists because the ledger cites this file by line number. If "
+            "you really did change content above it, update MARKER_LINE in "
+            "tests/workflow-logic/test_lessons_ledger.py and re-verify every "
+            "`CLAUDE.md:` citation in docs/lessons-ledger.md in the same commit"
+        )
+    return problems
+
+
+def test_the_append_only_marker_is_where_the_ledger_anchors_assume_it_is():
+    problems = marker_problems(CLAUDE_MD.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_claude_md_actually_carries_the_marker_this_guard_pins():
+    # Guards the guard (L09/L47): if the sentinel is ever reworded, the test
+    # above would report "the marker is gone" rather than going vacuous-green,
+    # but assert the real file carries it so the pin is never checked against a
+    # file that lost the rule entirely.
+    assert _MARKER in CLAUDE_MD.read_text(encoding="utf-8"), (
+        "CLAUDE.md no longer contains the append-only sentinel this guard pins"
+    )
+
+
+# The four self-tests below are what make the two above worth having (L09/L47):
+# neuter `marker_problems` and these flip red, while the real-file test stays
+# green vacuously.
+_MARKER_FIXTURE = (
+    "intro\n"
+    "section one\n"
+    "\n"
+    "> **Everything below this line is append-only on purpose.**\n"
+    "appended section\n"
+)  # the marker sits on line 4
+
+
+def test_the_marker_guard_sees_content_inserted_above_the_marker():
+    shifted = "preamble someone added\n" + _MARKER_FIXTURE
+    problems = marker_problems(shifted, label="planted.md", expected=4)
+    assert len(problems) == 1, problems
+    assert "moved from line 4 to 5" in problems[0], problems
+    assert "1 line(s) later" in problems[0], problems
+
+
+def test_the_marker_guard_leaves_an_append_below_the_marker_alone():
+    # The correct way to add to the file: everything after the marker.
+    appended = _MARKER_FIXTURE + "a brand new section\nand its body\n"
+    assert not marker_problems(appended, label="planted.md", expected=4)
+
+
+def test_the_marker_guard_sees_the_marker_deleted_outright():
+    problems = marker_problems("intro\nsection one\n", label="planted.md", expected=4)
+    assert len(problems) == 1, problems
+    assert "is gone" in problems[0], problems
+
+
+def test_the_marker_guard_sees_a_duplicated_marker():
+    doubled = _MARKER_FIXTURE + _MARKER_FIXTURE
+    problems = marker_problems(doubled, label="planted.md", expected=4)
+    assert any("must" in p and "unique" in p for p in problems), problems
+    assert any("[4, 9]" in p for p in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# A leading backtick in an `Enforced by` cell swallows the prose behind it (#1567)
+# ---------------------------------------------------------------------------
+#
+# 101 of 343 rows — 29% of the ledger — opened their `Enforced by` cell with a
+# backtick that paired with a later one, so 39–691 characters of prose rendered
+# as a monospace blob mid-sentence. Copilot caught it on the single new row in
+# #1566; the row had been written by copying its neighbours, so this was never
+# 101 independent typos but a house style that was always broken, propagated by
+# imitation.
+#
+# Every one of the module's then-66 guards passed on all 101. The `doc —`
+# prose-row contract is satisfied by the cell STARTING WITH `doc —`, and it did
+# — just inside a code span. The predicate was true for a reason unrelated to
+# what it protects, which is strictly worse than a guard that was never pointed
+# at the rows: enrolment is countable, an incidentally-true predicate is not.
+
+_OPENING_SPAN = re.compile(r"^`([^`]*)`")
+_DOC_LABEL = re.compile(r"^\s*doc\s*—")
+
+# A real tier label is `doc —`, optionally with one word of qualification. A
+# swallowed cell's opening span is a sentence fragment instead. Measured over
+# all 343 rows when #1567 was fixed: the four deliberate labels are 5 chars
+# (L200, L205, L281) and 15 (L267 — `doc — judgment.`), while the 101 swallowed
+# spans ran 39 (L126) to 691 (L269). The budget sits in that gap, and
+# `test_the_tier_label_budget_still_sits_in_the_gap_it_was_measured_in` pins
+# both sides of it, so a row that narrows the gap fails loudly here rather than
+# being silently reclassified.
+_MAX_TIER_LABEL = 24
+
+
+def swallowed_prose_problems(
+    text: str, label: str = "docs/lessons-ledger.md"
+) -> list[str]:
+    """Rows whose `Enforced by` cell opens a code span over its own prose.
+
+    Pure over `text` so the rule can be run against the pre-fix blob — which is
+    how #1567's fix demonstrated the guard fails before the content is
+    corrected. A guard landed in the same commit as its own fix, verified only
+    against the corrected tree, is unfalsifiable (L09/L47).
+    """
+    problems = []
+    for lid, cells in _rows_from_text(text):
+        if len(cells) < 3:
+            continue
+        m = _OPENING_SPAN.match(cells[2].strip())
+        if not m or not _DOC_LABEL.match(m.group(1)):
+            continue
+        span = m.group(1)
+        if len(span) <= _MAX_TIER_LABEL:
+            continue
+        problems.append(
+            f"{lid}: its `Enforced by` cell opens a code span {len(span)} "
+            f"characters long, so GitHub renders that prose as monospace "
+            f"mid-sentence — delete the backtick pair wrapping the cell and "
+            f"leave the real code tokens spanned. Swallowed text begins: "
+            f"{span[:60]!r} ({label})"
+        )
+    return problems
+
+
+def backtick_balance_problems(
+    text: str, label: str = "docs/lessons-ledger.md"
+) -> list[str]:
+    """Rows, and cells, carrying an odd number of backticks.
+
+    The row-level count is what catches L119's class, the one shape whose
+    rendering breaks past the cell boundary and corrupts the rest of the table.
+    The per-cell count is strictly stronger: a row can hold two odd cells and
+    still be even overall, which is exactly what a `|` inside a code span
+    produces — and it is what made an earlier pass of #1567's audit report 15
+    defects where there is one.
+    """
+    problems = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        m = _ROW.match(stripped)
+        if not m:
+            continue
+        lid = m.group(1)
+        if stripped.count("`") % 2:
+            problems.append(
+                f"{lid}: the row carries an odd number of backticks "
+                f"({stripped.count('`')}), so a code span runs past the end of "
+                f"its cell and garbles the rest of the table ({label})"
+            )
+            continue
+        for i, cell in enumerate(_row_cells(stripped)):
+            if cell.count("`") % 2:
+                problems.append(
+                    f"{lid}: cell {i} carries an odd number of backticks "
+                    f"({cell.count('`')}), so its code span never closes "
+                    f"({label})"
+                )
+    return problems
+
+
+def test_no_enforced_by_cell_opens_with_a_code_span_swallowing_prose():
+    problems = swallowed_prose_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_every_ledger_row_has_a_balanced_backtick_count():
+    problems = backtick_balance_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_the_ledger_still_carries_the_deliberate_short_tier_labels():
+    # Guards the guard (L09/L47). The exemption above is a length budget, so if
+    # the ledger ever stopped carrying a short `doc —` label the budget would be
+    # dead code and the two tests would pass for a reason that has nothing to do
+    # with the rule. Four rows carry one; assert at least one survives.
+    labels = [
+        len(m.group(1))
+        for _lid, cells in _rows()
+        if len(cells) >= 3
+        and (m := _OPENING_SPAN.match(cells[2].strip()))
+        and _DOC_LABEL.match(m.group(1))
+    ]
+    assert labels, (
+        "no row opens with a `doc — …` code span any more, so "
+        "_MAX_TIER_LABEL is guarding nothing — delete the exemption or "
+        "restore a label"
+    )
+    assert all(n <= _MAX_TIER_LABEL for n in labels), sorted(labels)
+
+
+def test_the_tier_label_budget_still_sits_in_the_gap_it_was_measured_in():
+    # The budget is only meaningful while the two populations stay apart. #1567
+    # measured deliberate labels at 5 and 15 characters; a future row that opens
+    # with a 30-character `doc — …` span would be indistinguishable from a
+    # swallow, and this is where that shows up rather than in a silent pass.
+    assert _MAX_TIER_LABEL > 15, (
+        "the budget must stay above the 15-character `doc — judgment.` label "
+        "(L267), or a correct row is reported as a defect"
+    )
+    assert _MAX_TIER_LABEL < 39, (
+        "the budget must stay below the shortest swallowed span measured "
+        "(39 characters, L126), or a real defect passes"
+    )
+
+
+# The four self-tests below are what make the two real-file tests worth having
+# (L09/L47): neuter either rule and these flip red, while the real-file tests
+# stay green vacuously on a corrected ledger.
+_SWALLOWED_ROW = (
+    "| L99 | a lesson | #1 | `doc — the measurement is one API call and "
+    "what cannot be enforced is the habit` |"
+)
+_LABEL_ROW = "| L99 | a lesson | #1 | `doc —` and then a real reason, at length |"
+_JUDGMENT_ROW = (
+    "| L99 | a lesson | #1 | `doc — judgment.` Not mechanically enforceable, "
+    "and here is why |"
+)
+
+
+def test_the_swallow_guard_sees_a_cell_that_opens_a_span_over_its_prose():
+    problems = swallowed_prose_problems(_SWALLOWED_ROW, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "L99" in problems[0] and "planted.md" in problems[0], problems
+
+
+def test_the_swallow_guard_leaves_the_deliberate_short_labels_alone():
+    assert not swallowed_prose_problems(_LABEL_ROW, label="planted.md")
+    assert not swallowed_prose_problems(_JUDGMENT_ROW, label="planted.md")
+
+
+def test_the_balance_guard_sees_an_unclosed_span_inside_a_row():
+    planted = "| L99 | a lesson | #1 | doc — it prescribes `git worktree add |"
+    problems = backtick_balance_problems(planted, label="planted.md")
+    assert len(problems) == 1, problems
+    assert "odd number of backticks" in problems[0], problems
+
+
+def test_the_balance_guard_leaves_a_correctly_spanned_row_alone():
+    planted = "| L99 | a lesson | #1 | doc — it prescribes `git worktree add` |"
+    assert not backtick_balance_problems(planted, label="planted.md")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

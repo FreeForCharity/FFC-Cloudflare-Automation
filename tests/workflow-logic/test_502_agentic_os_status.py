@@ -43,7 +43,9 @@ Run: python3 tests/workflow-logic/test_502_agentic_os_status.py
 from __future__ import annotations
 
 import builtins
+import contextlib
 import importlib.util
+import io
 import json
 import pathlib
 import tempfile
@@ -803,6 +805,90 @@ def main():
                 fh.read() == b'{"a": 1}\n',
                 "write_feed round-trip must be byte-exact (discriminating on Windows only)",
             )
+
+    # --- a short ?status=waiting must not be able to empty the gate panel ---
+    # Measured 2026-10-07T13:14Z on the hub (Conductor run 219):
+    # `?status=waiting&per_page=100` answered `total_count: 0` twice in a row
+    # while four runs were provably waiting (each read back individually as
+    # `status: waiting`, each with a live pending_deployments entry), and the
+    # same call with `&branch=main` returned all four. Six minutes earlier the
+    # unqualified shape had been correct, so it is transient.
+    #
+    # This is the worst shape of defect this feed can have: the generator exits
+    # 0, writes valid JSON, and publishes "no approvals outstanding" to a public
+    # page while four writes sit held. `is_repo_workflow_run` already fails open
+    # for exactly this reason ("hiding a gate ... is a worse failure for this
+    # page than showing one extra row") — but it guards the classification, and
+    # the fetch one layer up could still return [] and hide every row at once.
+    WAITING = [
+        {"id": 7001, "name": "120. Bulk Cutover", "path": ".github/workflows/120-x.yml",
+         "created_at": "2026-10-01T10:14:01Z", "html_url": "r7001"},
+        {"id": 7002, "name": "703. Sites List", "path": ".github/workflows/703-x.yml",
+         "created_at": "2026-10-05T08:28:48Z", "html_url": "r7002"},
+    ]
+
+    def _shapes(unqualified, qualified):
+        """Serve the two waiting-run query shapes different answers."""
+        seen = []
+
+        def fake(path_or_url, token, params=None, soft_fail=False):
+            url = m._build_url(path_or_url, params)
+            seen.append(url)
+            if "pending_deployments" in url:
+                rid = int(re.search(r"/runs/(\d+)/pending_deployments", url).group(1))
+                return [{"environment": {"name": "github-prod"}}], None
+            if "/actions/runs" in url:
+                rows = qualified if "branch=" in url else unqualified
+                return {"total_count": len(rows), "workflow_runs": rows}, None
+            raise AssertionError(f"unexpected url: {url}")
+
+        return fake, seen
+
+    # The measured case: the unqualified shape is empty, the qualified one is not.
+    fake, seen = _shapes([], WAITING)
+    m._request = fake
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        gates = m.collect_pending_gates(HUB, "tok")
+    check(
+        [g["run_id"] for g in gates] == [7001, 7002],
+        "a short ?status=waiting must be floored by the branch-qualified shape, "
+        f"got {[g['run_id'] for g in gates]}",
+    )
+    check(
+        any("branch=" in u for u in seen),
+        "the second query shape must actually be issued — one shape cannot floor itself",
+    )
+    check(
+        "disagreed" in err.getvalue(),
+        f"a disagreement must be reported, not silently repaired, got: {err.getvalue()!r}",
+    )
+
+    # Discrimination, not permissiveness: the union must not invent gates when
+    # both shapes genuinely agree there are none. Without this, a function that
+    # simply always returned WAITING would pass the assertion above.
+    fake, _ = _shapes([], [])
+    m._request = fake
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        check(
+            m.collect_pending_gates(HUB, "tok") == [],
+            "two shapes agreeing on zero must publish zero gates, not a phantom row",
+        )
+    check(
+        "disagreed" not in err.getvalue(),
+        "agreement must stay quiet — a warning on every run is a warning nobody reads",
+    )
+
+    # And the reverse asymmetry: whichever shape is the poisoned one varies, so
+    # a short *qualified* answer must be floored by the unqualified one too.
+    fake, _ = _shapes(WAITING, [])
+    m._request = fake
+    with contextlib.redirect_stderr(io.StringIO()):
+        check(
+            [g["run_id"] for g in m.collect_pending_gates(HUB, "tok")] == [7001, 7002],
+            "the floor must work in both directions — which shape goes short is not stable",
+        )
 
     print("test_502_agentic_os_status: all assertions passed")
     return 0

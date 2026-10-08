@@ -310,8 +310,8 @@ def malformed_doc_tier_problems(text: str) -> list[str]:
             continue
         if not reason.startswith("doc —"):
             problems.append(
-                f"{{lid}}: tier cell starts with `doc` but is not a well-formed "
-                f"`doc — <reason>` -- an em dash, not `--`: {{reason[:60]!r}}. "
+                f"{lid}: tier cell starts with `doc` but is not a well-formed "
+                f"`doc — <reason>` -- an em dash, not `--`: {reason[:60]!r}. "
                 "Left malformed, a row that also names a path is routed to the path "
                 "tier and skips the prose-reason check altogether."
             )
@@ -321,6 +321,33 @@ def malformed_doc_tier_problems(text: str) -> list[str]:
 def test_no_row_claims_the_doc_tier_with_a_malformed_marker():
     problems = malformed_doc_tier_problems(LEDGER.read_text(encoding="utf-8"))
     assert not problems, "\n".join(problems)
+
+
+def test_the_malformed_doc_tier_message_names_the_row_and_quotes_its_reason():
+    """The diagnostic must interpolate, not print its own placeholders.
+
+    #1578 shipped this message with doubled braces, so an f-string emitted the
+    literal text `{lid}` and `{reason[:60]!r}`. Every assertion in the four tests
+    added alongside it checked only whether the returned list was empty, so a
+    diagnostic that named nothing passed all of them -- the reviewer on #1578
+    caught it, not this module. An unreadable failure message is the same defect
+    this check exists to prevent, one level up: the row would be flagged and the
+    reader still could not tell which row.
+    """
+    cell = "doc -- tracked as #1577, a reason long enough to clear the length rule, `.claude/hooks/` named"
+    planted = _FIXTURE_HEADER + _cite_row("L90", "a lesson", "#1", cell)
+    problems = malformed_doc_tier_problems(planted)
+    assert problems, "malformed `doc --` marker was not reported"
+    message = problems[0]
+    assert "L90" in message, "message does not name the offending row id: %r" % message
+    assert "#1577" in message, (
+        "message does not quote the offending reason text: %r" % message
+    )
+    for placeholder in ("{lid}", "{reason["):
+        assert placeholder not in message, (
+            "message emits the literal placeholder %r instead of interpolating: %r"
+            % (placeholder, message)
+        )
 
 
 def test_the_doc_tier_marker_check_sees_the_case_that_escaped_the_prose_check():

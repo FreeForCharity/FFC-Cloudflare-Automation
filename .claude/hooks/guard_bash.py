@@ -53,24 +53,133 @@ def finish():
 
 
 def _strip_quoted(text):
-    """Blank out single/double-quoted spans, preserving length.
+    r"""Blank out single/double-quoted spans, preserving length.
 
     Used only where a *shell operator* is being looked for, so that `echo "a|b"`
     does not read as a pipeline. Never use it to look for `$?`, which most often
     appears inside double quotes (`echo "EXIT=$?"`) -- that is the case worth
     catching, not the case worth ignoring.
+
+    Backslash escapes are honoured, and that is load-bearing rather than
+    pedantry: an escape-blind scan mistakes a LITERAL quote for the start of a
+    span and blanks everything after it. `-f body=it\'s` is one unquoted word
+    to the shell, but reads here as an unterminated single quote, so every
+    operator -- and, for rule 8, the endpoint -- vanishes from the blanked
+    copy. It fails PERMISSIVELY, which is the direction that matters: the
+    caller sees a command with nothing left in it to object to.
+
+    The scanner's own rule, which is STATE-AWARE and differs from bash in one
+    direction only. Inside single quotes nothing is special and only `'`
+    closes. Outside them a backslash consumes the next character (so `\"` does
+    not close a double-quoted span), and what happens to that character
+    depends on where it is:
+
+    - inside DOUBLE quotes, both go -- the span's contents are blanked anyway,
+      and honouring the escape is only what stops `\"` ending the span early;
+    - UNQUOTED, the backslash goes (it is syntax) and the escaped character
+      survives unless it would itself read as an operator or a quote. An
+      escaped ordinary character is data the command really receives, and
+      blanking it hid a live endpoint from rule 8 -- `gh api \/markdown`
+      reaches gh as `/markdown`, measured with a shim (#1313).
+
+    This paragraph said the pair is ALWAYS blanked until 2026-09-28, which was
+    true when written and false after the state test landed three commits
+    later. Caught in review, not by a test -- nothing asserts a docstring's
+    agreement with its function, and this is the second time on this branch
+    that prose here outlived the code it described.
+
+    Where that is broader than the shell, and why it is safe: inside double
+    quotes bash escapes only backslash, `"`, `$`, backtick and newline, and
+    keeps the backslash before anything else -- measured, `"a\zb"` and
+    `"a\|b"` print `a\zb` and `a\|b` in both bash and dash. INSIDE a
+    double-quoted span this scanner still blanks the pair whatever follows,
+    and that cannot disagree with bash about the result: every character in
+    such a span is blanked anyway, and the one character whose escaping could
+    move the span's END is `"`, which bash escapes too.
+
+    UNQUOTED the two deliberately differ, and the difference is the point. The
+    backslash is syntax and always goes; the character it consumes is blanked
+    only when it would otherwise read as a shell operator or a quote. An
+    escaped ORDINARY character is data the command really receives -- measured
+    with a `gh` shim on PATH, `gh api \/markdown` reaches gh as `/markdown` --
+    so blanking it hid a live endpoint from rule 8 (#1313 review).
+
+    The state test is what keeps that from becoming an over-block: inside
+    double quotes the backslash survives into the argument, so
+    `-f body="see \/markdown"` is field data and not an endpoint.
+
+    A backslash-NEWLINE is in that set for a reason worth stating: it is not an
+    escaped operator, it is a line continuation, and the shell removes it
+    entirely. Leaving the newline in place let `gh api \` + newline +
+    `/markdown` -- which really does reach gh as `/markdown`, shim-confirmed --
+    slip past rule 8, whose span stops at a newline. Reported on #1313 round 11;
+    `main` has this hole too, so it is the one finding on this branch that is
+    not a regression of its own making.
+
+    Over the alphabet that reaches here (`a`, backslash, `"`, `'`, `|`, `;`,
+    `&`, `$`, backtick, `/`, `<`, `>`, newline) to length 5 -- 402,233 strings,
+    the two scanners agree at every operator and quote position, which is the
+    property this function exists for, and differ ONLY where the shipped one
+    reveals an escaped ordinary character.
+
+    `test_strip_quoted_matches_a_bash_accurate_scanner` pins both halves --
+    the agreement and the shape of the intended divergence -- so a later "fix"
+    toward bash has to keep them rather than trust this note.
     """
     out = list(text)
     quote = None
-    for i, ch in enumerate(text):
-        if quote:
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote == "'":
+            # Single quotes: nothing is special, not even a backslash.
+            if ch == "'":
+                quote = None
+            else:
+                out[i] = " "
+        elif quote == '"':
+            if ch == "\\" and i + 1 < n:
+                # Inside a double-quoted span every character is data and is
+                # blanked anyway; the escape is honoured only so that `\"`
+                # does not close the span early.
+                out[i] = " "
+                out[i + 1] = " "
+                i += 2
+                continue
             if ch == quote:
                 quote = None
             else:
                 out[i] = " "
+        elif ch == "\\" and i + 1 < n:
+            # UNQUOTED. The backslash itself is syntax and always goes. What
+            # it consumes is blanked only when that character would otherwise
+            # read as a shell operator or a quote delimiter -- which is the
+            # whole reason this function exists: `\|` must not look like a
+            # pipeline and `\"` must not open a span.
+            #
+            # An escaped ORDINARY character is literal data the command really
+            # receives, and blanking it hid a live endpoint. Measured with a
+            # `gh` shim on PATH rather than reasoned about: `gh api \/markdown`
+            # reaches gh as `/markdown`, so MSYS mangles it exactly as the bare
+            # form does. Reported on #1313.
+            #
+            # The state test is load-bearing and the first fix did not have it.
+            # Inside double quotes bash PRESERVES a backslash before an
+            # ordinary character, so `gh api -f body="see \/markdown"` sends a
+            # literal `\/markdown` as field data and is not an endpoint at all.
+            # Blanking only the backslash there would expose a `/` preceded by
+            # a blank and block a correct command -- the over-block direction
+            # this rule has already been fixed for once (run 161).
+            out[i] = " "
+            if text[i + 1] in "|;&<>\"'`\\\n":
+                out[i + 1] = " "
+            i += 2
+            continue
         elif ch in "'\"":
             quote = ch
             out[i] = " "
+        i += 1
     return "".join(out)
 
 
@@ -410,11 +519,263 @@ def _skip_word(text, i):
         if ch == "(":
             depth += 1
         elif ch == ")":
-            depth = max(0, depth - 1)
+            # A `)` with nothing open ENDS the word, exactly as whitespace
+            # does -- it is an operator, not text. Decrementing to zero and
+            # walking on glued it to the word instead, so the payload of
+            # `(bash -c "gh api /markdown")` came out as `"gh api /markdown")`
+            # -- first and last characters no longer a matching quote pair, so
+            # the unwrap below declined it and rule 8 saw only a blanked span.
+            # That was the one subshell form still reaching gh after round 10
+            # (#1313); `main` blocks it.
+            if depth == 0:
+                break
+            depth -= 1
         elif ch.isspace() and depth == 0:
             break
         i += 1
     return i
+
+
+SHELL_BASENAMES = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
+
+
+def _is_shell_word(word):
+    r"""True when `word` names a shell, however the invocation spells it.
+
+    A bare `bash` was the first version and it missed every path-qualified
+    spelling, which on this host is the NORMAL one: `"/c/Program Files/Git/bin/
+    bash.exe" -c ...`. Reported on #1313. So the quotes come off, the basename
+    is taken after either separator, and a `.exe` suffix is dropped before the
+    name is compared.
+
+    An escaped space needs no handling of its own: the split already breaks on
+    the backslash, so `/c/Program\ Files/.../bash.exe` yields `bash.exe` either
+    way. The first version unescaped it first, and mutation review showed the
+    line was dead -- removing it reddened nothing.
+    """
+    if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
+        word = word[1:-1]
+    base = re.split(r"[/\\]", word)[-1].lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    return base in SHELL_BASENAMES
+
+
+def _command_starts(text):
+    """Index of every word in `text` that begins OUTSIDE a quoted span.
+
+    A word begins after whitespace or after an unquoted, unescaped command
+    separator. The test that matters is quoted-ness, not position. A shell name inside a
+    quoted ARGUMENT is data -- `-f body='bash -c "gh api /markdown"'` is prose
+    about a shell and must stay allowed, which is the false-positive class this
+    branch exists to remove. A shell name anywhere in a command's own words is
+    an invocation.
+
+    This used to yield only the FIRST word of each command, and that was wrong
+    in a way `main` was not. A simple command is `[assignments] [redirections]
+    word...`, so the shell is routinely not the first word, and it need not be
+    the command at all when something execs it. Measured on #1313, all four
+    reaching gh with `/markdown` and all four blocked on `main`:
+
+        VAR=1 bash -c 'gh api /markdown'
+        A=1 B=2 bash -c 'gh api /markdown'
+        > /tmp/out bash -c 'gh api /markdown'
+        env VAR=1 bash -c 'gh api /markdown'
+
+    Skipping assignments and redirections would have fixed three of those and
+    left `env`, and then `nohup`, `timeout 5`, `stdbuf -o0` and every other
+    exec-wrapper after it -- an unbounded list, which is the shape this rule
+    has already been round-tripped on six times. Testing quoted-ness instead
+    has no list in it.
+
+    The word is read off the ORIGINAL text while the QUOTED-ness comes from the
+    blanked copy, because `_strip_quoted` blanks a quoted command name too:
+    scanning the blanked copy for the word would skip
+    `"/c/Program Files/Git/bin/bash.exe"` and then mistake its `-c` for the
+    command.
+    """
+    bare = _strip_quoted(text)
+    prev_boundary = True
+    for i, ch in enumerate(text):
+        # A word STARTS after whitespace OR after a command separator, and the
+        # separator half is not optional: `echo hi;bash -c "gh api /markdown"`
+        # has no space after the `;`, and a whitespace-only test read `;bash`
+        # as a continuation of `hi` and never offered `bash` as a start. Six
+        # separators reached gh that way -- `;` `|` `&&` `||` `(` and a bare
+        # newline -- every one of them blocked on `main` (#1313 round 10).
+        #
+        # The separator is read off `bare`, never off `text`, and that is the
+        # whole discrimination. A separator survives into `bare` only when it
+        # is unquoted AND unescaped, which is exactly when the shell treats it
+        # as syntax: `echo hi\;bash -c '...'` passes `hi;bash` as an argument
+        # and never runs a shell, and a `;` inside a `-f body=` value is prose.
+        # Both are blanked, so neither opens a word here.
+        #
+        # `<` and `>` are deliberately NOT separators. A redirection does not
+        # end a command -- `echo hi >out bash -c '...'` passes `bash -c ...`
+        # to `echo` -- so treating one as a boundary would add a false
+        # positive rather than close a bypass.
+        at_word_start = prev_boundary and ch not in " \t"
+        prev_boundary = ch in " \t" or bare[i] in ";|&()\n"
+        if not at_word_start:
+            continue
+        # Quoted-ness is read off `bare` too: inside a quoted span every
+        # character is blanked, so a word that opens there is data and is never
+        # yielded. A quoted word's own opening quote IS blanked, so `"` is
+        # allowed to start a word.
+        if bare[i] in " \t" and ch not in "'\"":
+            continue
+        yield i
+
+
+def _shell_c_payloads(cmd, depth=3):
+    """Every `-c` payload handed to a nested shell, outer quote pair removed.
+
+    A quote-aware rule reads quoted text as DATA, which is right for a jq
+    filter or a header value and wrong for `bash -c "..."`: there the quotes
+    are how the command is passed, and the inner call runs. Reported by review
+    on #1313 and reproduced before fixing -- `bash -c "gh api /markdown"` was
+    ALLOWED once rule 8's span became quote-aware, and blocks on `main`.
+
+    Blocking it is right on the merits and not only for the guard's integrity:
+    the nested shell here is MSYS bash too, so it hands `/markdown` to a native
+    `gh` across the same boundary and the endpoint is mangled identically. The
+    wrapper changes who is fooled, not whether the call works.
+
+    Any single-dash cluster CONTAINING `c` takes the next word as the payload
+    (`-c`, `-lc`, `-cx`), which is how the shell reads it; a `--long` option or
+    a bare word before it means this is not a `-c` invocation and the scan
+    stops. A LEADING `$(`/backtick is not unwrapped either -- `_skip_word`
+    keeps a substitution as one word, and its contents are not a `-c` payload.
+
+    Only the OUTER quote pair comes off each payload, and the payload is then
+    re-scanned, so `bash -c "bash -c 'gh api /markdown'"` is reached too. The
+    first draft stopped at one level and pinned that shape as an allowed
+    limitation; a limitation a reader can spell in one line is a bypass with
+    a docstring, so the scan recurses instead. `depth` bounds it because the
+    input is untrusted text, not because a real command nests three deep.
+    """
+    if depth <= 0:
+        return
+    for start in _command_starts(cmd):
+        i = _skip_word(cmd, start)
+        if not _is_shell_word(cmd[start:i]):
+            continue
+        saw_c = False
+        while i < len(cmd):
+            while i < len(cmd) and cmd[i] in " \t":
+                i += 1
+            if i >= len(cmd):
+                break
+            j = _skip_word(cmd, i)
+            word = cmd[i:j]
+            if not word:
+                break
+            if saw_c:
+                # `--` between `-c` and its operand is legal and changes
+                # nothing: measured with a `gh` shim, `bash -c -- 'gh api
+                # /markdown'` DOES run the payload. Skipping it here is what
+                # makes that a block; taking it as the payload -- the first
+                # version -- yielded a bare `--` and let the call through.
+                if word == "--":
+                    i = j
+                    continue
+                # `$'...'` / `$"..."` are quoting forms, so the `$` comes off
+                # before the pair does -- `bash -c $'gh api /markdown'` runs
+                # exactly what `bash -c 'gh api /markdown'` runs.
+                if word[:2] in ("$'", '$"'):
+                    word = word[1:]
+                if len(word) >= 2 and word[0] in "'\"" and word[-1] == word[0]:
+                    word = word[1:-1]
+                yield word
+                for nested in _shell_c_payloads(word, depth - 1):
+                    yield nested
+                break
+            # `--` BEFORE any `-c` ends the options, so what follows is the
+            # script path, not a command string: `bash -- -c '...'` asks the
+            # shell to RUN A FILE named `-c`, which is why it fails with
+            # `bash: -c: No such file or directory` and never reaches gh.
+            # Reported on #1313 and confirmed against the shim -- treating it
+            # as a payload blocked three commands that execute nothing.
+            if word == "--":
+                break
+            if not word.startswith("-"):
+                break
+            # A `--long` option is skipped rather than ending the scan:
+            # `bash --norc -c '...'` is an ordinary spelling, and treating the
+            # first `--` word as "not a -c invocation" lost it. It must not
+            # arm the payload either -- `--norc` contains a `c`.
+            if not word.startswith("--") and "c" in word[1:]:
+                saw_c = True
+            i = j
+
+
+def _substitution_sources(text, depth=3):
+    """The source text of every `$(...)` and backtick span in `text`.
+
+    Same principle as `_shell_c_payloads`, applied to the other construct whose
+    quoting does not make it data: a command substitution's contents are
+    EXECUTED, so blanking them as a quoted span hides a real command.
+
+    This restores coverage `main` had for free. `main` matched rule 8 against
+    the raw string, so `bash -c "$(printf 'gh api /markdown')"` was caught by
+    the literal text being present; making the span quote-aware removed that
+    and regressed three vectors, all confirmed with a `gh` shim to reach gh
+    with `/markdown`. Reported on #1313.
+
+    It is a LITERAL scan and is meant to be. `$(printf 'gh api /mark''down')`
+    is caught because the fragment `gh api /mark` is still there, but an
+    endpoint assembled from a variable or decoded from base64 is not, and
+    cannot be by any static reading. Both of those are allowed on `main` too,
+    so this closes the regression rather than claiming the class -- rule 8
+    exists to stop a command that will FAIL in git-bash, not to defeat someone
+    hiding one on purpose, and the boundary is recorded here so the next
+    reviewer does not read the gap as an oversight.
+    """
+    if depth <= 0:
+        return
+    i, n = 0, len(text)
+    quote = None
+    while i < n:
+        ch = text[i]
+        # SINGLE quotes neutralize a substitution; DOUBLE quotes do not, and
+        # that asymmetry is the whole point -- round 5's vectors all live in
+        # `bash -c "$(...)"`, which expands. Verified with a `gh` shim in both
+        # directions rather than read off the grammar: the four quoted/escaped
+        # forms never reach gh, the four expanding ones always do.
+        if quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            # An escaped `$` or backtick is literal. Skipping the pair is what
+            # stops `echo "\$(gh api /markdown)"` -- text bash prints rather
+            # than runs -- from being read as an executable span.
+            i += 2
+            continue
+        if ch in "'\"":
+            quote = None if quote == ch else (quote or ch)
+            i += 1
+            continue
+        if text.startswith("$(", i):
+            inner = _call_args(text, i + 2)
+            if inner is not None:
+                yield inner
+                for nested in _substitution_sources(inner, depth - 1):
+                    yield nested
+                i += 2 + len(inner) + 1
+                continue
+        elif ch == "`":
+            end = text.find("`", i + 1)
+            if end != -1:
+                inner = text[i + 1:end]
+                yield inner
+                for nested in _substitution_sources(inner, depth - 1):
+                    yield nested
+                i = end + 1
+                continue
+        i += 1
 
 
 def _strip_assignments(segment):
@@ -1084,27 +1445,15 @@ COLLECTION_SEGMENTS = {
 }
 
 
-def _blank_quoted(cmd):
-    """`cmd` with the CONTENTS of quoted spans replaced by spaces.
-
-    Length-preserving, so an offset into the result indexes the original
-    string. Used to ask "is this command really invoking `gh api`?" without
-    matching the same words quoted inside `echo '...'` or a heredoc payload --
-    the false-positive class that has now bitten three separate text-scanning
-    guards in this repo. The quote characters themselves are kept so argument
-    parsing can still see where a token began.
-    """
-    out = list(cmd)
-    quote = None
-    for i, ch in enumerate(cmd):
-        if quote is None:
-            if ch in "'\"":
-                quote = ch
-        elif ch == quote:
-            quote = None
-        else:
-            out[i] = " "
-    return "".join(out)
+# `_blank_quoted` lived here until round 14 and is deliberately GONE rather than
+# left unused. It blanked quoted spans without honouring backslash escapes, so
+# `\"` read as closing the span and exposed the prose after it; both of its call
+# sites (rule 8's endpoint anchor, rule 9's `--paginate` anchor) produced false
+# positives on that shape, and the second was found only by grepping for the
+# first's callers. `_strip_quoted` is the escape-aware equivalent, is also
+# length-preserving, and is what every scanner in this file now uses. Keeping a
+# dead escape-blind blanker around is an invitation to reintroduce the class, so
+# the function is removed; reach for `_strip_quoted`.
 
 
 def _gh_api_endpoint(cmd):
@@ -1114,7 +1463,17 @@ def _gh_api_endpoint(cmd):
     or a flag's value. Returns the path with any scheme/host and query string
     removed, plus the raw query, so the caller can inspect both.
     """
-    m = re.search(r"\bgh\s+api\b", _blank_quoted(cmd))
+    # The anchor search must be ESCAPE-aware, not merely quote-aware. An
+    # escape-blind scan reads the `\"` in `echo "x\" gh api /markdown"` as the
+    # END of the span, so the rest of the prose -- `gh api /markdown` included --
+    # becomes visible and rule 8 blocks a command the shell never invokes `gh`
+    # from. `_strip_quoted` honours the escape, so the span stays blanked.
+    #
+    # It is also stricter in the other direction, which is why this is not a
+    # loosening: on `gh api -f body=it\'s /markdown` the escape-blind scan takes
+    # the literal `'` as opening an unterminated span and blanks the endpoint
+    # away, while `_strip_quoted` keeps `/markdown` visible. Round 14, Copilot.
+    m = re.search(r"\bgh\s+api\b", _strip_quoted(cmd))
     if not m:
         return None, None
 
@@ -1123,7 +1482,65 @@ def _gh_api_endpoint(cmd):
               "--method", "-q", "--jq", "-t", "--template", "--input",
               "--cache", "--hostname"}
 
-    tokens = cmd[m.end():].split()
+    # Split on UNQUOTED whitespace only. `.split()` tore a quoted operand that
+    # contains a space into several tokens, and the damage was not that the
+    # endpoint got mis-skipped -- it was that a FRAGMENT of the operand looked
+    # like the endpoint. `gh api -H 'Accept: application/vnd.github+json'
+    # "/markdown"` split into four, the third being `application/vnd.github+json'`,
+    # which has a slash, so the loop returned THAT as the path and stopped. The
+    # real endpoint was never examined, and rule 8's regex fallback could not
+    # cover for it because the endpoint was quoted and so blanked out of the
+    # text the regex reads. Both halves had to be wrong at once, which is why
+    # all four neighbouring spellings blocked. Round 13, Copilot.
+    # Round 15, Copilot: quote-aware was not enough, this has to be ESCAPE-aware
+    # too, and for the third time the hole needed two conditions at once. Round
+    # 13's tokenizer closed a double-quoted span on a `\"`, so
+    # `gh api -H "Accept: a\" b" "/markdown"` split into words that put ` b` and
+    # the endpoint on the wrong side of the boundary -- and because the endpoint
+    # was also quoted, the regex fallback could not cover for it. Every
+    # one-condition spelling blocked: unescaped operand, unquoted endpoint, and
+    # an escaped BACKSLASH (where the span really does close) are all BLOCK.
+    #
+    # The rule matches `_strip_quoted`, deliberately: inside single quotes
+    # nothing is special and only `'` closes; inside double quotes and when
+    # unquoted, a backslash consumes the next character. Keeping one escape rule
+    # in this file is what stops the next round finding a fourth layer.
+    tail = cmd[m.end():]
+    tokens = []
+    word = ""
+    quote = None
+    i = 0
+    while i < len(tail):
+        ch = tail[i]
+        if quote == "'":
+            word += ch
+            if ch == "'":
+                quote = None
+        elif quote == '"':
+            if ch == "\\" and i + 1 < len(tail):
+                word += ch + tail[i + 1]
+                i += 2
+                continue
+            word += ch
+            if ch == '"':
+                quote = None
+        elif ch == "\\" and i + 1 < len(tail):
+            word += ch + tail[i + 1]
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch
+            word += ch
+        elif ch.isspace():
+            if word:
+                tokens.append(word)
+                word = ""
+        else:
+            word += ch
+        i += 1
+    if word:
+        tokens.append(word)
+
     skip_next = False
     for tok in tokens:
         if skip_next:
@@ -1134,16 +1551,52 @@ def _gh_api_endpoint(cmd):
             continue
         if tok.startswith("-"):
             continue
-        if tok.startswith("|") or tok.startswith(">") or tok.startswith("&"):
+        # A REDIRECTION is not a stop and is not the endpoint -- bash allows it
+        # anywhere in a simple command, so `gh api > /tmp/out /markdown` really
+        # does call `gh api /markdown`. Treating `>` as an early stop lost the
+        # endpoint that FOLLOWED it, and `<` was worse: it fell through to the
+        # candidate test, had no slash, and returned "no endpoint" outright.
+        # Seven shapes bypassed, including `2>`, `>>`, `&>` and `2>&1`.
+        #
+        # The regex fallback could not cover for it either, and structurally
+        # rather than by accident: its span is `[^\n|;&<>]*?`, so it stops at the
+        # very `>` that moved the endpoint out of the reader's reach. Round 16,
+        # Copilot -- the fourth consecutive round whose hole needed both layers
+        # to miss at once.
+        #
+        # `(.*)`: a GLUED target (`>/tmp/out`, `2>&1`) is wholly inside this one
+        # token, so only the operator is skipped; a bare operator also consumes
+        # the token after it. `&&` does not match (no `<`/`>` after the `&`) and
+        # still falls through to the stop below, which is what keeps a second
+        # statement from being scanned as this one's endpoint.
+        redir = re.match(r"^(?:\d*|&)(?:>>|>|<<<|<<|<)(.*)$", tok)
+        if redir:
+            if not redir.group(1):
+                skip_next = True
+            continue
+        # Kept, and measured REDUNDANT rather than merely untested. Mutation
+        # review of round 16 removed this stop and nothing in the suite moved --
+        # not because no row covers it, but because a `|` or `&` token is itself
+        # slash-less, so the "no slash, stop scanning" return below terminates
+        # the loop on the operator anyway, with the identical result. A glued
+        # `|/usr/bin/x` ends the same way: the candidate starts with `|`, not `/`.
+        # No test can discriminate it, so none is claimed. It stays because
+        # stopping on an operator states the intent directly instead of relying
+        # on a side effect of the slash test.
+        if tok.startswith("|") or tok.startswith("&"):
             break
         candidate = tok.strip("'\"")
         if not candidate or "/" not in candidate.split("?")[0]:
             # `gh api graphql` and `gh api rate_limit` have no slash and are not
             # collections; stop rather than scanning into the rest of the line.
             return None, None
-        path, _, query = candidate.partition("?")
+        path, sep, query = candidate.partition("?")
         path = re.sub(r"^https?://[^/]+/", "", path)
-        return path, query
+        # `None` means the argument carried no `?` at all; `""` means it ended in
+        # one. Rule 8 needs them apart (a trailing `?` suppresses MSYS path
+        # conversion just as a full query string does), and the #971 caller below
+        # reads `query or ""`, so both spellings reach it identically.
+        return path, (query if sep else None)
     return None, None
 
 
@@ -1319,7 +1772,108 @@ def main():
     #    follow a flag that takes a separate value (`gh api -X POST /repos/...`),
     #    which a flags-then-endpoint pattern misses. The `(?<=\s)` keeps it off
     #    an embedded value like `-f path=/x`, where the slash is data.
-    if re.search(r"(?<![\w-])gh\s+api\b[^\n|;&]*?(?<=\s)/[A-Za-z]", cmd):
+    #    The span stops at `<` and `>` as well as `|;&`, because a redirect
+    #    target is a shell path and never the endpoint (`> /c/tmp/x`, `2>
+    #    /tmp/err`, `< /c/q.json`); without that stop the rule blocked the
+    #    Conductor three times in run 161 on ordinary read-only calls.
+    #    All five stop characters are SHELL OPERATORS, so the span is searched
+    #    against `_strip_quoted(cmd)`: inside quotes they are jq or header
+    #    data, and a quote-blind span ends early on them and never reaches the
+    #    endpoint that follows. `gh api --jq '.a > 5' /markdown` is the shape.
+    #    Measured on the quote-blind span, that call is ALLOWED -- and so is
+    #    `--jq '... | select(...)' /repos/...`, whose `|` predates the `<>`
+    #    stop, so this closes an older bypass rather than only a new one.
+    #    Reading quoted text as data opens one hole that is not data, and it
+    #    is the OBVIOUS one: `bash -c "gh api /markdown"` executes its quotes.
+    #    So every `-c` payload is searched as its own candidate alongside the
+    #    command itself -- see `_shell_c_payloads`. Scoped to this rule, which
+    #    is the one this branch made quote-aware; the same wrapper in front of
+    #    another quote-aware rule is that rule's to answer for, not this one's.
+    #    A command substitution is searched RAW, and the asymmetry is the
+    #    point. `$(printf 'gh api /markdown')` hides the endpoint in a quoted
+    #    ARGUMENT that printf then emits for the shell to run, so a
+    #    quote-aware read of the substitution finds nothing -- which is how
+    #    this branch regressed three vectors `main` caught. Inside `$(...)`
+    #    the rule therefore keeps `main`'s literal fidelity; outside it, the
+    #    quote-aware read stands. That costs the same narrow false positive
+    #    `main` has (`$(grep 'gh api /markdown' notes.md)`) and no other: the
+    #    prose case this branch exists to unblock -- a quoted endpoint in a
+    #    `-f body=` -- contains no substitution and is untouched.
+    endpoint_re = r"(?<![\w-])gh\s+api\b[^\n|;&<>]*?(?<=\s)/[A-Za-z]"
+    candidates = [_strip_quoted(cmd)]
+    candidates += [_strip_quoted(p) for p in _shell_c_payloads(cmd)]
+    candidates += list(_substitution_sources(cmd))
+
+    # A QUOTED endpoint is invisible to the regex above and always was, on `main`
+    # too: `(?<=\s)` wants whitespace immediately before the slash and finds a
+    # quote. So `gh api "/repos/o/r/actions/runs/1/pending_deployments"` is
+    # mangled in reality and passed by both guards -- hit live in Conductor run
+    # 190, two `gh api` calls apart, with rule 8 silent for both.
+    #
+    # Read the endpoint as a WORD rather than widening the pattern:
+    # `_gh_api_endpoint` already skips flags and their operands, strips the
+    # quotes, and splits the query off, so it answers "does the argument the
+    # shell will hand to gh begin with a slash" without another lookaround.
+    #
+    # ⚠️ The `query is None` half is INHERITED, not reproduced here. Conductor
+    # run 190 measured on git-bash, by printing argv[1], that a `?` ANYWHERE in
+    # the argument suppresses the rewrite -- even a trailing one with nothing
+    # after it -- while every other leading-slash argument is rewritten. This
+    # sandbox is Linux and cannot observe MSYS path conversion at all, so that
+    # claim is taken on the only host that can make it. The condition is written
+    # so an error in it costs a false NEGATIVE and never a false positive: a
+    # `?`-bearing quoted endpoint stays allowed, exactly as on `main`.
+    # The true predicate is "leading slash AND no `?`". The lookbehind above
+    # encodes "leading slash AND unquoted", and `unquoted` is a PROXY for `will
+    # be mangled` that is wrong in both directions -- measured in both quadrants
+    # by Conductor run 190:
+    #
+    #   quoted, no query   `gh api "/…/pending_deployments"`   mangled, ALLOWED
+    #   bare, with query   `gh api /…/runs?status=waiting`     works,   BLOCKED
+    #
+    # So read the endpoint as a WORD and decide on the word. `_gh_api_endpoint`
+    # already skips flags and their operands, strips the quotes and splits off
+    # the query, which is the whole predicate without another lookaround.
+    #
+    # The regex stays as a fallback, because the word reader gives up early on a
+    # QUOTED FLAG OPERAND containing a space: `-H 'Accept: application/json'`
+    # tokenizes on whitespace, so it returns `application/json` and never reaches
+    # the endpoint. That is why the exemption below is conditional on the word it
+    # found actually being a slashed path -- an operand that merely contains a
+    # `?` must not exempt a command whose real endpoint is mangled.
+    #
+    # ⚠️ `?` suppression is measured on git-bash (run 190 printed argv[1]: a `?`
+    # anywhere, even trailing with nothing after it, leaves the argument intact;
+    # every other leading-slash argument is rewritten). This host is Linux and
+    # cannot observe MSYS path conversion, so that half is inherited. Being wrong
+    # about it costs a retry on the error the rule describes -- which is the cost
+    # this rule exists to save, not a security boundary -- while being wrong in
+    # the other direction blocks correct commands and teaches people to route
+    # around the guard (the run-161 failure in point 1 of #1313).
+    endpoint_candidates = [cmd]
+    endpoint_candidates += list(_shell_c_payloads(cmd))
+    endpoint_candidates += list(_substitution_sources(cmd))
+    # Two flags, not one value with a sentinel. The first draft of this stored
+    # `query` and tested it for None, which collided with "the reader found no
+    # slashed path" -- so a quoted endpoint with no query string, the very case
+    # this round exists to catch, fell through to the regex and was allowed. That
+    # is the same `""`-versus-`None` conflation fixed in `_gh_api_endpoint` just
+    # below, reintroduced one level up by reusing its return value as a sentinel.
+    found_slashed = False
+    has_query = False
+    for text in endpoint_candidates:
+        path, query = _gh_api_endpoint(text)
+        if path and path.startswith("/"):
+            found_slashed = True
+            has_query = query is not None
+            break
+
+    if found_slashed:
+        mangled = not has_query
+    else:
+        mangled = any(re.search(endpoint_re, text) for text in candidates)
+
+    if mangled:
         block(
             "`gh api` with a leading-slash endpoint is mangled by MSYS path conversion in "
             "this environment's git-bash -- `gh api /markdown` is rewritten to a filesystem "
@@ -1352,7 +1906,11 @@ def main():
     #    The defect #989 describes is real, but it is "the output is not valid
     #    JSON *if you consume it as JSON*" -- which the command string alone
     #    cannot tell you.
-    bare = _blank_quoted(cmd)
+    # Escape-aware for the same reason as rule 8's anchor above: the review that
+    # found that defect named one call site, and this was the other. Measured
+    # before the fix, `echo "x\" gh api --paginate --jq '[.[] | .slug]'"` emitted
+    # this warning while its unescaped twin correctly stayed silent.
+    bare = _strip_quoted(cmd)
     if re.search(r"\bgh\s+api\b", bare) and "--paginate" in bare:
         expr = _jq_expression(cmd)
         if expr is not None and expr.lstrip().startswith("["):

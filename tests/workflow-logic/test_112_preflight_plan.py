@@ -26,16 +26,18 @@ WHAT THESE TESTS PIN
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wf_extract import child_env, load_workflow, step_run
+from wf_extract import REPO_ROOT, child_env, load_workflow, step_run
 
 WORKFLOW = "112-dns-bulk-replace-a-ip.yml"
 PREFLIGHT_JOB = "preflight"
 GATED_JOB = "bulk-replace"
+CALLEE = REPO_ROOT / "scripts" / "bulk-replace-a-record-ip.ps1"
 
 PASSING = {"IN_OLD_IP": "204.44.192.77", "IN_NEW_IP": "216.222.200.253", "IN_DRY_RUN": "true"}
 
@@ -136,6 +138,43 @@ def test_plan_states_what_the_rewrite_does_and_does_not_do():
     assert "never touches a non-a record" in lowered, summary
     # The collateral an operator most needs warned about: a shared old IP.
     assert "did not intend to move" in lowered, summary
+
+
+def test_the_plan_names_the_http_verb_THE_SCRIPT_ACTUALLY_USES():
+    """The verb in the plan is read out of the callee, not hardcoded here.
+
+    Caught by review on #1586: the first version of this plan said the record
+    is "PUT to" the new IP, twice, while `bulk-replace-a-record-ip.ps1` issues
+    `Invoke-CfApi -Method PATCH`. Harmless to the run and not harmless to the
+    disclosure — in a preflight whose entire purpose is to state accurately
+    what the gated job will do, a wrong HTTP verb is the defect, and nothing in
+    the suite could see it because every other assertion was about the plan's
+    own wording.
+
+    So this derives the expectation from the script: if the callee ever moves
+    to PUT (a full replace, which would NOT preserve the fields the plan
+    promises are preserved), the plan has to move with it.
+    """
+    source = CALLEE.read_text(encoding="utf-8")
+    # The mutation call: the one with a record id in the path and a -Body.
+    verbs = re.findall(
+        r"Invoke-CfApi\s+-Method\s+([A-Z]+)\s+[^\n]*dns_records/\$\([^\n]*-Body", source
+    )
+    assert verbs, f"could not find the record-mutating Invoke-CfApi call in {CALLEE.name}"
+    assert len(set(verbs)) == 1, f"more than one verb mutates a record: {verbs}"
+    verb = verbs[0]
+    assert verb == "PATCH", (
+        f"{CALLEE.name} now mutates records with {verb}, not PATCH. That changes what the "
+        "gated job does to a record's other fields, so the preflight's 'preserving its name, "
+        "TTL and proxy setting' claim must be re-checked, not just the verb."
+    )
+
+    _, summary = run_preflight({"IN_DRY_RUN": "false"})
+    assert verb in summary, f"the plan does not name {verb}:\n{summary}"
+    # ...and must not claim a verb the script does not use.
+    for wrong in ("PUT", "POST", "DELETE"):
+        if wrong != verb:
+            assert wrong not in summary, f"the plan claims {wrong}, which the script never sends:\n{summary}"
 
 
 def test_plan_distinguishes_writing_from_not_writing():

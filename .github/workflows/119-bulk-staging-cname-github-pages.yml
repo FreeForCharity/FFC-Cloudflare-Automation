@@ -70,7 +70,10 @@ jobs:
           # 13 names is the exact gap this job exists to close (#1509 AC2). The gated job
           # is deliberately NOT fed from here — a plan that the write path depends on is no
           # longer a read-only preflight — so the two copies are pinned equal by
-          # `test_119_bulk_staging_cname_wiring.py` instead of by either body.
+          # `test_119_preflight_plan.py`'s
+          # `test_the_two_default_domain_lists_have_not_drifted` instead of by
+          # either body. (That test holds its own third copy of the 13 names, so
+          # the two bodies agreeing on a WRONG list fails it too.)
           default_domains="aprilhansen.com,armstrongacesbaseball.org,coronadonationalforestheritagesociety.org,falloutshelterecovillage.org,nj4israel.org,savewatersaveplanet.org,bucktownbullsbaseball.org,amargraves.org,bulldogztowing.com,browncanyonranch.org,instituteofforgiveness.org,americanlegionpost64.org,southamptonfriends.org"
 
           domains="${IN_DOMAINS:-}"

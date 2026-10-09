@@ -76,7 +76,7 @@ jobs:
             write_line="**dry_run=true — nothing is written.** Both accounts are enumerated and every matching A record is listed, so the log is a real preview. No record is changed."
             notice="dry_run=true: approving enumerates every zone in both Cloudflare accounts and writes NOTHING."
           else
-            write_line="**dry_run=false — this run WRITES.** Every A record found holding \`$IN_OLD_IP\`, in every zone of both accounts, is PUT to \`$IN_NEW_IP\`."
+            write_line="**dry_run=false — this run WRITES.** Every A record found holding \`$IN_OLD_IP\`, in every zone of both accounts, is PATCHed to \`$IN_NEW_IP\`."
             notice="dry_run=false: approving rewrites EVERY A record holding $IN_OLD_IP to $IN_NEW_IP, across every zone in BOTH Cloudflare accounts."
           fi
 
@@ -99,8 +99,9 @@ jobs:
             echo "whatever currently holds that address. If \`$IN_OLD_IP\` is in use by records you"
             echo "did not intend to move, they move too."
             echo ""
-            echo "Each match is updated in place (PUT), preserving the record's name, TTL and proxy"
-            echo "setting. It never creates or deletes a record, never touches a non-A record, and"
+            echo "Each match is updated in place (\`PATCH\` to the record's own id), preserving its"
+            echo "name, TTL and proxy setting — the script re-sends those three from the plan it"
+            echo "captured. It never creates or deletes a record, never touches a non-A record, and"
             echo "never changes zone settings."
             echo ""
             echo "After approval: $write_line"

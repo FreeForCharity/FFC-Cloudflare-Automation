@@ -143,6 +143,42 @@ def test_run_name_is_left_alone():
     assert "inputs.target" not in run_name, run_name
 
 
+def test_the_comment_pointing_AT_the_drift_guard_names_it_correctly():
+    """The preflight's "pinned equal by <module>'s <test>" pointer must resolve.
+
+    Caught by review on #1586: that comment named
+    `test_119_bulk_staging_cname_wiring.py`, which contains no such assertion
+    (0 occurrences of `default_domains`) -- the guard is in this module. The
+    comment exists for exactly one reason, to tell a future editor where the
+    coupling is enforced before they touch one copy of the list, so a wrong
+    filename defeats its whole purpose while reading as diligence.
+
+    Same failure class as the ledger's `path:LINE` citation guard: a pointer
+    that no longer resolves is worse than no pointer, because it sends the
+    reader somewhere plausible. Parsed out of the comment rather than compared
+    against a literal, so this cannot be satisfied by a hardcoded string.
+    """
+    body = step_run(WORKFLOW, PREFLIGHT_JOB, "approval plan")
+    pointer = re.search(
+        r"pinned equal by\s*#?\s*`(test_[A-Za-z0-9_]+\.py)`'s\s*#?\s*`(test_[A-Za-z0-9_]+)`",
+        body,
+    )
+    assert pointer, (
+        "the preflight no longer carries a parseable 'pinned equal by `<module>`'s `<test>`' "
+        "pointer. The duplicated default list is only safe because a test couples the two "
+        "copies; if the pointer is reworded, reword this matcher with it -- do not delete it."
+    )
+    module_name, test_name = pointer.group(1), pointer.group(2)
+
+    module_path = pathlib.Path(__file__).resolve().parent / module_name
+    assert module_path.exists(), f"the comment names {module_name}, which does not exist"
+    source = module_path.read_text(encoding="utf-8")
+    assert f"def {test_name}(" in source, (
+        f"the comment sends a future editor to {module_name}::{test_name}, which that module "
+        f"does not define. The drift guard is not where the comment says it is."
+    )
+
+
 def test_the_two_default_domain_lists_have_not_drifted():
     """The preflight's copy of the default list must equal the gated job's.
 

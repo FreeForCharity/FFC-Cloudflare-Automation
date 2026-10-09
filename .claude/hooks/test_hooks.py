@@ -744,6 +744,11 @@ RULES = [
         # An fd-numbered redirect moves stderr; it captures nothing. These are
         # the bare-listing case with noise suppression appended, which is the
         # most common thing to append to a listing.
+        ("bare stdout discard is not a capture", "git branch -r >/dev/null", SILENT),
+        ("stdout and stderr discard is not a capture", "git branch -r >/dev/null 2>&1", SILENT),
+        ("appending to the discard device is not a capture", "git branch -r >> /dev/null", SILENT),
+        ("a file with a discard-like prefix is still a capture", "git branch -r >/dev/null-report", WARN),
+        ("discard does not hide a counted pipe", "git branch -r >/dev/null | wc -l", WARN),
         ("2>/dev/null is noise suppression, not capture",
          "git branch -r 2>/dev/null", SILENT),
         ("2>&1 likewise", "git branch -r 2>&1 | head", SILENT),

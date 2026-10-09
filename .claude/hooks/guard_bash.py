@@ -795,6 +795,8 @@ BRANCH_REMOTE_FLAG_RE = re.compile(
 # must not satisfy the `captured` test below. Stripping them before looking for
 # `>` is what separates "capturing the listing" from "suppressing the noise".
 FD_REDIRECT_RE = re.compile(r"\d+>+&?\d*")
+# Discarding stdout makes no claim about the remote branch list.
+DISCARD_REDIRECT_RE = re.compile(r">>?\s*/dev/null(?=\s|$|[;&|])")
 # The flags that mean a DIFFERENT question -- "which of these is merged" rather
 # than "what branches are there". `docs/stale-branch-review-2026-08.md` asks
 # exactly that one, in prose, and it is the single committed occurrence of the
@@ -929,6 +931,7 @@ def git_branch_remote_count_violation(cmd):
         # longer warns. That spelling is rare, and a false positive on a common
         # idiom costs more than a false negative on an uncommon one.
         redirects_stripped = FD_REDIRECT_RE.sub(" ", bare)
+        redirects_stripped = DISCARD_REDIRECT_RE.sub(" ", redirects_stripped)
         captured = bool(re.search(r"\$\(\s*git\b|`\s*git\b", bare)) or ">" in redirects_stripped
         if not (counted or captured):
             continue

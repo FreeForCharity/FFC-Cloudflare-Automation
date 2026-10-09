@@ -2075,3 +2075,81 @@ diligent while being wrong. A clean merge invites "these are compatible"; a conf
 cannot both land"; a non-empty diff invites "this never landed". In each case the measurement is
 sound and the inference is the defect, which is why none of them produces an error, a crash or a
 non-zero exit to notice.
+
+## A pairwise landability matrix is invalidated by a push to EITHER side, and the PR side moves far more often than the base (validated 2026-10-08, cloud worker)
+
+The run-216 section above did the right thing: it pinned its figures to `main` = `6181c5b8` rather
+than stating them in the present tense, exactly as the citation-drift section demands. **It is still
+the section that nearly cost this run an unnecessary serialization**, because the part a reader acts
+on is not the table — it is the handoff sentence underneath it:
+
+> "both land, in either order; whichever goes second needs its L150/L158 line-number citations
+> recomputed against the merged file"
+
+That sentence carries no revision. A snapshot protects the **figures** from being carried forward;
+it does nothing for the **instruction** derived from them, and the instruction is what the next run
+executes. Re-measured on `main` = `3584a592`, each merge a real `git merge` in a detached worktree:
+
+| probe                                                | result                                                                                                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `main` + each of #1313/#1336/#1519/#1521/#1575 alone | all five merge clean                                                                                                                                   |
+| all ten pairs among those five                       | **all ten merge clean**                                                                                                                                |
+| `main` + all five at once                            | clean; `test_hooks.py` **476 passed, 0 failed**, `test_lessons_ledger.py` **74 PASS, 0 FAIL, rc=0**, `prettier@3.8.1 --check . --ignore-unknown` clean |
+
+Both run-216 conflicts are gone, and **neither dissolved because the base moved** — which is the
+reading that invites "just re-run it after main advances". `.claude/hooks/guard_bash.py` on `main`
+is **byte-identical** between `6181c5b8` and `3584a592` (1016 lines both), and the L150/L158 rows
+cite the same `guard_bash.py:456`/`:467`/`:451` in both. What moved was the **PRs**:
+
+- **#1313 + #1336** — somebody did the work. #1336's head commit (2026-10-08 06:24) is literally
+  `fix(ledger): resolve the #1313 L150/L158 collision and rec…`. The recorded "needs its citations
+  recomputed" was true when written and had been **discharged by the branch itself** a day later,
+  with nothing in `CLAUDE.md` to say so.
+- **#1519 + #1521** — these still both insert at `guard_bash.py:1003` inside `main()`
+  (`@@ -1003,6 @@` on both diffs) and merge clean anyway, because #1521 also adds +185 lines at
+  `:769` and the two hunks no longer present git with one ambiguous insertion point.
+
+So the rule the run-216 section needs is the one it did not state: **a pairwise matrix is a claim
+about (base, headA, headB), and a push to any of the three voids it.** The base is the slow-moving
+term and the one a reader instinctively checks; the PR heads are what actually move, and on an
+active queue they move daily. Re-probe before serializing a landing order — it is four `git merge`
+calls in a throwaway worktree.
+
+### Verify "both changes survived" with the diff's added text, never the PR title's words
+
+Checking the all-five tree for both rules, this run grepped `guard_bash.py` for
+`branches/\*/protection|protection 404|ruleset-protected` — words lifted from **#1519's title** —
+and reported `#1519 marker hits: 0` against a tree that contains #1519's rule in full. For about a
+minute the conclusion on deck was that a clean merge had silently eaten a security rule.
+
+The rule's actual strings are `"Branch not protected"` and `"neither template repo protects main"`,
+which a title never promised. So the probe was not measuring the tree, it was measuring a guess
+about the tree's vocabulary, and a zero from a wrong pattern is indistinguishable from a zero from a
+lost rule. Fourth member of the flattering-direction family above — and the worst-behaved, because
+the other three invite a wrong inference from a sound measurement, while this one invites the
+**alarming** inference from an unsound one.
+
+Take the markers from the diff, assert they are absent from the base, and present in the merge:
+
+```bash
+# the strings come from the PR's own added lines -- not from its title
+git diff origin/main...refs/ffc/pr$P -- <file> | grep -E '^\+' | grep -oE '"[^"]{18,70}"' | head
+for s in "Branch not protected" "neither template repo protects main"; do
+  printf '%-40s merged=%s main=%s pr=%s\n' "$s" \
+    "$(grep -c "$s" "$WT/<file>")" \
+    "$(git show origin/main:<file> | grep -c "$s")" \
+    "$(git show refs/ffc/pr$P:<file> | grep -c "$s")"
+done   # want merged>=1, main=0, pr>=1
+```
+
+Two corroborations that cost nothing and do not depend on guessing a string:
+`grep -oE '^def [a-z_]+' | sort | uniq -d` over the merged file (empty = no rule landed twice), and
+the suite itself — each PR ships its own tests, so a rule dropped by the merge takes its tests down
+with it. **476/0 is the claim that a marker grep only decorates.**
+
+⚠️ **Do not reach for net-line arithmetic as the corroboration.** Summing each PR's `+N` against
+`main` predicted 2774 lines for the five-way merge and the actual file is **2186**. Nothing is
+wrong: #1336 is very nearly a superset of #1313 (17 lines unique to #1313, 329 unique to #1336,
+consistent with its "supersedes" title), so the sum double-counts everything they share. Overlapping
+PRs make the arithmetic disagree by construction, and the 588-line gap reads exactly like content
+lost in a merge.

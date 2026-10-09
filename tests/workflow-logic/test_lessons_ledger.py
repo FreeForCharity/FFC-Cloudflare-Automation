@@ -275,6 +275,104 @@ def test_prose_only_rows_say_why_prose_is_the_ceiling():
                 problems.append(f"{lid}: `doc —` with no real reason given")
     assert not problems, "\n".join(problems)
 
+# `doc` as a WHOLE WORD -- `docs/lessons-ledger.md` begins with `doc` and is a path,
+# not an attempt at the prose tier. An earlier draft of this check matched it and
+# reported four false positives against a clean ledger, which is the reason the
+# lookahead excludes `/` as well as word characters.
+_ATTEMPTS_DOC_TIER = re.compile(r"^doc(?![\w/])", re.IGNORECASE)
+
+
+def malformed_doc_tier_problems(text: str) -> list[str]:
+    """Rows whose tier cell tries to be `doc — ...` and gets the marker wrong.
+
+    `_claimed_paths` treats any backticked token holding a slash as an enforcement
+    CLAIM, so a row is routed to the path tier the moment its cell names a path
+    anywhere -- and `test_prose_only_rows_say_why_prose_is_the_ceiling` then skips
+    that row entirely. So a cell reading `doc -- <reason>` with no path is correctly
+    refused, while the SAME malformed cell that happens to mention a path ships, and
+    the row then reads as enforced by a guard which does not cover it. Whether a
+    malformed tier is caught depends on an unrelated property of the reason's
+    wording, and the failure direction is a false claim of enforcement -- this
+    document's own failure mode, one level up, which is what L43 and the
+    enforcement-existence check already exist to prevent.
+
+    Measured when this check was added: 187 rows attempt the doc tier and 0 were
+    malformed, so it is clean on the known-good population rather than a check whose
+    first act is to flag the tree it ships on. The row that motivated it (L348,
+    written `doc --` beside a backticked `.claude/hooks/`) is caught only here.
+    """
+    problems: list[str] = []
+    for lid, cells in _rows_from_text(text):
+        if len(cells) < 3:
+            continue
+        reason = cells[2].strip("`").strip()
+        if not _ATTEMPTS_DOC_TIER.match(reason):
+            continue
+        if not reason.startswith("doc —"):
+            problems.append(
+                f"{lid}: tier cell starts with `doc` but is not a well-formed "
+                f"`doc — <reason>` -- an em dash, not `--`: {reason[:60]!r}. "
+                "Left malformed, a row that also names a path is routed to the path "
+                "tier and skips the prose-reason check altogether."
+            )
+    return problems
+
+
+def test_no_row_claims_the_doc_tier_with_a_malformed_marker():
+    problems = malformed_doc_tier_problems(LEDGER.read_text(encoding="utf-8"))
+    assert not problems, "\n".join(problems)
+
+
+def test_the_malformed_doc_tier_message_names_the_row_and_quotes_its_reason():
+    """The diagnostic must interpolate, not print its own placeholders.
+
+    #1578 shipped this message with doubled braces, so an f-string emitted the
+    literal text `{lid}` and `{reason[:60]!r}`. Every assertion in the four tests
+    added alongside it checked only whether the returned list was empty, so a
+    diagnostic that named nothing passed all of them -- the reviewer on #1578
+    caught it, not this module. An unreadable failure message is the same defect
+    this check exists to prevent, one level up: the row would be flagged and the
+    reader still could not tell which row.
+    """
+    cell = "doc -- tracked as #1577, a reason long enough to clear the length rule, `.claude/hooks/` named"
+    planted = _FIXTURE_HEADER + _cite_row("L90", "a lesson", "#1", cell)
+    problems = malformed_doc_tier_problems(planted)
+    assert problems, "malformed `doc --` marker was not reported"
+    message = problems[0]
+    assert "L90" in message, "message does not name the offending row id: %r" % message
+    assert "#1577" in message, (
+        "message does not quote the offending reason text: %r" % message
+    )
+    for placeholder in ("{lid}", "{reason["):
+        assert placeholder not in message, (
+            "message emits the literal placeholder %r instead of interpolating: %r"
+            % (placeholder, message)
+        )
+
+
+def test_the_doc_tier_marker_check_sees_the_case_that_escaped_the_prose_check():
+    """The exact shape that motivated this check, and proof the old one misses it."""
+    cell = "doc -- tracked as #1577, a reason long enough to clear the length rule, `.claude/hooks/` named"
+    planted = _FIXTURE_HEADER + _cite_row("L90", "a lesson", "#1", cell)
+    assert malformed_doc_tier_problems(planted), "malformed `doc --` marker was not reported"
+    # Why the existing rule cannot see it: the backticked path makes the row look
+    # path-enforced, so the prose-reason test skips it.
+    assert _claimed_paths(cell) == [".claude/hooks/"]
+
+
+def test_the_doc_tier_marker_check_leaves_a_well_formed_prose_row_alone():
+    cell = "doc — the error is in the inference, so no rule on the command text could see it"
+    planted = _FIXTURE_HEADER + _cite_row("L90", "a lesson", "#1", cell)
+    assert not malformed_doc_tier_problems(planted)
+
+
+def test_a_docs_path_tier_is_not_mistaken_for_an_attempt_at_the_doc_tier():
+    """`docs/...` is a path whose first three letters are `doc`; it must not be flagged."""
+    cell = "`docs/lessons-ledger.md` — the ceiling this row records"
+    planted = _FIXTURE_HEADER + _cite_row("L90", "a lesson", "#1", cell)
+    assert not malformed_doc_tier_problems(planted)
+
+
 
 # ---------------------------------------------------------------------------
 # Source citations — the path is checked, the LINE never was (#1095)

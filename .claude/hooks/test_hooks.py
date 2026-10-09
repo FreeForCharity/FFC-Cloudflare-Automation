@@ -1437,6 +1437,47 @@ RULES = [
          "'query Board($endCursor:String){organization(login:\"x\"){"
          "projectV2(number:9){items(first:100,after:$endCursor){"
          "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", ALLOW),
+        # The three trigger tokens have to land in the SAME shell segment. Scanned
+        # over the whole command they fire on a command carrying no GraphQL query
+        # at all, and the one that supplies the `graphql` token is the budget read
+        # AGENTS.md requires every run -- so batching it with any REST --paginate
+        # sweep was refused, under a message about a query that does not exist.
+        # Measured on conductor run 230; this is the case that motivated the fix.
+        ("REST paginate beside a graphql budget read allowed",
+         "gh api rate_limit --jq '.resources.graphql.remaining' ; "
+         "gh api 'repos/o/r/issues/719/comments?per_page=100' --paginate "
+         "--jq '.[].created_at'", ALLOW),
+        # Per-segment scanning must not become an escape hatch: a real offender in
+        # the SECOND statement is still the command this rule exists to stop.
+        ("offender in the second statement still blocks",
+         "gh api rate_limit --jq '.resources.core.remaining' ; "
+         "gh api graphql --paginate -f query='query($cursor:String){viewer{login}}'", BLOCK),
+        # Statement splitting is line-based, so a command written across backslash
+        # continuations is joined first. Without that join the trigger tokens and
+        # the declaration land in different segments and a CORRECT query is
+        # refused -- a false positive introduced by the fix for the one above.
+        ("continuation-split query declaring $endCursor allowed",
+         "gh api graphql --paginate \\\n"
+         "  -f query='query($endCursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$endCursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", ALLOW),
+        # ...and the join must not let a misnamed cursor through on the same shape.
+        ("continuation-split query with $cursor blocks",
+         "gh api graphql --paginate \\\n"
+         "  -f query='query($cursor:String){organization(login:\"x\"){"
+         "projectV2(number:9){items(first:100,after:$cursor){"
+         "pageInfo{hasNextPage endCursor} nodes{id}}}}}'", BLOCK),
+        # Segmentation is quote-aware. A `;` inside a quoted ARGUMENT is not a
+        # statement boundary, and the position matters: it has to fall between
+        # `--paginate` and the declaration for the case to discriminate. A naive
+        # `cmd.split(";")` tears the declaration off the trigger here and blocks a
+        # correct command -- with the `;` inside the query instead, the
+        # declaration rides along in the first piece and the case passes under a
+        # naive splitter too, proving nothing. Measured both ways on run 230.
+        ("a quoted semicolon before the query is not a boundary",
+         "gh api graphql --paginate -f q='label:a;b' -f query="
+         "'query($endCursor:String){search(query:$q,type:ISSUE,"
+         "first:100,after:$endCursor){pageInfo{hasNextPage endCursor}}}'", ALLOW),
     ]),
 
     Rule("gh-api-unpaginated-list", '[#971]', WARN_TIER, label='guard_bash / #971 unpaginated list read:', cases=[

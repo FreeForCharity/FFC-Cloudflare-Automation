@@ -209,6 +209,21 @@ def _strip_single_quoted(text):
     return "".join(out)
 
 
+def _join_continuations(cmd):
+    """Collapse backslash-newline continuations into one logical line.
+
+    Statement splitting is line-based (`_statements` walks `splitlines()`), so a
+    single command written across continuation lines is otherwise torn in half.
+    For a per-segment rule that is not merely imprecise, it is wrong in the
+    BLOCKING direction: `gh api graphql --paginate \\` on one line and
+    `-f query='query($endCursor:String){...}'` on the next would put the trigger
+    tokens and the declaration the rule looks for into different segments, and a
+    correctly-written query would be refused. The shell joins these before word
+    splitting; so does this.
+    """
+    return re.sub(r"\\\r?\n", " ", cmd)
+
+
 def _split_statements(line):
     """Split one line on TOP-LEVEL `;` separators.
 
@@ -1703,13 +1718,32 @@ def main():
     #    the account until the hourly reset. This is a broken command, not merely
     #    a wasteful one: it can never return page 2.
     #    See AGENTS.md "GitHub API rate budget".
-    if re.search(r"\bgh\s+api\b", low) and "graphql" in low and "--paginate" in low:
+    #
+    #    The three trigger tokens must occur in the SAME shell segment. Scanned
+    #    over the whole command they also fire on a command that contains no
+    #    GraphQL query at all: a REST `--paginate` sweep in one statement and the
+    #    word `graphql` in another. The budget read AGENTS.md requires every run
+    #    --- `gh api rate_limit --jq '.resources.graphql.remaining'` --- supplies
+    #    that word, so batching it with any REST `--paginate` call was refused
+    #    under a message asserting the command's query declares no $endCursor,
+    #    when there is no query to declare one. Measured on conductor run 230.
+    #    Segmentation is quote-aware, so a `;` inside a query string is not a
+    #    boundary, and `_join_continuations` runs first so a query spread over
+    #    continuation lines stays one segment.
+    for segment in _echo_segments(_join_continuations(cmd)):
+        low_seg = segment.lower()
+        if not (
+            re.search(r"\bgh\s+api\b", low_seg)
+            and "graphql" in low_seg
+            and "--paginate" in low_seg
+        ):
+            continue
         # The name must match EXACTLY, so a plain substring test is not enough:
         # `$endCursorX` and `$endCursor_2` contain `$endcursor` but are different
         # GraphQL variables, and gh substitutes into neither -- the precise
         # silent-infinite-loop this rule exists to catch. A GraphQL variable name
         # is [_A-Za-z][_0-9A-Za-z]*, so the exact name is the one not followed by
-        # another name character. `low` is already lowercased.
+        # another name character. `low_seg` is already lowercased.
         #
         # It must also be declared IN THE OPERATION'S VARIABLE LIST, not merely
         # present somewhere on the command line. Scanning the whole command lets
@@ -1720,7 +1754,7 @@ def main():
         # declaration is the only place the name counts. The optional name between
         # `query` and `(` covers the named form `query Foo($endCursor:String)`.
         declares_cursor = re.search(
-            r"query\s*(?:[a-z_][0-9a-z_]*\s*)?\([^)]*\$endcursor(?![0-9a-z_])", low
+            r"query\s*(?:[a-z_][0-9a-z_]*\s*)?\([^)]*\$endcursor(?![0-9a-z_])", low_seg
         )
         if not declares_cursor:
             block(

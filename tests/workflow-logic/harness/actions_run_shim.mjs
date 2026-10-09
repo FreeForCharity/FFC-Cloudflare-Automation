@@ -17,10 +17,15 @@
 //                      returned (paginated, 100/page) by listWorkflowRunsForRepo
 //   TEST_CANCEL_FAIL_IDS  comma-separated run ids whose cancel call throws (409)
 //   TEST_COMMENT_FAILS    '1' to make createComment throw (503)
+//   TEST_UNQUALIFIED_RETURNS_EMPTY '1' to serve [] to any list call WITHOUT a
+//                      `branch` argument, while branch-qualified calls still see
+//                      the fixture — the L341 defect, where `?status=waiting`
+//                      under-reports to zero and adding `branch` returns the truth
+
 //   plus whatever env the step itself reads (MAX_AGE_DAYS, WARN_DAYS, DRY_RUN, …)
 //
 // Emits one JSON result line:
-//   { failed, threw, notices, logs, listCalls, cancelAttempts, cancelledIds,
+//   { failed, threw, notices, warnings, logs, listCalls, cancelAttempts, cancelledIds,
 //     summaryText, comments }
 
 import { readFileSync } from 'node:fs';
@@ -38,6 +43,9 @@ const commentFails = process.env.TEST_COMMENT_FAILS === '1';
 
 const PER_PAGE = 100;
 const notices = [];
+// Captured rather than discarded: a no-op stub makes it impossible for any
+// test to assert that a step warned, which is the only signal some steps emit.
+const warnings = [];
 const logs = [];
 const listCalls = [];
 const cancelAttempts = [];
@@ -68,7 +76,7 @@ const core = {
     failed = String(m);
   },
   notice: (m) => notices.push(String(m)),
-  warning: () => {},
+  warning: (m) => warnings.push(String(m)),
   info: () => {},
   error: () => {},
   debug: () => {},
@@ -79,14 +87,28 @@ const github = {
   rest: {
     actions: {
       listWorkflowRunsForRepo: async (args) => {
-        listCalls.push({ status: args.status, per_page: args.per_page, page: args.page });
+        listCalls.push({
+          status: args.status,
+          per_page: args.per_page,
+          page: args.page,
+          // Recorded so a test can assert the caller issued the redundant
+          // branch-qualified shape as well as the unqualified one (L341).
+          branch: args.branch,
+        });
+        // Which fixture this shape is served depends on whether it carries a
+        // `branch`, so a test can reproduce the L341 defect: the unqualified
+        // shape under-reporting (down to an empty list) while the
+        // branch-qualified one returns the truth. Unset env = both shapes see
+        // the same `runs`, which is every pre-existing test's behaviour.
+        const unqualifiedEmpty = process.env.TEST_UNQUALIFIED_RETURNS_EMPTY === '1' && !args.branch;
+        const source = unqualifiedEmpty ? [] : runs;
         // Honor the caller's requested page size (fall back to the API default)
         // so pagination tests stay faithful if the script changes per_page.
         const perPage = Number(args.per_page) || PER_PAGE;
         const page = args.page || 1;
         const start = (page - 1) * perPage;
-        const slice = runs.slice(start, start + perPage);
-        return { data: { total_count: runs.length, workflow_runs: slice } };
+        const slice = source.slice(start, start + perPage);
+        return { data: { total_count: source.length, workflow_runs: slice } };
       },
       cancelWorkflowRun: async (args) => {
         cancelAttempts.push(args.run_id);
@@ -133,6 +155,7 @@ console.log(
     failed,
     threw,
     notices,
+    warnings,
     logs,
     listCalls,
     cancelAttempts,

@@ -110,9 +110,12 @@ def _run(
     warn_days=None,
     cancel_fail_ids=None,
     comment_fails=False,
+    unqualified_returns_empty=False,
 ):
     script = step_github_script(WORKFLOW, JOB, STEP)
     env = child_env(pathlib.Path(NODE).parent)
+    if unqualified_returns_empty:
+        env["TEST_UNQUALIFIED_RETURNS_EMPTY"] = "1"
     if dry_run is not None:
         env["DRY_RUN"] = dry_run
     if max_age_days is not None:
@@ -228,10 +231,81 @@ def test_pagination_fetches_every_page():
     runs = [_run_obj(i, STALE_TS) for i in range(101)]  # 100 -> page2 (1 more)
     r = _run(runs, dry_run="false")
     assert r["threw"] is None, r
-    pages = [c["page"] for c in r["listCalls"]]
-    assert pages == [1, 2], r  # stopped after the short second page
+    # Each of the two redundant query shapes paginates independently and stops
+    # after its own short page, so the page sequence repeats per shape.
+    assert [c["page"] for c in r["listCalls"]] == [1, 2, 1, 2], r
+    # 101 runs, not 202: the shapes are unioned by run id, so a run returned by
+    # both is cancelled exactly once.
     assert len(r["cancelledIds"]) == 101, r
+    assert sorted(r["cancelledIds"]) == sorted(range(101)), r
     assert all(c["status"] == "waiting" for c in r["listCalls"]), r
+
+
+# --- the two redundant query shapes (L341) ----------------------------------
+#
+# `?status=waiting` can answer `total_count: 0` while runs are provably waiting.
+# For a janitor that zero is indistinguishable from a clean queue: it posts
+# nothing, cancels nothing and exits green, so the warning a human relies on to
+# answer a gate before it is reaped never arrives.
+
+
+def test_both_query_shapes_are_issued():
+    r = _run([_run_obj(1, STALE_TS)], dry_run="false")
+    assert r["threw"] is None, r
+    branches = sorted(str(c.get("branch")) for c in r["listCalls"])
+    # exactly one unqualified shape and one pinned to the default branch
+    assert branches == ["None", "main"], r
+
+
+def test_a_short_unqualified_shape_does_not_hide_a_stale_run():
+    # The L341 regression: the unqualified shape returns [] while the
+    # branch-qualified one returns the truth. The union must still reap.
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert r["cancelledIds"] == [1], r
+
+
+def test_a_short_unqualified_shape_does_not_hide_a_warning():
+    # Same defect one bucket over, and the more costly one: a run inside the
+    # warning window is the whole point of the pre-reap notice.
+    r = _run(
+        [_run_obj(7, _ago(5.5))],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    assert r["cancelledIds"] == [], r  # not stale yet
+    assert r["comments"], r  # but it IS warned about
+    assert "7" in " ".join(str(c) for c in r["comments"]), r
+
+
+def test_disagreeing_shapes_are_reported_not_silently_repaired():
+    # The union repairs the count; the discrepancy still has to be visible, or
+    # the next person diagnosing a short read cannot tell the defect is live.
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "disagreed" in blob, r
+    assert "L341" in blob, r
+
+
+def test_agreeing_shapes_warn_about_nothing():
+    # The complement, so the warning above is shown to discriminate rather than
+    # to fire on every run (L62: an absence proves nothing about a step that had
+    # no input).
+    r = _run([_run_obj(1, STALE_TS)], dry_run="false")
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "disagreed" not in blob, r
 
 
 def test_cancel_error_is_swallowed_and_sweep_continues():

@@ -50,6 +50,59 @@ def gh_ok(args):
     return r.returncode == 0, (r.stderr or r.stdout).strip()
 
 
+def collect_waiting_runs(repo, default_branch="main"):
+    """Waiting runs, as the **union of two redundant query shapes**.
+
+    `--status waiting` is not reliable and its failure mode is to under-report
+    rather than to error: measured on the hub 2026-10-07T13:14Z, the unqualified
+    shape answered `total_count: 0` on two consecutive reads while four runs were
+    provably waiting, and adding a branch filter to the same call returned all
+    four (L341). The unqualified shape had been correct six minutes earlier, so
+    the defect is transient — which is why the fix is redundancy rather than a
+    replacement query.
+
+    Unioned by run id, so the result can only ever be too long, never too short.
+    For an approval tool that is the correct direction: an extra row is a line of
+    preview output, a missing row is a gate the operator never sees.
+
+    Client-side filtering over an unfiltered run list is **not** an alternative
+    and was measured too — a held gate is routinely days old and falls off the
+    newest-100 page entirely, which is exactly the population this tool exists
+    to act on. `scripts/generate-agentic-os-status.py` and
+    `.github/workflows/734-stale-waiting-run-janitor.yml` carry the same union
+    for the same reason; keep the three in step.
+    """
+    fields = "databaseId,workflowName,displayTitle"
+    shapes = [
+        ["run", "list", "--repo", repo, "--status", "waiting",
+         "--limit", "100", "--json", fields],
+        ["run", "list", "--repo", repo, "--status", "waiting",
+         "--branch", default_branch, "--limit", "100", "--json", fields],
+    ]
+
+    by_id = {}
+    per_shape = []
+    for shape in shapes:
+        rows = gh_json(shape) or []
+        per_shape.append(len(rows))
+        for row in rows:
+            rid = row.get("databaseId")
+            if rid is not None:
+                by_id.setdefault(rid, row)
+
+    if len(set(per_shape)) > 1:
+        # Reported rather than silently repaired: the operator needs to know the
+        # upstream defect is live, not just get the right answer this once.
+        print(
+            f"WARNING: waiting-run query shapes disagreed (unqualified={per_shape[0]}, "
+            f"branch={default_branch}:{per_shape[1]}); using the union of {len(by_id)}. "
+            "A short count from --status waiting is a known upstream defect (L341).",
+            file=sys.stderr,
+        )
+
+    return list(by_id.values())
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default=DEFAULT_REPO, help="owner/repo (default: FFC automation)")
@@ -62,14 +115,17 @@ def main():
     ap.add_argument("--comment", default="Batch approval via approve-waiting-runs.py")
     args = ap.parse_args()
 
-    runs = gh_json(
-        [
-            "run", "list", "--repo", args.repo, "--status", "waiting",
-            "--limit", "100", "--json", "databaseId,workflowName,displayTitle",
-        ]
-    ) or []
+    runs = collect_waiting_runs(args.repo)
     if not runs:
-        print("No runs are waiting at an approval gate. Nothing to do.")
+        # Deliberately not "nothing to do": `--status waiting` can answer empty
+        # while runs are provably waiting (L341), and this tool's whole job is
+        # to find them. Both query shapes coming back empty is the best evidence
+        # available, not proof, and the operator is the one who can tell.
+        print(
+            "No waiting runs found by either query shape. If you believe a gate "
+            "is pending, confirm it directly:\n"
+            f"  gh api repos/{args.repo}/actions/runs/<run-id> --jq .status"
+        )
         return 0
 
     errors = 0

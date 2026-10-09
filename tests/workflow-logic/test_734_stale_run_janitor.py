@@ -111,11 +111,14 @@ def _run(
     cancel_fail_ids=None,
     comment_fails=False,
     unqualified_returns_empty=False,
+    list_throw_shapes=None,
 ):
     script = step_github_script(WORKFLOW, JOB, STEP)
     env = child_env(pathlib.Path(NODE).parent)
     if unqualified_returns_empty:
         env["TEST_UNQUALIFIED_RETURNS_EMPTY"] = "1"
+    if list_throw_shapes:
+        env["TEST_LIST_THROW_SHAPES"] = ",".join(list_throw_shapes)
     if dry_run is not None:
         env["DRY_RUN"] = dry_run
     if max_age_days is not None:
@@ -306,6 +309,62 @@ def test_agreeing_shapes_warn_about_nothing():
     assert r["threw"] is None, r
     blob = " ".join(r.get("warnings") or [])
     assert "disagreed" not in blob, r
+
+
+def test_a_throwing_shape_does_not_discard_the_other_shapes_answer():
+    """The redundancy promise, under the failure mode that actually happens.
+
+    A short shape (TEST_UNQUALIFIED_RETURNS_EMPTY) was already covered. This is
+    the other half: octokit *throws* on a rate-limit 403 or a timeout, and until
+    each shape was isolated that exception escaped the whole collection loop --
+    so a blip on the unqualified shape discarded a perfectly good
+    branch-qualified answer and handed the janitor an empty queue, which it
+    cannot tell from a clean one. One surviving shape must still reap.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["unqualified"],
+    )
+    assert r["cancelledIds"] == [1], r
+    assert not r["threw"], r
+    assert not r["failed"], r
+    # And the operator is told the shape failed, rather than it passing silently.
+    assert any("failed" in w for w in r["warnings"]), r["warnings"]
+
+
+def test_a_throwing_shape_is_rendered_as_err_not_as_zero():
+    """A failed shape must not be reported as a shape that counted nothing.
+
+    `unqualified=0` says the upstream `?status=waiting` defect is live; `err`
+    says the call did not come back. Collapsing the two sends the next person
+    diagnosing this to the wrong endpoint.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["unqualified"],
+    )
+    disagreement = [w for w in r["warnings"] if "disagreed" in w]
+    assert disagreement, r["warnings"]
+    assert "unqualified=err" in disagreement[0], disagreement[0]
+
+
+def test_every_shape_failing_is_loud_and_cancels_nothing():
+    """Zero surviving shapes is a read failure, and must never be reaped on.
+
+    This is the direction that matters for a step that CANCELS: an empty union
+    would also suppress the expiry warning a human relies on to answer a gate
+    before it dies, so the only safe outcome is to fail the step.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["all"],
+    )
+    assert r["cancelAttempts"] == [], r
+    assert r["threw"] or r["failed"], r
+    assert r["comments"] == [], r
 
 
 def test_cancel_error_is_swallowed_and_sweep_continues():

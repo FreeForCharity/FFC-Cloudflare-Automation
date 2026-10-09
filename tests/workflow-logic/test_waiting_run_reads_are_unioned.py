@@ -60,6 +60,12 @@ BRANCH_SHAPE = re.compile(
 
 COMMENT = re.compile(r"^\s*(#|//|\*|<#)")
 
+# The shared sentence every consumer must carry, so that "all reads failed" is
+# never served as "the queue is clean". One spelling across Python and the
+# janitor's inline JS on purpose: a grep for it answers "is this defended?" in
+# every language this repo reads waiting runs from.
+REFUSAL = "every waiting-run query shape failed"
+
 
 def _reads(path):
     """Non-comment lines in `path` that look like a waiting-run read."""
@@ -103,6 +109,43 @@ def test_every_waiting_run_read_has_a_branch_qualified_companion():
     assert not violations, (
         "a waiting-run read with no branch-qualified companion shape "
         "(L341: ?status=waiting under-reports to zero without erroring):\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_every_waiting_run_read_refuses_when_every_shape_fails():
+    """A union is only a floor if a failing shape cannot take the other down.
+
+    The companion guard above checks that a second shape *exists*. That is not
+    enough, and the gap is not hypothetical: all three consumers shipped the
+    union with both shapes iterated inside **one** exception scope, so a
+    rate-limit 403 or a timeout on the first discarded the second's answer and
+    handed the caller the empty list L341 is entirely about. Two shapes that
+    cannot fail independently are not redundant; they are two chances to fail.
+
+    Keyed on the refusal rather than on the isolation, because the refusal is
+    the part that is both greppable and load-bearing. Every one of these callers
+    does something destructive-by-omission with an empty list -- cancels nothing
+    and suppresses the pre-reap warning, publishes "no approvals outstanding",
+    prints "no waiting runs found" -- so a consumer that cannot distinguish "all
+    reads failed" from "the queue is clean" has no safe behaviour available to
+    it. A caller carrying the sentence necessarily tracks per-shape failure to
+    be able to say it.
+    """
+    violations = []
+    for path in SCAN:
+        hits = _reads(path)
+        if not hits:
+            continue
+        body = path.read_text(encoding="utf-8", errors="replace")
+        if REFUSAL not in body:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            violations.append(f"{rel}:{hits[0][0]}  {hits[0][1][:100]}")
+    assert not violations, (
+        "a waiting-run read that cannot tell a failed read from an empty queue; "
+        f'it must isolate each shape and then refuse with "{REFUSAL}" when none '
+        "survives (L341/L352: an empty union is indistinguishable from a clean "
+        "queue, and every caller acts destructively on that):\n  "
         + "\n  ".join(violations)
     )
 

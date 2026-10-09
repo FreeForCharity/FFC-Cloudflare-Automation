@@ -122,29 +122,57 @@ jobs:
             const listShapes = [{}, { branch: 'main' }];
             const byId = new Map();
             const perShape = [];
+            // Each shape is isolated. The union is a FLOOR, and it can only be one
+            // if a transient failure of either shape does not take the other down
+            // with it -- an octokit call throws on a 403 or a timeout, so without
+            // this try/catch a rate-limit blip on the first shape would discard a
+            // perfectly good answer from the second and hand the janitor the empty
+            // list it is documented above as being unable to distinguish from a
+            // clean queue.
             for (const shape of listShapes) {
               let seen = 0;
               let page = 1;
-              for (;;) {
-                const { data } = await github.rest.actions.listWorkflowRunsForRepo({
-                  owner: context.repo.owner, repo: context.repo.repo,
-                  status: 'waiting', per_page: 100, page, ...shape,
-                });
-                for (const r of data.workflow_runs) {
-                  seen++;
-                  if (!byId.has(r.id)) byId.set(r.id, r);
+              try {
+                for (;;) {
+                  const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    status: 'waiting', per_page: 100, page, ...shape,
+                  });
+                  for (const r of data.workflow_runs) {
+                    seen++;
+                    if (!byId.has(r.id)) byId.set(r.id, r);
+                  }
+                  if (data.workflow_runs.length < 100) break;
+                  page++;
                 }
-                if (data.workflow_runs.length < 100) break;
-                page++;
+                perShape.push(seen);
+              } catch (err) {
+                core.warning(
+                  `waiting-run query shape ${JSON.stringify(shape)} failed: ${err.message}. ` +
+                    'Continuing with the remaining shape(s); the union is a floor, not a ' +
+                    'single source.',
+                );
+                perShape.push(null);
               }
-              perShape.push(seen);
+            }
+
+            // Zero surviving shapes is a read failure, not a clean queue. Failing
+            // loudly is the whole point: this janitor CANCELS runs, and an empty
+            // union would also suppress the warning a human relies on to answer a
+            // gate before it is reaped.
+            if (perShape.every((count) => count === null)) {
+              throw new Error(
+                'every waiting-run query shape failed; refusing to treat that as an ' +
+                  'empty queue. Nothing was cancelled and nothing was reported.',
+              );
             }
             // A disagreement is reported rather than silently repaired: the next person
             // diagnosing a short count needs to see that the upstream defect is live.
             if (new Set(perShape).size > 1) {
+              const shown = perShape.map((c) => (c === null ? 'err' : String(c)));
               core.warning(
-                `waiting-run query shapes disagreed (unqualified=${perShape[0]}, ` +
-                  `branch=main:${perShape[1]}); using the union of ${byId.size}. ` +
+                `waiting-run query shapes disagreed (unqualified=${shown[0]}, ` +
+                  `branch=main:${shown[1]}); using the union of ${byId.size}. ` +
                   'A short count from ?status=waiting is a known upstream defect (L341).',
               );
             }

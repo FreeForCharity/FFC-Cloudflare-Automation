@@ -21,6 +21,12 @@
 //                      `branch` argument, while branch-qualified calls still see
 //                      the fixture — the L341 defect, where `?status=waiting`
 //                      under-reports to zero and adding `branch` returns the truth
+//   TEST_LIST_THROW_SHAPES  which shapes raise a transport error instead of
+//                      answering: 'unqualified', 'branch', or 'all' (comma-
+//                      separated). This is the OTHER half of the redundancy
+//                      promise — a union is only a floor if one shape failing
+//                      does not take the other down, and an octokit call throws
+//                      on a 403 or a timeout rather than returning short
 
 //   plus whatever env the step itself reads (MAX_AGE_DAYS, WARN_DAYS, DRY_RUN, …)
 //
@@ -100,6 +106,18 @@ const github = {
         // shape under-reporting (down to an empty list) while the
         // branch-qualified one returns the truth. Unset env = both shapes see
         // the same `runs`, which is every pre-existing test's behaviour.
+        // A shape told to throw does so before serving anything, which is how
+        // octokit reports a rate-limit 403 or a timeout. Distinct from
+        // TEST_UNQUALIFIED_RETURNS_EMPTY, which is the shape ANSWERING short.
+        const throwShapes = new Set(
+          (process.env.TEST_LIST_THROW_SHAPES || '').split(',').filter(Boolean),
+        );
+        const shapeName = args.branch ? 'branch' : 'unqualified';
+        if (throwShapes.has('all') || throwShapes.has(shapeName)) {
+          const e = new Error(`API rate limit exceeded for shape ${shapeName}`);
+          e.status = 403;
+          throw e;
+        }
         const unqualifiedEmpty = process.env.TEST_UNQUALIFIED_RETURNS_EMPTY === '1' && !args.branch;
         const source = unqualifiedEmpty ? [] : runs;
         // Honor the caller's requested page size (fall back to the API default)

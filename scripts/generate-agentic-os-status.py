@@ -237,10 +237,16 @@ def _build_url(path_or_url, params=None):
 def _request(path_or_url, token, params=None, soft_fail=False):
     """Perform ONE GET and return ``(payload, link_header)``. No pagination.
 
-    ``soft_fail=True`` returns ``(None, None)`` on an HTTP error instead of
-    aborting the run. Used only for speculative lookups (does referenced number
-    N name an agentic-os issue?), where a 404 is an expected answer — "no" — and
-    must never take the whole daily feed down with it."""
+    ``soft_fail=True`` returns ``(None, None)`` on an HTTP error **or a
+    transport error** instead of aborting the run. Two callers need it for two
+    different reasons: speculative lookups (does referenced number N name an
+    agentic-os issue?), where a 404 is an expected answer — "no" — and must
+    never take the whole daily feed down with it; and the redundant waiting-run
+    shapes, where the point is that one shape failing must not discard the
+    other's answer. The transport arm matters more than the HTTP one there: a
+    timeout or a reset connection is the likeliest way a shape fails, and while
+    it raised unconditionally the redundancy was real only for malformed JSON
+    and HTTP errors — not for the failure mode it was written to survive."""
     url = _build_url(path_or_url, params)
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
@@ -257,10 +263,12 @@ def _request(path_or_url, token, params=None, soft_fail=False):
         detail = exc.read().decode("utf-8", "replace").strip()
         raise SystemExit(f"error: GitHub API {exc.code} for {url}: {detail}")
     except urllib.error.URLError as exc:
+        if soft_fail:
+            return None, None
         raise SystemExit(f"error: could not reach GitHub API ({url}): {exc.reason}")
 
 
-def rest_get(path_or_url, token, params=None):
+def rest_get(path_or_url, token, params=None, soft_fail=False):
     """GET a REST endpoint and return the decoded JSON.
 
     Pagination is followed **only for array (list) responses** — GitHub list
@@ -273,7 +281,9 @@ def rest_get(path_or_url, token, params=None):
     url = _build_url(path_or_url, params)
     results = []
     while url:
-        payload, link = _request(url, token)
+        payload, link = _request(url, token, soft_fail=soft_fail)
+        if payload is None and soft_fail:
+            return None
         if isinstance(payload, list):
             results.extend(payload)
         else:
@@ -628,13 +638,25 @@ def is_repo_workflow_run(run):
 
 
 def _waiting_runs_one_shape(repo, token, params):
-    """The waiting-run rows one query shape returns, or ``[]`` if unusable.
+    """The waiting-run rows one query shape returns, ``[]`` if it answered
+    nothing usable, or ``None`` if the shape itself could not be read.
 
     Deliberately total: a shape that answers with a non-object, or with no
     ``workflow_runs`` array, contributes nothing rather than raising. The union
     in `collect_waiting_runs` is what provides the floor, and it can only do
-    that if one bad shape does not take the other down with it."""
-    payload = rest_get(f"repos/{repo}/actions/runs", token, params=params)
+    that if one bad shape does not take the other down with it.
+
+    That promise used to stop at the payload. ``rest_get`` aborts the whole run
+    on an HTTP error, so a 403 or a timeout on the FIRST shape discarded a
+    perfectly good answer from the second -- the redundancy was real only for
+    malformed JSON, which is not how this endpoint fails. ``soft_fail`` closes
+    that gap, and the distinct ``None`` lets the caller tell an unreadable
+    shape from a shape that genuinely reports an empty queue."""
+    payload = rest_get(
+        f"repos/{repo}/actions/runs", token, params=params, soft_fail=True
+    )
+    if payload is None:
+        return None
     if not isinstance(payload, dict):
         return []
     runs = payload.get("workflow_runs")
@@ -676,16 +698,26 @@ def collect_waiting_runs(repo, token, default_branch=HUB_DEFAULT_BRANCH):
     per_shape = []
     for params in shapes:
         rows = _waiting_runs_one_shape(repo, token, params)
-        per_shape.append(len(rows))
-        for run in rows:
+        per_shape.append(len(rows) if rows is not None else None)
+        for run in rows or []:
             rid = run.get("id")
             if rid is not None:
                 by_id.setdefault(rid, run)
 
+    # One shape surviving is enough; zero is a read failure, and a read failure
+    # must not be published as "no approvals outstanding". That is the exact
+    # sentence L341 was filed about, and an empty panel hides every gate at once.
+    if all(count is None for count in per_shape):
+        raise RuntimeError(
+            "every waiting-run query shape failed; refusing to publish an empty "
+            "gate panel, which is indistinguishable from no gates being held."
+        )
+
     if len(set(per_shape)) > 1:
+        shown = ["err" if c is None else str(c) for c in per_shape]
         print(
             "WARNING: waiting-run query shapes disagreed "
-            f"(unqualified={per_shape[0]}, branch={default_branch}:{per_shape[1]}); "
+            f"(unqualified={shown[0]}, branch={default_branch}:{shown[1]}); "
             f"using the union of {len(by_id)}. "
             "A short count from ?status=waiting is a known upstream defect.",
             file=sys.stderr,

@@ -50,6 +50,34 @@ def gh_ok(args):
     return r.returncode == 0, (r.stderr or r.stdout).strip()
 
 
+def _waiting_runs_one_shape(args):
+    """The rows one query shape returns, ``[]`` if it answered nothing usable,
+    or ``None`` if the shape itself failed.
+
+    Deliberately total, and for the same reason as the sibling in
+    `scripts/generate-agentic-os-status.py`: the union in `collect_waiting_runs`
+    is what provides the floor, and it can only do that if one bad shape does
+    not take the other down with it. `gh_json` raises on any non-zero `gh`
+    exit, so without this a network blip, a rate-limit 403 or an auth hiccup on
+    the FIRST shape discards a perfectly good answer from the second -- which
+    is exactly the redundancy this union was added to provide (L341).
+
+    Failure is `None` rather than `[]` so the caller can tell "this shape could
+    not be read" from "this shape says the queue is empty". Collapsing the two
+    would recreate the silent zero the union exists to defend against."""
+    try:
+        rows = gh_json(args)
+    except (RuntimeError, ValueError) as exc:
+        print(
+            f"WARNING: waiting-run query shape failed ({' '.join(args)}): {exc}. "
+            "Continuing with the remaining shape(s); the union is a floor, not a "
+            "single source.",
+            file=sys.stderr,
+        )
+        return None
+    return rows if isinstance(rows, list) else []
+
+
 def collect_waiting_runs(repo, default_branch="main"):
     """Waiting runs, as the **union of two redundant query shapes**.
 
@@ -83,19 +111,32 @@ def collect_waiting_runs(repo, default_branch="main"):
     by_id = {}
     per_shape = []
     for shape in shapes:
-        rows = gh_json(shape) or []
-        per_shape.append(len(rows))
-        for row in rows:
+        rows = _waiting_runs_one_shape(shape)
+        per_shape.append(len(rows) if rows is not None else None)
+        for row in rows or []:
             rid = row.get("databaseId")
             if rid is not None:
                 by_id.setdefault(rid, row)
 
+    # Every shape failing is NOT an empty queue, and must never be reported as
+    # one: this is an approval tool, so "no gates waiting" is the single most
+    # dangerous sentence it can print. One shape surviving is enough -- that is
+    # the whole point of the union -- but zero is a read failure, and a read
+    # failure has to be loud.
+    if all(count is None for count in per_shape):
+        raise RuntimeError(
+            "every waiting-run query shape failed; refusing to report an empty "
+            "queue, which is indistinguishable from a clean one. Re-run once "
+            "`gh` is healthy."
+        )
+
     if len(set(per_shape)) > 1:
         # Reported rather than silently repaired: the operator needs to know the
         # upstream defect is live, not just get the right answer this once.
+        shown = ["err" if c is None else str(c) for c in per_shape]
         print(
-            f"WARNING: waiting-run query shapes disagreed (unqualified={per_shape[0]}, "
-            f"branch={default_branch}:{per_shape[1]}); using the union of {len(by_id)}. "
+            f"WARNING: waiting-run query shapes disagreed (unqualified={shown[0]}, "
+            f"branch={default_branch}:{shown[1]}); using the union of {len(by_id)}. "
             "A short count from --status waiting is a known upstream defect (L341).",
             file=sys.stderr,
         )

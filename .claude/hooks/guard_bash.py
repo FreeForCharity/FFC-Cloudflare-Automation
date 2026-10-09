@@ -1631,6 +1631,188 @@ def _jq_expression(cmd):
     return next((g for g in m.groups() if g is not None), None)
 
 
+# `git branch` with a remote-listing flag, and the arguments that follow it.
+# `-C <path>` and `-c k=v` are consumed so a `git -C clone branch -r` still
+# matches; the trailing group is everything up to the end of the statement,
+# which is where the flags that change the QUESTION being asked live.
+GIT_BRANCH_RE = re.compile(
+    r"\bgit\s+(?:(?:-C\s+\S+|-c\s+\S+=\S+|--no-pager|--git-dir=\S+)\s+)*branch\b([^\n;|&]*)"
+)
+# Remote-listing flags. `-a`/`--all` is included because it is a superset: it
+# prints the same unprunable namespaces alongside the local branches.
+#
+# `=` is in the negative lookbehind, not decoration. The short-flag alternative
+# matches any hyphen-led run containing `r` or `a`, so a DESCENDING-SORT VALUE
+# qualifies: in `git branch --sort=-committerdate` the `-committerdate` after the
+# `=` matches, and a purely local listing was warned at and advised to use
+# `git ls-remote` -- wrong guidance for a local-branch question, since `--sort`
+# has no remote-listing semantics. Blocking a match that begins right after `=`
+# keeps `-r` / `-a` / `--remotes` / `--all` matching (each begins after a space)
+# while a flag's VALUE can no longer be read as a flag.
+BRANCH_REMOTE_FLAG_RE = re.compile(
+    r"(?<![\w=-])(?:-[a-zA-Z]*[ra][a-zA-Z]*|--remotes|--all)(?![\w-])"
+)
+# Redirections that name a file descriptor: `2>/dev/null`, `2>&1`, `2>>log`.
+# These do NOT capture the branch listing as data -- they move stderr -- so they
+# must not satisfy the `captured` test below. Stripping them before looking for
+# `>` is what separates "capturing the listing" from "suppressing the noise".
+FD_REDIRECT_RE = re.compile(r"\d+>+&?\d*")
+# Discarding stdout makes no claim about the remote branch list.
+DISCARD_REDIRECT_RE = re.compile(r">>?\s*/dev/null(?=\s|$|[;&|])")
+# The flags that mean a DIFFERENT question -- "which of these is merged" rather
+# than "what branches are there". `docs/stale-branch-review-2026-08.md` asks
+# exactly that one, in prose, and it is the single committed occurrence of the
+# string in the tree.
+BRANCH_MERGED_FLAG_RE = re.compile(r"(?<![\w-])--(?:no-)?merged\b")
+# Consumers that turn the listing into a NUMBER or a SET -- the shapes that make
+# a claim about the remote rather than just showing it to a human.
+BRANCH_COUNTED_RE = re.compile(
+    r"\|\s*(?:wc\b|sort\b|uniq\b|comm\b|awk\b|grep\s+[^|]*-[a-zA-Z]*c|sed\b|cut\b|tr\b|xargs\b|tee\b)"
+)
+
+
+def _connector_segments(line):
+    """Split one statement on `&&`, `||` and a backgrounding `&`, outside quotes.
+
+    A pipe is NOT a boundary: `git branch -r | wc -l` is one command whose
+    output really is being counted, which is the whole point of the rule.
+    `&&` and `||` are, because the command after one has its own stdout --
+    `git branch -r && echo done > /tmp/marker` redirects *echo*, not the
+    listing. Attributing that `>` to the listing warned on the exact shape the
+    rule is documented to leave alone (a bare listing shown to a human with
+    something harmless appended), which is the most common way the idiom is
+    actually written. Found by Copilot review on #1521 and reproduced three
+    ways before this fix.
+
+    `_strip_quoted` preserves length, so offsets into the blanked copy index
+    the original and the returned slices keep their original text.
+    """
+    bare = _strip_quoted(line)
+    parts, start, i, n = [], 0, 0, len(bare)
+    while i < n:
+        two = bare[i:i + 2]
+        if two in ("&&", "||"):
+            parts.append(line[start:i])
+            i += 2
+            start = i
+            continue
+        if bare[i] == "&":
+            # `&` is a control operator EXCEPT inside a redirect operator:
+            # `2>&1`, `>&2`, `<&3` (preceded by `>`/`<`) and `&>`, `&>>`
+            # (followed by `>`). Splitting there tore the statement in half and
+            # lost the capture: `git branch -r 2>&1 | wc -l` segmented to
+            # ['git branch -r 2>', '1 | wc -l'], so the `| wc -l` landed in a
+            # segment that does not start with the listing and the rule went
+            # SILENT on a command that really does count it. Same for
+            # `git branch -r &> out.txt`. Both are false NEGATIVES, i.e. the
+            # direction that quietly removes the guard.
+            #
+            # The existing `2>&1` cases did not catch this: `... >all.txt 2>&1`
+            # puts the capture BEFORE the `&`, so it survives in segment one,
+            # and `... 2>&1 | head` is legitimately silent (paging, not
+            # counting). A guard's pass count only covers the shapes it ran.
+            prev = bare[i - 1] if i else ""
+            nxt = bare[i + 1] if i + 1 < n else ""
+            if prev in "><" or nxt == ">":
+                i += 1
+                continue
+            parts.append(line[start:i])
+            i += 1
+            start = i
+            continue
+        i += 1
+    parts.append(line[start:])
+    return [p for p in parts if p.strip()]
+
+
+def git_branch_remote_count_violation(cmd):
+    """`git branch -r` is a local ref CACHE, not the remote's branch list.
+
+    Ledger L195, and its `origin/HEAD` sibling L224. `remote.origin.fetch` is
+    only `+refs/heads/*:refs/remotes/origin/*`, so any ref living outside that
+    refspec -- `refs/remotes/pr/*` from a one-off `refs/pull/*` fetch being the
+    one that actually happens here -- is never pruned and can never be pruned.
+    It accumulates, and `git branch -r` prints it as though it were a branch on
+    the server.
+
+    Three measured instances, which is why this is a rule and not a third
+    paragraph in the ledger:
+
+    * run 125 read **528** remote branches against a truth of **10**
+      (`git ls-remote --heads origin`); the 517 extras were all `pr/*`.
+    * run 138 reported **8** orphans where 7 were real, from `origin/HEAD`.
+    * run 198 reported **53 branches / 42 orphans** against a truth of
+      **42 / 31**, inflated by the 11 `pr/NNNN` refs that same run had just
+      created while composing PR heads for review. It then published the wrong
+      pair in a health section before re-measuring.
+
+    The error is always in the ALARMING direction -- a cache only ever grows --
+    so "the number looks high" is the one smell test that cannot catch it, and
+    a run that fetches PR heads to do its job inflates its own metric by
+    exactly the number of PRs it reviewed.
+
+    WARNS rather than blocks. A bare `git branch -r` shown to a human is a
+    perfectly good way to look at a clone, and #989 requires a false-positive
+    check against real usage before a rule is wired: a repo-wide grep finds one
+    occurrence of the string in the tree, prose in
+    `docs/stale-branch-review-2026-08.md`, asking the `--merged` question that
+    `BRANCH_MERGED_FLAG_RE` deliberately exempts. So there is nothing committed
+    to break -- but also nothing to stop a human from looking, which is why the
+    rule only fires once the listing is being counted, captured or diffed.
+    """
+    # Checked over the WHOLE command, not the statement: a run that counts both
+    # and compares them is doing the right thing -- that comparison is how run
+    # 198 found its own wrong number -- and the precedent is rule L50, where a
+    # `set -o pipefail` anywhere in the command clears it.
+    whole = _strip_quoted(cmd)
+    if "ls-remote" in whole or "for-each-ref" in whole:
+        return None
+    # One statement can hold several commands joined by `&&`/`||`, each with its
+    # own stdout, so the counted/captured question below is asked of the segment
+    # the listing is in -- never of the whole statement (#1521 review).
+    for stmt in [
+        seg for s in _statements(cmd) for seg in _connector_segments(s)
+    ]:
+        bare = _strip_quoted(stmt)
+        m = GIT_BRANCH_RE.search(bare)
+        if not m:
+            continue
+        args = m.group(1)
+        if not BRANCH_REMOTE_FLAG_RE.search(args):
+            continue
+        if BRANCH_MERGED_FLAG_RE.search(args):
+            continue
+        counted = bool(BRANCH_COUNTED_RE.search(bare))
+        # Strip fd-numbered redirects BEFORE asking whether the listing is
+        # captured. A bare `">" in bare` also matches `2>/dev/null` and `2>&1`,
+        # which move stderr and capture nothing -- so `git branch -r 2>/dev/null`
+        # warned, although it is precisely the "bare listing shown to a human"
+        # case this rule is documented to leave alone, and noise suppression is
+        # the most common thing to append to a listing.
+        # Tradeoff, taken deliberately: an explicit `1>file` stdout capture no
+        # longer warns. That spelling is rare, and a false positive on a common
+        # idiom costs more than a false negative on an uncommon one.
+        redirects_stripped = FD_REDIRECT_RE.sub(" ", bare)
+        redirects_stripped = DISCARD_REDIRECT_RE.sub(" ", redirects_stripped)
+        captured = bool(re.search(r"\$\(\s*git\b|`\s*git\b", bare)) or ">" in redirects_stripped
+        if not (counted or captured):
+            continue
+        return (
+            "[#1520] `git branch -r` lists the local ref CACHE, not the remote's branches, and "
+            "you are counting or capturing it. Refs outside `remote.origin.fetch` "
+            "(`refs/remotes/pr/*`, left by any `refs/pull/*:refs/remotes/pr/*` fetch) are never "
+            "pruned and are printed as if they were branches on the server.\n"
+            f"  statement: {stmt.strip()[:120]}\n"
+            "  Ask the server instead:  git ls-remote --heads origin\n"
+            "  Local-only, origin namespace:  git for-each-ref refs/remotes/origin/\n"
+            "The inflation is always upward and always invisible: run 125 read 528 against a "
+            "truth of 10, and run 198 read 53 against 42 -- inflated by the PR heads that same "
+            "run had just fetched to review. Add `--merged`/`--no-merged`, or pipe nothing, if "
+            "you are asking a different question."
+        )
+    return None
+
+
 def main():
     raw = sys.stdin.read()
     try:
@@ -2019,6 +2201,14 @@ def main():
             "  Only a `required_status_checks` rule answers \"which checks are required\".\n"
             "  Fine to ignore if you are deliberately asking whether a CLASSIC object exists."
         )
+    # 12. `git branch -r` counted or captured as if it were the remote's branch
+    #     list (#1520; ledger L195, sibling L224) -- WARN, do not block.
+    #
+    #     Full reasoning, the three measured instances and the false-positive
+    #     check live on `git_branch_remote_count_violation`.
+    reason = git_branch_remote_count_violation(cmd)
+    if reason:
+        warn(reason)
 
     finish()
 

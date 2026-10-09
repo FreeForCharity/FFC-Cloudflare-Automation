@@ -1587,6 +1587,119 @@ RULES = [
          "gh api --paginate \"repos/$org/$repo/teams?per_page=100\" --jq '[.[] | .slug] | join(\",\")'", ALLOW),
     ]),
 
+    # #1520 / ledger L195, sibling L224. `git branch -r` is the local ref CACHE;
+    # refs outside `remote.origin.fetch` (`refs/remotes/pr/*`) are unprunable and
+    # print as if they were branches on the server. Both polarities per #1027 --
+    # the silent half is doing most of the work here, because the rule's whole
+    # design is to leave a human looking at a clone alone.
+    Rule("git-branch-r-as-remote-list", '[#1520]', WARN_TIER, label='guard_bash / #1520 branch -r counted as the remote list:', cases=[
+        # The three historical shapes, each the literal a run actually sent.
+        ("run 198's orphan pipeline warns",
+         "git branch -r | sed 's#^ *origin/##' | grep -vE '^(HEAD|main)' | sort > allbr.txt", WARN),
+        ("run 138's count with the origin/HEAD filter warns",
+         "TOT=$(git branch -r | grep -v 'origin/HEAD' | wc -l)", WARN),
+        ("run 125's bare count warns", "git branch -r | wc -l", WARN),
+        # Spellings of the same flag, so tightening the regex cannot quietly
+        # drop one. `-a` is a superset: it prints the same unprunable namespaces.
+        ("--remotes long spelling warns", "git -C repos/hub branch --remotes | wc -l", WARN),
+        ("-a is the same defect with local branches added",
+         "git branch -a | sort | comm -23 - heads.txt", WARN),
+        ("backtick capture warns", "n=`git branch -r`", WARN),
+        # --- Silences, each for a stated reason. ---
+        # A human looking at a clone. The rule fires on the CLAIM, not the read.
+        ("a bare listing is silent", "git branch -r", SILENT),
+        # A different question, and the one docs/stale-branch-review-2026-08.md
+        # asks -- the single committed occurrence of the string in the tree.
+        ("--merged is a different question", "git branch -r --merged main | wc -l", SILENT),
+        ("--no-merged likewise", "git branch -r --no-merged | wc -l", SILENT),
+        # The remedy itself must not warn, or the rule argues with its own advice.
+        ("the ls-remote remedy is silent",
+         "git ls-remote --heads origin | awk '{print $2}' | wc -l", SILENT),
+        ("the for-each-ref remedy is silent",
+         "git for-each-ref refs/remotes/origin/ | wc -l", SILENT),
+        # Counting BOTH and comparing them is how run 198 found its own wrong
+        # number. Precedent: `set -o pipefail` anywhere clears the L50 rule.
+        ("counting both to compare them is silent",
+         "git branch -r | wc -l; git ls-remote --heads origin | wc -l", SILENT),
+        # No remote flag: a local branch count is a local question, answered
+        # correctly by the local cache.
+        ("local branch count is silent", "git branch | wc -l", SILENT),
+        ("--list glob without a remote flag is silent",
+         "git branch --list 'feature/*' | wc -l", SILENT),
+        ("a delete is not a listing", "git branch -d stale-thing", SILENT),
+        # A flag's VALUE is not a flag. `-[a-zA-Z]*[ra][a-zA-Z]*` matches any
+        # hyphen-led run containing `r` or `a`, so `-committerdate` after the
+        # `=` qualified and a purely LOCAL listing was told to use ls-remote --
+        # wrong guidance, since --sort has no remote-listing semantics.
+        ("a descending --sort value is not a remote flag",
+         "git branch --sort=-committerdate > branches.txt", SILENT),
+        ("…nor when it is counted", "git branch --sort=-authordate | wc -l", SILENT),
+        # …and the flags themselves must survive that lookbehind.
+        ("-r still warns beside a --sort value",
+         "git branch --sort=-committerdate -r | wc -l", WARN),
+        ("--remotes still warns beside a --sort value",
+         "git branch --sort=-authordate --remotes > r.txt", WARN),
+        # An fd-numbered redirect moves stderr; it captures nothing. These are
+        # the bare-listing case with noise suppression appended, which is the
+        # most common thing to append to a listing.
+        ("bare stdout discard is not a capture", "git branch -r >/dev/null", SILENT),
+        ("stdout and stderr discard is not a capture", "git branch -r >/dev/null 2>&1", SILENT),
+        ("appending to the discard device is not a capture", "git branch -r >> /dev/null", SILENT),
+        ("a file with a discard-like prefix is still a capture", "git branch -r >/dev/null-report", WARN),
+        ("discard does not hide a counted pipe", "git branch -r >/dev/null | wc -l", WARN),
+        ("2>/dev/null is noise suppression, not capture",
+         "git branch -r 2>/dev/null", SILENT),
+        ("2>&1 likewise", "git branch -r 2>&1 | head", SILENT),
+        ("2>>file likewise", "git branch -r 2>>err.log", SILENT),
+        # …but a real stdout capture beside one still warns, or the strip has
+        # swallowed the signal rather than the noise.
+        ("a real capture alongside 2>&1 still warns",
+         "git branch -r >all.txt 2>&1", WARN),
+        # The words inside quotes are prose, not a command -- the shape that
+        # makes a rule fire on its own documentation.
+        ("the same words quoted are silent", "echo 'git branch -r | wc -l'", SILENT),
+        # A command after `&&`/`||`/`&` has its OWN stdout, so a redirect there
+        # is not the listing being captured. Before #1521's review these three
+        # warned -- i.e. on a bare listing with something harmless appended,
+        # the exact shape the rule is documented to leave alone, and the most
+        # common way the idiom is written.
+        ("a redirect after && belongs to that command, not the listing",
+         "git branch -r && echo done > /tmp/marker", SILENT),
+        ("…and after ||", "git branch -r || echo fail > /tmp/err", SILENT),
+        ("…and after a backgrounding &",
+         "git branch -r & echo done > /tmp/marker", SILENT),
+        # …but the narrowing must not buy those silences by going quiet on a
+        # real capture that merely sits beside a connector. Both polarities,
+        # and the second one proves the scan still reaches past the first
+        # segment rather than only examining it.
+        ("a real capture before && still warns",
+         "git branch -r > all.txt && echo ok", WARN),
+        ("a count in the SECOND segment still warns",
+         "echo start && git branch -r | wc -l", WARN),
+        # The `&` inside a REDIRECT operator is not a connector. Splitting
+        # there tore `git branch -r 2>&1 | wc -l` into
+        # ['git branch -r 2>', '1 | wc -l'], losing the count into a segment
+        # that does not start with the listing -- a false NEGATIVE, the
+        # direction that silently removes the guard. Found by Copilot review on
+        # #1521; the `&>` form was found while confirming it.
+        #
+        # The cases above did NOT cover this: `>all.txt 2>&1` puts the capture
+        # before the `&` so it survives segment one, and `2>&1 | head` is
+        # legitimately silent (paging, not counting).
+        ("a count after 2>&1 still warns",
+         "git branch -r 2>&1 | wc -l", WARN),
+        ("…and the &> form captures stdout too",
+         "git branch -r &> all.txt", WARN),
+        ("…and >&2 is still only a redirect of a real capture",
+         "git branch -r >all.txt >&2", WARN),
+        # Both polarities: the fix must not turn a backgrounding `&` into a
+        # non-boundary, which would re-warn on the appended-command shape.
+        ("a backgrounding & is still a boundary",
+         "git branch -r & echo done > /tmp/marker2", SILENT),
+        # The tier itself: a warned command must still RUN.
+        ("a warned count is still allowed", "git branch -r | wc -l", ALLOW),
+    ]),
+
     # #1127 / ledger L193. Registered as a Rule rather than as flat check()
     # calls: test_refusal_site_coverage() derives every refusal from
     # guard_bash.py's AST and requires a registered signature to claim it, so

@@ -240,7 +240,8 @@ def check_clone(workspace: pathlib.Path, name: str) -> dict:
     problems = []
     if behind:
         problems.append(
-            f"{behind} commit(s) behind origin/{branch} -- the last fetch was not reset in"
+            f"{behind} commit(s) behind origin/{branch} -- the fetch advanced the "
+            f"remote-tracking ref, but this checkout was never fast-forwarded onto it"
         )
     if ahead:
         problems.append(f"{ahead} commit(s) ahead of origin/{branch}")

@@ -713,13 +713,28 @@ def collect_waiting_runs(repo, token, default_branch=HUB_DEFAULT_BRANCH):
             "gate panel, which is indistinguishable from no gates being held."
         )
 
-    if len(set(per_shape)) > 1:
+    # Raw inequality is the wrong trigger: the unqualified shape spans every
+    # branch and the branch-qualified one is a strict subset of it, so
+    # `unqualified > branch` is expected whenever a gate waits off the default
+    # branch. Only the impossible direction -- a superset answering shorter --
+    # is evidence of the upstream defect.
+    unqualified, branch_qualified = per_shape
+    both_read = unqualified is not None and branch_qualified is not None
+    if both_read and unqualified < branch_qualified:
+        print(
+            "WARNING: the unqualified waiting-run shape returned FEWER runs "
+            f"({unqualified}) than the branch-qualified subset "
+            f"({default_branch}:{branch_qualified}); using the union of "
+            f"{len(by_id)}. A superset cannot be short: this is the known "
+            "upstream ?status=waiting defect.",
+            file=sys.stderr,
+        )
+    elif not both_read:
         shown = ["err" if c is None else str(c) for c in per_shape]
         print(
-            "WARNING: waiting-run query shapes disagreed "
+            "WARNING: a waiting-run query shape could not be read "
             f"(unqualified={shown[0]}, branch={default_branch}:{shown[1]}); "
-            f"using the union of {len(by_id)}. "
-            "A short count from ?status=waiting is a known upstream defect.",
+            f"using the union of {len(by_id)} from the shape(s) that answered.",
             file=sys.stderr,
         )
 

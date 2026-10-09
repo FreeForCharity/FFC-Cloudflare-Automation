@@ -130,16 +130,40 @@ def collect_waiting_runs(repo, default_branch="main"):
             "`gh` is healthy."
         )
 
-    if len(set(per_shape)) > 1:
+    # The two shapes are NOT symmetric, so raw inequality is the wrong trigger.
+    # The unqualified shape returns waiting runs across every branch; the
+    # branch-qualified one is a strict subset of it. `unqualified > branch` is
+    # therefore the EXPECTED reading whenever a gate waits on a non-default
+    # branch -- a dispatch of a gated workflow on a `claude/*` branch is routine
+    # here -- and attributing that to L341 sends the next reader hunting a
+    # defect that is not there. L341's signature is the other direction: the
+    # unqualified shape answering SHORTER than a strict subset of itself, which
+    # cannot happen without it.
+    unqualified, branch_qualified = per_shape
+    both_read = unqualified is not None and branch_qualified is not None
+    if both_read and unqualified < branch_qualified:
         # Reported rather than silently repaired: the operator needs to know the
         # upstream defect is live, not just get the right answer this once.
-        shown = ["err" if c is None else str(c) for c in per_shape]
         print(
-            f"WARNING: waiting-run query shapes disagreed (unqualified={shown[0]}, "
-            f"branch={default_branch}:{shown[1]}); using the union of {len(by_id)}. "
-            "A short count from --status waiting is a known upstream defect (L341).",
+            f"WARNING: the unqualified waiting-run shape returned FEWER runs "
+            f"({unqualified}) than the branch-qualified subset "
+            f"({default_branch}:{branch_qualified}); using the union of "
+            f"{len(by_id)}. A superset cannot be short: this is the known "
+            "upstream `--status waiting` defect (L341).",
             file=sys.stderr,
         )
+    elif not both_read:
+        shown = ["err" if c is None else str(c) for c in per_shape]
+        print(
+            f"WARNING: a waiting-run query shape could not be read "
+            f"(unqualified={shown[0]}, branch={default_branch}:{shown[1]}); "
+            f"using the union of {len(by_id)} from the shape(s) that answered. "
+            "The per-shape failure is reported above.",
+            file=sys.stderr,
+        )
+    # `unqualified > branch_qualified` is deliberately silent: it is the normal
+    # superset relationship, and a warning that fires in normal operation is one
+    # nobody reads when it finally matters.
 
     return list(by_id.values())
 

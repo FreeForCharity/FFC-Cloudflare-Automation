@@ -112,6 +112,7 @@ def _run(
     comment_fails=False,
     unqualified_returns_empty=False,
     list_throw_shapes=None,
+    branch_qualified_drops_ids=None,
 ):
     script = step_github_script(WORKFLOW, JOB, STEP)
     env = child_env(pathlib.Path(NODE).parent)
@@ -119,6 +120,10 @@ def _run(
         env["TEST_UNQUALIFIED_RETURNS_EMPTY"] = "1"
     if list_throw_shapes:
         env["TEST_LIST_THROW_SHAPES"] = ",".join(list_throw_shapes)
+    if branch_qualified_drops_ids:
+        env["TEST_BRANCH_SHAPE_DROPS_IDS"] = ",".join(
+            str(i) for i in branch_qualified_drops_ids
+        )
     if dry_run is not None:
         env["DRY_RUN"] = dry_run
     if max_age_days is not None:
@@ -290,6 +295,9 @@ def test_a_short_unqualified_shape_does_not_hide_a_warning():
 def test_disagreeing_shapes_are_reported_not_silently_repaired():
     # The union repairs the count; the discrepancy still has to be visible, or
     # the next person diagnosing a short read cannot tell the defect is live.
+    # Asserted on the ATTRIBUTION rather than on the word "disagreed": the
+    # claim under test is that this particular shape of disagreement is named
+    # as the L341 defect, and a warning that merely fires is not that claim.
     r = _run(
         [_run_obj(1, STALE_TS)],
         dry_run="false",
@@ -297,8 +305,8 @@ def test_disagreeing_shapes_are_reported_not_silently_repaired():
     )
     assert r["threw"] is None, r
     blob = " ".join(r.get("warnings") or [])
-    assert "disagreed" in blob, r
     assert "L341" in blob, r
+    assert "FEWER" in blob, r
 
 
 def test_agreeing_shapes_warn_about_nothing():
@@ -308,7 +316,35 @@ def test_agreeing_shapes_warn_about_nothing():
     r = _run([_run_obj(1, STALE_TS)], dry_run="false")
     assert r["threw"] is None, r
     blob = " ".join(r.get("warnings") or [])
-    assert "disagreed" not in blob, r
+    assert "L341" not in blob, r
+    assert blob == "", r
+
+
+def test_a_longer_unqualified_shape_is_not_called_a_defect():
+    """The shapes are not symmetric, so inequality alone is not evidence.
+
+    The unqualified shape spans EVERY branch; the branch-qualified one is a
+    strict subset of it. So `unqualified > branch` is the expected reading
+    whenever a gate waits off the default branch -- a dispatch of a gated
+    workflow on a `claude/*` branch is routine here -- and the warning used to
+    call that "a known upstream defect (L341)" on raw inequality alone.
+
+    Two things are asserted, and the second is the one that matters: the L341
+    attribution must be absent, and the union must still carry the off-branch
+    run. A fix that simply stopped warning by dropping the second shape would
+    satisfy the first assertion and fail this one.
+    """
+    off_branch = dict(_run_obj(2, STALE_TS), head_branch="claude/some-work")
+    r = _run(
+        [_run_obj(1, STALE_TS), off_branch],
+        dry_run="false",
+        branch_qualified_drops_ids=[2],
+    )
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "L341" not in blob, blob
+    assert blob == "", blob
+    assert sorted(r["cancelledIds"]) == [1, 2], r
 
 
 def test_a_throwing_shape_does_not_discard_the_other_shapes_answer():
@@ -345,9 +381,12 @@ def test_a_throwing_shape_is_rendered_as_err_not_as_zero():
         dry_run="false",
         list_throw_shapes=["unqualified"],
     )
-    disagreement = [w for w in r["warnings"] if "disagreed" in w]
-    assert disagreement, r["warnings"]
-    assert "unqualified=err" in disagreement[0], disagreement[0]
+    unreadable = [w for w in r["warnings"] if "could not be read" in w]
+    assert unreadable, r["warnings"]
+    assert "unqualified=err" in unreadable[0], unreadable[0]
+    # And a failed read is NOT attributed to L341: that is a different diagnosis
+    # with a different fix, and conflating them sends the reader to the wrong one.
+    assert "L341" not in unreadable[0], unreadable[0]
 
 
 def test_every_shape_failing_is_loud_and_cancels_nothing():

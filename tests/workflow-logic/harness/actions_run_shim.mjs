@@ -27,6 +27,12 @@
 //                      promise — a union is only a floor if one shape failing
 //                      does not take the other down, and an octokit call throws
 //                      on a 403 or a timeout rather than returning short
+//   TEST_BRANCH_SHAPE_DROPS_IDS  comma-separated run ids the BRANCH-qualified
+//                      shape omits, which is what the real API does: that shape
+//                      is pinned to one branch, so a run waiting on any other
+//                      branch is legitimately absent from it. Models the
+//                      shapes' ASYMMETRY — unqualified is a superset — so a
+//                      test can show `unqualified > branch` is not a defect
 
 //   plus whatever env the step itself reads (MAX_AGE_DAYS, WARN_DAYS, DRY_RUN, …)
 //
@@ -119,7 +125,18 @@ const github = {
           throw e;
         }
         const unqualifiedEmpty = process.env.TEST_UNQUALIFIED_RETURNS_EMPTY === '1' && !args.branch;
-        const source = unqualifiedEmpty ? [] : runs;
+        // The branch-qualified shape is a strict SUBSET of the unqualified one in
+        // the real API, because it is pinned to a single branch. Modelling that is
+        // what lets a test assert `unqualified > branch` is normal rather than the
+        // L341 defect; without it every fixture makes the two shapes identical and
+        // the asymmetry is invisible to the suite.
+        const branchDrops = new Set(
+          (process.env.TEST_BRANCH_SHAPE_DROPS_IDS || '').split(',').filter(Boolean).map(Number),
+        );
+        let source = unqualifiedEmpty ? [] : runs;
+        if (args.branch && branchDrops.size) {
+          source = source.filter((r) => !branchDrops.has(Number(r.id)));
+        }
         // Honor the caller's requested page size (fall back to the API default)
         // so pagination tests stay faithful if the script changes per_page.
         const perPage = Number(args.per_page) || PER_PAGE;

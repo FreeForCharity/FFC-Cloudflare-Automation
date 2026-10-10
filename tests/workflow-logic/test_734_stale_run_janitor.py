@@ -110,9 +110,20 @@ def _run(
     warn_days=None,
     cancel_fail_ids=None,
     comment_fails=False,
+    unqualified_returns_empty=False,
+    list_throw_shapes=None,
+    branch_qualified_drops_ids=None,
 ):
     script = step_github_script(WORKFLOW, JOB, STEP)
     env = child_env(pathlib.Path(NODE).parent)
+    if unqualified_returns_empty:
+        env["TEST_UNQUALIFIED_RETURNS_EMPTY"] = "1"
+    if list_throw_shapes:
+        env["TEST_LIST_THROW_SHAPES"] = ",".join(list_throw_shapes)
+    if branch_qualified_drops_ids:
+        env["TEST_BRANCH_SHAPE_DROPS_IDS"] = ",".join(
+            str(i) for i in branch_qualified_drops_ids
+        )
     if dry_run is not None:
         env["DRY_RUN"] = dry_run
     if max_age_days is not None:
@@ -228,10 +239,171 @@ def test_pagination_fetches_every_page():
     runs = [_run_obj(i, STALE_TS) for i in range(101)]  # 100 -> page2 (1 more)
     r = _run(runs, dry_run="false")
     assert r["threw"] is None, r
-    pages = [c["page"] for c in r["listCalls"]]
-    assert pages == [1, 2], r  # stopped after the short second page
+    # Each of the two redundant query shapes paginates independently and stops
+    # after its own short page, so the page sequence repeats per shape.
+    assert [c["page"] for c in r["listCalls"]] == [1, 2, 1, 2], r
+    # 101 runs, not 202: the shapes are unioned by run id, so a run returned by
+    # both is cancelled exactly once.
     assert len(r["cancelledIds"]) == 101, r
+    assert sorted(r["cancelledIds"]) == sorted(range(101)), r
     assert all(c["status"] == "waiting" for c in r["listCalls"]), r
+
+
+# --- the two redundant query shapes (L341) ----------------------------------
+#
+# `?status=waiting` can answer `total_count: 0` while runs are provably waiting.
+# For a janitor that zero is indistinguishable from a clean queue: it posts
+# nothing, cancels nothing and exits green, so the warning a human relies on to
+# answer a gate before it is reaped never arrives.
+
+
+def test_both_query_shapes_are_issued():
+    r = _run([_run_obj(1, STALE_TS)], dry_run="false")
+    assert r["threw"] is None, r
+    branches = sorted(str(c.get("branch")) for c in r["listCalls"])
+    # exactly one unqualified shape and one pinned to the default branch
+    assert branches == ["None", "main"], r
+
+
+def test_a_short_unqualified_shape_does_not_hide_a_stale_run():
+    # The L341 regression: the unqualified shape returns [] while the
+    # branch-qualified one returns the truth. The union must still reap.
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    assert r["failed"] is None, r
+    assert r["cancelledIds"] == [1], r
+
+
+def test_a_short_unqualified_shape_does_not_hide_a_warning():
+    # Same defect one bucket over, and the more costly one: a run inside the
+    # warning window is the whole point of the pre-reap notice.
+    r = _run(
+        [_run_obj(7, _ago(5.5))],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    assert r["cancelledIds"] == [], r  # not stale yet
+    assert r["comments"], r  # but it IS warned about
+    assert "7" in " ".join(str(c) for c in r["comments"]), r
+
+
+def test_disagreeing_shapes_are_reported_not_silently_repaired():
+    # The union repairs the count; the discrepancy still has to be visible, or
+    # the next person diagnosing a short read cannot tell the defect is live.
+    # Asserted on the ATTRIBUTION rather than on the word "disagreed": the
+    # claim under test is that this particular shape of disagreement is named
+    # as the L341 defect, and a warning that merely fires is not that claim.
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        unqualified_returns_empty=True,
+    )
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "L341" in blob, r
+    assert "FEWER" in blob, r
+
+
+def test_agreeing_shapes_warn_about_nothing():
+    # The complement, so the warning above is shown to discriminate rather than
+    # to fire on every run (L62: an absence proves nothing about a step that had
+    # no input).
+    r = _run([_run_obj(1, STALE_TS)], dry_run="false")
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "L341" not in blob, r
+    assert blob == "", r
+
+
+def test_a_longer_unqualified_shape_is_not_called_a_defect():
+    """The shapes are not symmetric, so inequality alone is not evidence.
+
+    The unqualified shape spans EVERY branch; the branch-qualified one is a
+    strict subset of it. So `unqualified > branch` is the expected reading
+    whenever a gate waits off the default branch -- a dispatch of a gated
+    workflow on a `claude/*` branch is routine here -- and the warning used to
+    call that "a known upstream defect (L341)" on raw inequality alone.
+
+    Two things are asserted, and the second is the one that matters: the L341
+    attribution must be absent, and the union must still carry the off-branch
+    run. A fix that simply stopped warning by dropping the second shape would
+    satisfy the first assertion and fail this one.
+    """
+    off_branch = dict(_run_obj(2, STALE_TS), head_branch="claude/some-work")
+    r = _run(
+        [_run_obj(1, STALE_TS), off_branch],
+        dry_run="false",
+        branch_qualified_drops_ids=[2],
+    )
+    assert r["threw"] is None, r
+    blob = " ".join(r.get("warnings") or [])
+    assert "L341" not in blob, blob
+    assert blob == "", blob
+    assert sorted(r["cancelledIds"]) == [1, 2], r
+
+
+def test_a_throwing_shape_does_not_discard_the_other_shapes_answer():
+    """The redundancy promise, under the failure mode that actually happens.
+
+    A short shape (TEST_UNQUALIFIED_RETURNS_EMPTY) was already covered. This is
+    the other half: octokit *throws* on a rate-limit 403 or a timeout, and until
+    each shape was isolated that exception escaped the whole collection loop --
+    so a blip on the unqualified shape discarded a perfectly good
+    branch-qualified answer and handed the janitor an empty queue, which it
+    cannot tell from a clean one. One surviving shape must still reap.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["unqualified"],
+    )
+    assert r["cancelledIds"] == [1], r
+    assert not r["threw"], r
+    assert not r["failed"], r
+    # And the operator is told the shape failed, rather than it passing silently.
+    assert any("failed" in w for w in r["warnings"]), r["warnings"]
+
+
+def test_a_throwing_shape_is_rendered_as_err_not_as_zero():
+    """A failed shape must not be reported as a shape that counted nothing.
+
+    `unqualified=0` says the upstream `?status=waiting` defect is live; `err`
+    says the call did not come back. Collapsing the two sends the next person
+    diagnosing this to the wrong endpoint.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["unqualified"],
+    )
+    unreadable = [w for w in r["warnings"] if "could not be read" in w]
+    assert unreadable, r["warnings"]
+    assert "unqualified=err" in unreadable[0], unreadable[0]
+    # And a failed read is NOT attributed to L341: that is a different diagnosis
+    # with a different fix, and conflating them sends the reader to the wrong one.
+    assert "L341" not in unreadable[0], unreadable[0]
+
+
+def test_every_shape_failing_is_loud_and_cancels_nothing():
+    """Zero surviving shapes is a read failure, and must never be reaped on.
+
+    This is the direction that matters for a step that CANCELS: an empty union
+    would also suppress the expiry warning a human relies on to answer a gate
+    before it dies, so the only safe outcome is to fail the step.
+    """
+    r = _run(
+        [_run_obj(1, STALE_TS)],
+        dry_run="false",
+        list_throw_shapes=["all"],
+    )
+    assert r["cancelAttempts"] == [], r
+    assert r["threw"] or r["failed"], r
+    assert r["comments"] == [], r
 
 
 def test_cancel_error_is_swallowed_and_sweep_continues():

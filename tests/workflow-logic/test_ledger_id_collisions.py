@@ -206,6 +206,29 @@ def test_a_cosmetic_holder_spelling_still_counts_as_mine():
         ), holder
 
 
+def test_a_siblings_STALE_reservation_for_a_landed_row_does_not_fail_my_PR():
+    """A reservation whose holder has already landed must not block anyone.
+
+    This window is routine, not hypothetical: the documented remedy is that
+    whoever reaches the queue second drops the matching `reserved-ids` lines, so
+    between #1584 landing and #1588 being updated, #1588 declares `L352 #1584`
+    while L352 is a row on `main`. If this guard measured "ids I have" rather
+    than "ids new since the base", every unrelated PR would then fail on an id
+    it merely inherited -- and the failure would name a row nobody touched,
+    which is the same unactionable red this guard exists to replace.
+
+    Found by mutation: dropping the `- base` subtraction left every other test
+    green, so the suite was measuring the both-rows arm's subtraction twice and
+    the declared-elsewhere arm's not at all.
+    """
+    assert (
+        guard.collision_problems(
+            BASE, _ledger((352,)), {"#1588": _ledger((356,), ("L350 #1584",))}, "#1586"
+        )
+        == []
+    )
+
+
 def test_a_reservation_naming_a_DIFFERENT_number_is_not_mine():
     """The positive control for the test above: substring matching on digits
     must not make every holder look like every PR."""

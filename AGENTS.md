@@ -997,6 +997,39 @@ while hiding the one line that was actually emitted
 (`branch has untouched updates in critical paths`). A gate review is exactly where that matters: the
 rehearsal log is the evidence the approval rests on.
 
+**A failing-test count is not a problem count, and both documented counting rules report the test
+(run 245, 2026-10-10).** `CLAUDE.md` already says never to score a suite by grepping `FAIL`, and to
+read the `::error::workflow-logic tests failed:` line instead, because a truncated roster reports no
+`FAIL` at all (L194). That remedy is right about _which modules_ failed and still under-reports _how
+much is wrong_, because one failing test can carry any number of independent defects in its
+assertion message. Both counters agree, and both are the wrong unit:
+
+| signal on run 38068756569 (#1601) | said                     | actually |
+| --------------------------------- | ------------------------ | -------- |
+| `grep "  FAIL"`                   | 1 line                   | —        |
+| `##[error]failure breakdown:`     | `1 assertion failure(s)` | —        |
+| citations needing repair          | —                        | **2**    |
+
+`test_every_source_citation_in_the_ledger_resolves_and_points_at_content` asserts
+`not problems, "\n".join(problems)`, so every problem it found is in the message — the second one on
+the **line after** the `FAIL` line. Nothing truncated and nothing lied: one test failed, and it had
+two things to say. Reading the headline and fixing the anchor it named would have pushed a second
+red for the same cause.
+
+- **Read the assertion body, not the line that announces it.** `grep -A20 "  FAIL"` rather than
+  `grep "  FAIL"`; the problems are the payload and the `FAIL` line is the envelope.
+- **When a test aggregates over a population — citations, rows, workflows, files — assume more than
+  one member is broken until you have enumerated them.** The guards in
+  `tests/workflow-logic/test_lessons_ledger.py` are nearly all of this shape.
+- **Fix the class, not the instance the message happened to name.** The run that found this
+  enumerated every `run_all.py:` citation in the ledger instead of acting on the headline, which is
+  the only reason both were repaired in one push.
+
+Fifth member of the flattering-direction family `CLAUDE.md` tracks: the measurement is sound, the
+count is honest, and the inference — "one failure, one fix" — is the defect. It differs from its
+siblings in that following this repo's **own** documented remedy still lands on it, which is why it
+is written here rather than as a correction to L194.
+
 **A held gate also stops the schedule behind it, and `status=waiting` will not show you that
 (L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
 scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.

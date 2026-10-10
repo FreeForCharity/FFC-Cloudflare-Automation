@@ -24,7 +24,7 @@
 //      without this workflow ever reading their material. `assertNoWriteScopeProbes`
 //      makes that structural. It also keeps the monitor compatible with the
 //      per-secret RBAC migration (#848 part A): the reader identity needs
-//      `getSecret` on the four probed secrets and nothing else.
+//      `getSecret` on each probed `read-all-*` secret and nothing else.
 //   2. **A probe exists only where one secret can verify itself, read-only.**
 //      GitHub PATs (`GET /user`), Cloudflare tokens (`GET /zones`), the Zeffy
 //      key (`GET /api/v1/campaigns`) and the WPMUDEV key (`GET /hub/v1/sites`)

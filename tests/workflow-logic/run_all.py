@@ -159,7 +159,13 @@ def classify_failure(output: str) -> tuple[str, str]:
 
 
 def platform_tag() -> str:
-    """The host this suite ran on, for the two lines a reader quotes.
+    """The host this suite ran on, tagged onto the two lines a reader quotes.
+
+    Exactly two lines carry the tag: the `::error::failure breakdown:` line
+    and the green `All N workflow-logic test modules passed.` line. The
+    canonical terminal `::error::workflow-logic tests failed:` line is left
+    untagged by design, for the ordering reason given below, and a test pins
+    it that way -- do not "fix" the asymmetry by tagging it too.
 
     A pass/fail count from this suite is meaningless without its platform, and
     neither summary line used to say which host produced it. On 2026-10-10 two

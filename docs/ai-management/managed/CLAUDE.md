@@ -34,6 +34,12 @@ guidance.
 
 ## Common Conventions (All FFC Repos)
 
+- **Repo naming**: every new repo in the FreeForCharity org takes a prefix. `FFC-EX-<domain>` is
+  only for a charity's website repo (one per charity). `FFC-IN-<Name>` is for anything FFC owns:
+  sites, templates, tooling, plugins, docs (e.g., `FFC-IN-ffcadmin.org`, `FFC-IN-Claude-Plugins`).
+  The owner decides the prefix, not the audience. Unprefixed repos (`FFC-Cloudflare-Automation`,
+  etc.) are legacy names, not precedent. Check `gh repo list FreeForCharity` before proposing a
+  name.
 - **Folder naming**: kebab-case (e.g., `site-assets`, `page-templates`)
 - **Branching**: Feature branches off `main`, merged via pull request
 - **Pre-commit checks**: Lint and format checks run before commits where configured

@@ -31,9 +31,156 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Ungated, read-only, no credential: resolving the plan is pure input handling (#1509).
+  #
+  # Before clicking "Approve" on `cloudflare-prod-write` the reviewer sees the run name and
+  # the run summary and nothing else. `run-name` surfaces `dry_run` (#1107) and nothing about
+  # the TARGET: `domains` and `target` are `workflow_dispatch` inputs, and the REST run object
+  # carries no dispatch inputs at all, while the gated job is `waiting` and so has no logs.
+  # Measured on run 37137973071 (2026-10-03, dry_run=false): the approval screen showed a
+  # workflow name, a mode flag, and no scope — and `docs/workflow-safety-and-approvals.md`
+  # tells that approver to "read the dry-run preview first" for bulk DNS, which could not be
+  # made, because this workflow is `cancel-in-progress: false` on a shared concurrency group,
+  # so a rehearsal dispatch queues BEHIND the waiting run it was meant to inform.
+  #
+  # So the plan is written here, where it needs no dispatch and cannot be starved by the lane
+  # it describes. Shape ported from 702's preflight (#1506).
+  preflight:
+    name: Preflight (read-only, ungated) - print which zones approval will rewrite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve the target list and print the approval plan
+        shell: bash
+        # Read ONLY to print the approver's plan; the gated job reads the inputs again
+        # itself and is not fed from here. Through `env:` so they arrive as data and not
+        # as source text pasted into the program (#1080) — the same rule the gated step
+        # below documents at length, and it binds just as hard in an ungated job: this
+        # body interpolates no input.
+        env:
+          IN_DOMAINS: ${{ inputs.domains }}
+          IN_TARGET: ${{ inputs.target }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Second copy of the gated job's `$defaultDomains` list, which is the price of
+          # naming the zones BEFORE the gate: the authoritative list lives in a pwsh body
+          # that only runs after approval, and printing the word "default" instead of the
+          # 13 names is the exact gap this job exists to close (#1509 AC2). The gated job
+          # is deliberately NOT fed from here — a plan that the write path depends on is no
+          # longer a read-only preflight — so the two copies are pinned equal by
+          # `test_119_preflight_plan.py`'s
+          # `test_the_two_default_domain_lists_have_not_drifted` instead of by
+          # either body. (That test holds its own third copy of the 13 names, so
+          # the two bodies agreeing on a WRONG list fails it too.)
+          default_domains="aprilhansen.com,armstrongacesbaseball.org,coronadonationalforestheritagesociety.org,falloutshelterecovillage.org,nj4israel.org,savewatersaveplanet.org,bucktownbullsbaseball.org,amargraves.org,bulldogztowing.com,browncanyonranch.org,instituteofforgiveness.org,americanlegionpost64.org,southamptonfriends.org"
+
+          domains="${IN_DOMAINS:-}"
+          domains_source="the \`domains\` input"
+          if [ -z "${domains// /}" ]; then
+            domains="$default_domains"
+            domains_source="the **default FFC-EX staging list** (\`domains\` was left blank)"
+          fi
+
+          # Fail closed on an empty resolved list. The plan's whole content is WHICH zones
+          # get rewritten, so a run that cannot name one must not print a plan at all —
+          # a summary without a plan is a run that never reached the gate (#1506).
+          if [ -z "${domains// /}" ]; then
+            echo "::error::The resolved domain list is empty, so this preflight cannot name a single zone the gate would rewrite. Refusing to print a plan: an approver reading one would be told nothing about the blast radius."
+            echo "⛔ Refused: the resolved domain list is empty — no plan printed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Fail closed on an empty dry_run, per #1506: the one line the approver most
+          # needs is whether this run writes, and a blank there is the exact failure this
+          # job exists to remove. The gated job would still write.
+          if [ -z "${IN_DRY_RUN:-}" ]; then
+            echo "::error::IN_DRY_RUN is empty: the step-level env: mapping is missing or misnamed. The approver's plan hinges on whether this run writes, so refusing rather than printing a plan with that line blank."
+            echo "⛔ Refused: \`dry_run\` did not reach the preflight — no plan printed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # `target` blank is the common path and the gated job must keep resolving it:
+          # the callee resolves the canonical FFC Pages host itself (Get-GhPagesWwwTarget,
+          # #778), so spelling a default here would be a second copy free to drift — the
+          # drift the gated step's own comment warns about. Describe it instead.
+          target="${IN_TARGET:-}"
+          if [ -z "${target// /}" ]; then
+            target_line="resolved by the gated job itself (\`Get-GhPagesWwwTarget\`, #778) — \`target\` was left blank, and this preflight deliberately does not guess it"
+          else
+            target_line="\`$target\`"
+          fi
+
+          # One normalized, newline-TERMINATED list, derived once and used for both the
+          # count and the printed roster. `printf '%s'` (no \n) is the trap here: the last
+          # element arrives unterminated, so `wc -l` undercounts it and a `while read`
+          # loop discards it outright — a plan that silently names 12 of 13 zones and a
+          # count that agrees with itself. Caught by
+          # `test_119_preflight_plan.py::test_blank_domains_prints_all_thirteen_zones_by_name`
+          # on the first run of this job; same shape as the per-item-success rule in
+          # CLAUDE.md, where a loop's own output cannot show the item it never read.
+          domain_lines=$(
+            printf '%s\n' "$domains" |
+              tr ',' '\n' |
+              sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+              sed '/^$/d'
+          )
+          zone_count=$(printf '%s\n' "$domain_lines" | sed '/^$/d' | wc -l | tr -d ' ')
+
+          if [ "$IN_DRY_RUN" = "true" ]; then
+            write_line="**dry_run=true — nothing is written.** Every zone is resolved and every record at \`staging.<domain>\` is listed, and the log says what it *would* delete and create. No record is deleted, changed or created."
+            notice="dry_run=true: approving reads $zone_count zone(s) and writes NOTHING."
+          else
+            write_line="**dry_run=false — this run WRITES to $zone_count zone(s).** For every domain listed above it DELETES each existing record at \`staging.<domain>\` and then creates one DNS-only \`CNAME\`."
+            notice="dry_run=false: approving DELETES every record at staging.<domain> and creates a CNAME, across $zone_count zone(s): $domains"
+          fi
+
+          {
+            echo "## ✅ Preflight passed — what approving the \`cloudflare-prod-write\` gate will run"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| dry_run | \`$IN_DRY_RUN\` |"
+            echo "| Zones in scope | **$zone_count**, from $domains_source |"
+            echo "| Record written | \`staging.<domain>\` — one \`CNAME\`, DNS-only (\`proxied=false\`), TTL automatic |"
+            echo "| CNAME target | $target_line |"
+            echo "| Credential the gate releases | the write-scoped Cloudflare API tokens for both the FFC and CM accounts, loaded from Key Vault \`kv-ffc-admin-prod-cbm\` by the gated job (named by role and vault on purpose — see the comment above this block) |"
+            echo ""
+            echo "### ⚠️ This is delete-then-create, not an upsert"
+            echo ""
+            echo "\`scripts/bulk-staging-cname-github-pages.ps1\` lists **every** record at"
+            echo "\`staging.<domain>\` regardless of type (A / AAAA / CNAME / TXT / …), and unless that"
+            echo "name already holds *exactly one* correct DNS-only CNAME it **deletes all of them**"
+            echo "and POSTs a replacement. Anything else published at that exact name is destroyed,"
+            echo "and the deletion is not reversible from this run."
+            echo ""
+            echo "It never touches the **apex** (\`<domain>\`) or **\`www\`**, any name other than"
+            echo "\`staging.<domain>\`, any zone not listed here, or GitHub Pages / repo settings."
+            echo ""
+            echo "### Zones this run acts on"
+            echo ""
+            while IFS= read -r d; do
+              [ -n "$d" ] && echo "- \`staging.$d\`"
+            done <<< "$domain_lines"
+            echo ""
+            echo "After approval: $write_line"
+            echo ""
+            echo "A zone whose domain does not resolve to a Cloudflare zone in either account is"
+            echo "reported as \`SKIP\` and left alone; a zone already holding exactly the correct"
+            echo "record is reported \`Already correct\` and is not rewritten."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The same verdict as an annotation, so it also shows at the top of the run page,
+          # beside the "Review deployments" button.
+          echo "::notice title=Approving cloudflare-prod-write will::$notice"
+
   bulk-staging-cname:
     runs-on: windows-latest
     environment: cloudflare-prod-write
+    # The preflight summary names every zone this job rewrites. It is also the gate's
+    # only scope disclosure, so a refused preflight must stop the run (#1509).
+    needs: preflight
     steps:
       - uses: actions/checkout@v7.0.1
 

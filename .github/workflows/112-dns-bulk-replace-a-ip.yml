@@ -29,9 +29,98 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Ungated, read-only, no credential: resolving the plan is pure input handling (#1509).
+  #
+  # 112 already surfaces both IPs in `run-name`, so this gate is better disclosed than 119's
+  # — but the IPs are not the blast radius. The approver cannot see from the run name that
+  # the rewrite sweeps EVERY zone in BOTH Cloudflare accounts, and the per-zone plan the
+  # callee builds is printed inside the gated job, i.e. only after the approval it should
+  # have informed. Shape ported from 702's preflight (#1506).
+  preflight:
+    name: Preflight (read-only, ungated) - print the zone scope approval will rewrite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Print the approval plan
+        shell: bash
+        # Read ONLY to print the approver's plan; the gated job reads the inputs again
+        # itself and is not fed from here. Through `env:` so they arrive as data and not
+        # as source text pasted into the program (#1080), exactly as in the gated step.
+        env:
+          IN_OLD_IP: ${{ inputs.old_ip }}
+          IN_NEW_IP: ${{ inputs.new_ip }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Both IPs are `required: true`, so empty here does not mean "left blank" — it
+          # means this `env:` mapping was deleted or misspelled. The plan's content is
+          # which records change and to what, so refuse rather than print a plan with
+          # either side blank: a summary without a plan is a run that never reached the
+          # gate (#1506).
+          if [ -z "${IN_OLD_IP// /}" ] || [ -z "${IN_NEW_IP// /}" ]; then
+            echo "::error::IN_OLD_IP / IN_NEW_IP is empty: the step-level env: mapping is missing or misnamed (#1080 burn-down), not a bad dispatch input. Refusing to print a plan that cannot say which records change."
+            echo "⛔ Refused: the IP inputs did not reach the preflight — no plan printed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Fail closed on an empty dry_run, per #1506: the one line the approver most
+          # needs is whether this run writes. The gated job would still write.
+          if [ -z "${IN_DRY_RUN:-}" ]; then
+            echo "::error::IN_DRY_RUN is empty: the step-level env: mapping is missing or misnamed. The approver's plan hinges on whether this run writes, so refusing rather than printing a plan with that line blank."
+            echo "⛔ Refused: \`dry_run\` did not reach the preflight — no plan printed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ "$IN_DRY_RUN" = "true" ]; then
+            write_line="**dry_run=true — nothing is written.** Both accounts are enumerated and every matching A record is listed, so the log is a real preview. No record is changed."
+            notice="dry_run=true: approving enumerates every zone in both Cloudflare accounts and writes NOTHING."
+          else
+            write_line="**dry_run=false — this run WRITES.** Every A record found holding \`$IN_OLD_IP\`, in every zone of both accounts, is PATCHed to \`$IN_NEW_IP\`."
+            notice="dry_run=false: approving rewrites EVERY A record holding $IN_OLD_IP to $IN_NEW_IP, across every zone in BOTH Cloudflare accounts."
+          fi
+
+          {
+            echo "## ✅ Preflight passed — what approving the \`cloudflare-prod-write\` gate will run"
+            echo ""
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| dry_run | \`$IN_DRY_RUN\` |"
+            echo "| Rewrite | A records \`$IN_OLD_IP\` → \`$IN_NEW_IP\` |"
+            echo "| Zone scope | **every zone in BOTH Cloudflare accounts (FFC and CM)** — the run discovers them at execution time, so the count is not known before approval |"
+            echo "| Record scope | \`type=A\` whose content is exactly \`$IN_OLD_IP\`, at any name in any of those zones |"
+            echo "| Credential the gate releases | the write-scoped Cloudflare API tokens for both the FFC and CM accounts, loaded from Key Vault \`kv-ffc-admin-prod-cbm\` by the gated job (named by role and vault on purpose — see the comment above this block) |"
+            echo ""
+            echo "### ⚠️ The scope is the whole estate, not a named list"
+            echo ""
+            echo "Unlike the per-domain DNS workflows this one takes **no zone or domain input**."
+            echo "\`scripts/bulk-replace-a-record-ip.ps1\` lists every zone each account token can"
+            echo "see and edits every A record matching the old IP, so the set of affected zones is"
+            echo "whatever currently holds that address. If \`$IN_OLD_IP\` is in use by records you"
+            echo "did not intend to move, they move too."
+            echo ""
+            echo "Each match is updated in place (\`PATCH\` to the record's own id), preserving its"
+            echo "name, TTL and proxy setting — the script re-sends those three from the plan it"
+            echo "captured. It never creates or deletes a record, never touches a non-A record, and"
+            echo "never changes zone settings."
+            echo ""
+            echo "After approval: $write_line"
+            echo ""
+            echo "The gated job prints a per-zone \`Account | Zone | Name | Proxied | TTL\` table of"
+            echo "every match before it writes; that table is in the job log, which exists only"
+            echo "after this approval, which is why the scope is stated here instead."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The same verdict as an annotation, so it also shows at the top of the run page,
+          # beside the "Review deployments" button.
+          echo "::notice title=Approving cloudflare-prod-write will::$notice"
+
   bulk-replace:
     runs-on: windows-latest
     environment: cloudflare-prod-write
+    # The preflight summary states the zone scope this job rewrites. It is also the gate's
+    # only scope disclosure, so a refused preflight must stop the run (#1509).
+    needs: preflight
     steps:
       - uses: actions/checkout@v7.0.1
 

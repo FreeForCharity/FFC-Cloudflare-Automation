@@ -766,15 +766,17 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     previous reading; the suite has grown ~54% in assertions since (2607/1698), and **every merged
     PR that adds tests invalidates a recorded count**, so treat any number here as the previous
     reading and re-derive. This line exists because run 154 found the recorded 16 and measured 27,
-    and a stale baseline is what makes a branch's red look like a regression (**L61**).
-  - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of the 27
-    report a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
+    and a stale baseline is what makes a branch's red look like a regression (**L61**). **The
+    composition of run 243's 28 has not been re-derived** — the two bullets below describe run 155's
+    27 and are kept, like the counts above, as the previous reading.
+  - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of run 155's
+    27 reported a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
     `test_729_add_collaborator.py` print an outcome for **none** of their tests, and
     `test_102`/`test_722`/`test_741`/`test_742` stop partway (e.g. "defines 77 tests but reported
     43"). A `FAIL`-grep scores those as passing modules. That is **L194**, and `run_all.py`'s roster
     guard is what makes it visible.
-  - **All 27 are host-platform artifacts, not repo defects, and they sort into four causes** — worth
-    knowing so a local red is triaged in seconds rather than investigated:
+  - **All 27 of run 155's were host-platform artifacts, not repo defects, and they sorted into four
+    causes** — worth knowing so a local red is triaged in seconds rather than investigated:
     `PermissionError [WinError 32]` / `[WinError 5]` tearing down a `TemporaryDirectory` (Windows
     will not unlink a file another process still holds); `FileNotFoundError` on a harness stub the
     module expected to have written (`gh.log`); `[WinError 2]` from `subprocess` when a POSIX tool

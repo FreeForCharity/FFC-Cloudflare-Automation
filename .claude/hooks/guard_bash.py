@@ -1818,8 +1818,21 @@ RAW_FIELD_AT_RE = re.compile(
 )
 # Path-ish shapes for the value after `@`. A GitHub @-mention (`@clarkemoyer`)
 # has no separator and no extension, which is the whole discriminator.
+#
+# The first branch MUST keep both backslashes. Written `[/\]`, the `\]` is an
+# escaped `]`, so the class does not close there -- it runs on to the `]` of
+# `[\w.-]` and swallows the alternation, leaving `<chars>+\.(?:md|...)$` as the
+# only shape. The separator branch then stops being independent: a path with
+# no whitelisted extension (`@/tmp/add719`, `@/var/log/out.log`) is let through,
+# which is the bug this rule exists to catch. Copilot caught this on #1592;
+# the firing cases below cover all three shapes so it cannot come back.
+#
+# Backslash is in the class, but do not read that as Windows-path coverage:
+# `_strip_quoted` blanks escape sequences, so unquoted `@C:\tmp\x` reaches the
+# regex as `@C: tmp x` -- and bash agrees, resolving it to `C:tmpx`, not a path.
+# A quoted backslash path is exempt for the reason in the docstring below.
 AT_VALUE_PATHISH_RE = re.compile(
-    r"[/\]|^[\w.-]+\.(?:md|txt|json|ya?ml|html|csv|patch|diff)$|^-$"
+    r"[/\\]|^[\w.-]+\.(?:md|txt|json|ya?ml|html|csv|patch|diff)$|^-$"
 )
 
 

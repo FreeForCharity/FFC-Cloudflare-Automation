@@ -1769,6 +1769,17 @@ RULES = [
         # Any field, not just body -- the failure does not depend on the key.
         ("gh api -f non-body field at path",
          "gh api repos/o/r/releases -f notes=@/tmp/changelog.md", BLOCK),
+        # Regression cases for the character-class escape (Copilot on #1592).
+        # Written `[/\]` the class does not close at that bracket, the separator
+        # branch merges into the extension branch, and a path without a
+        # whitelisted extension is allowed through. All three of run 240's real
+        # instances ended in `.md`, so only these cases can see the defect.
+        ("separator with no extension",
+         "gh api repos/o/r/issues/1/comments -f body=@/tmp/add719", BLOCK),
+        ("separator with an unlisted extension",
+         "gh api repos/o/r/issues/1/comments -f body=@/var/log/out.log", BLOCK),
+        ("windows path with no extension",
+         "gh api repos/o/r/issues/1/comments -f body=@C:/Users/clark/draft", BLOCK),
         # The two correct spellings must stay quiet. These are the near-misses
         # that decide whether the rule is usable at all.
         ("gh api -F field at path allowed",

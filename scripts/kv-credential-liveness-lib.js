@@ -26,7 +26,8 @@
 //      per-secret RBAC migration (#848 part A): the reader identity needs
 //      `getSecret` on the four probed secrets and nothing else.
 //   2. **A probe exists only where one secret can verify itself, read-only.**
-//      GitHub PATs (`GET /user`) and Cloudflare tokens (`GET /zones`)
+//      GitHub PATs (`GET /user`), Cloudflare tokens (`GET /zones`), the Zeffy
+//      key (`GET /api/v1/campaigns`) and the WPMUDEV key (`GET /hub/v1/sites`)
 //      qualify. WHMCS needs three secrets and a POST; a Google SA key needs a
 //      JWT exchange. Those stay expiry-monitored only — inventing a probe that
 //      mutates or that needs a credential trio would trade the safety that
@@ -52,6 +53,10 @@ const PROBE_KINDS = {
     // Fine-grained PATs return their expiry on this header, which is the
     // provider's own answer rather than whatever `expires` the vault carries.
     expiryHeader: 'github-authentication-token-expiration',
+    // How the workflow builds the Authorization header: 'bearer' sends
+    // `Authorization: Bearer <value>`, 'raw' sends `Authorization: <value>`
+    // (a provider whose API key IS the header value, no scheme prefix).
+    authScheme: 'bearer',
     label: 'GitHub PAT',
   },
   'cloudflare-token': {
@@ -76,7 +81,34 @@ const PROBE_KINDS = {
     // (Replaces a `result.status == active` check that only `/user/tokens/verify`
     // returns.)
     requireSuccessBody: true,
+    authScheme: 'bearer',
     label: 'Cloudflare API token',
+  },
+  'zeffy-token': {
+    // Same lesson as Cloudflare: probe the read lane's real call, not a verify
+    // endpoint (Zeffy has none). `GET /api/v1/campaigns` is what
+    // 401-zeffy-campaigns-export reads (scripts/zeffy-api-common.ps1), Bearer.
+    url: 'https://api.zeffy.com/api/v1/campaigns?limit=1',
+    // 401 is Zeffy's rejection of an invalid/revoked key. 403 is left OUT (like
+    // Cloudflare): on a resource endpoint it is authenticated-but-forbidden, not
+    // a rejected credential, so it lands in `unverified` rather than asserting a
+    // dead token the probe did not observe.
+    deadStatuses: [401],
+    authScheme: 'bearer',
+    label: 'Zeffy API key',
+  },
+  'wpmudev-token': {
+    // The WPMUDEV Hub API's swagger names the auth header literally
+    // "AUTHORIZATION" and accepts the RAW key (no "Bearer " prefix): the first
+    // and primary variant scripts/wpmudev-sites-export.ps1 tries and what the
+    // 601 export lane sends. `GET /hub/v1/sites` is that lane's own read call.
+    url: 'https://wpmudev.com/api/hub/v1/sites?per_page=1&page=1',
+    // 401 is the Hub API's rejection of an invalid key sent on this header. 403
+    // (returned when the key is sent as a Bearer token it does not expect) is
+    // left out for the same reason as above — unverified, not a dead claim.
+    deadStatuses: [401],
+    authScheme: 'raw',
+    label: 'WPMUDEV API token',
   },
 };
 
@@ -88,6 +120,8 @@ const PROBES = [
   { secret: 'read-all-cbm-ffc-copilot-mcp-github-pat', kind: 'github-pat' },
   { secret: 'read-all-ffc-cloudflare-api-token-zone-and-dns', kind: 'cloudflare-token' },
   { secret: 'read-all-cm-cloudflare-api-token-zone-and-dns', kind: 'cloudflare-token' },
+  { secret: 'read-all-ffc-zeffy-api-key', kind: 'zeffy-token' },
+  { secret: 'read-all-ffc-wpmudev-ga-api-token', kind: 'wpmudev-token' },
 ];
 
 /**

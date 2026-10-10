@@ -40,7 +40,7 @@
   `722-ci.yml` runs: **median 16.6 min, mean 16.2, max observed 19.2.** The queue path is **not**
   faster — `merge_group` runs mean 16.0 min against `pull_request`'s 16.2 (7 and 24 runs).
 
-  Do not reach for this file's other figure. The **"~8 minutes"** recorded further down is about
+  Do not reach for this file's other figure. The **"~23 minutes"** recorded further down is about
   `python tests/workflow-logic/run_all.py` on the Conductor's **Windows host**; `722` in CI also
   runs prettier, actionlint, PSScriptAnalyzer and the rest. Both numbers are right about their own
   referent, and the trap is that a run waiting on the queue reaches for the one it has already read.
@@ -754,27 +754,29 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
     that prettier called unchanged and `git status` called clean; run 96's was caught only because
     the mutation harness asserts its anchor is present before substituting, and the assert fired.
 
-- **The full workflow-logic suite takes ~8 minutes once it actually runs.** It used to finish in
+- **The full workflow-logic suite takes ~23 minutes once it actually runs.** It used to finish in
   seconds only because the modules were aborting; any short command timeout now reads as a hang. Run
   141 had to background it against a 10-minute foreground cap. **The figure this line carried until
   run 142 was ">2 minutes", which was true and four times too small** — it was written when the
   suite was a quarter its current size, and a bound that is merely _not false_ stops being a budget
   you can plan with. Re-measure it, do not re-copy it.
-  - **Current baseline — run 155, 2026-09-12, clean `main` at `1ec71c6`:** **93 modules, 1698 PASS /
-    171 FAIL, `harness crashed` 0, and `::error::workflow-logic tests failed:` names 27 modules.**
-    Run 142's figures (`1177 PASS / 83 FAIL / 16 failing modules`) are kept above only as the
-    previous reading; the suite has grown ~44% in assertions since, and **every merged PR that adds
-    tests invalidates a recorded count**, so treat any number here as the previous reading and
-    re-derive. This line exists because run 154 found the recorded 16 and measured 27, and a stale
-    baseline is what makes a branch's red look like a regression (**L61**).
-  - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of the 27
-    report a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
+  - **Current baseline — run 243, 2026-10-10, clean `main` at `a35e5a15`:** **130 modules, 2607 PASS
+    / 198 FAIL, `harness crashed` 0, and `::error::workflow-logic tests failed:` names 28 modules.**
+    Run 155's figures (`93 modules, 1698 PASS / 171 FAIL / 27 modules`) are kept only as the
+    previous reading; the suite has grown ~54% in assertions since (2607/1698), and **every merged
+    PR that adds tests invalidates a recorded count**, so treat any number here as the previous
+    reading and re-derive. This line exists because run 154 found the recorded 16 and measured 27,
+    and a stale baseline is what makes a branch's red look like a regression (**L61**). **The
+    composition of run 243's 28 has not been re-derived** — the two bullets below describe run 155's
+    27 and are kept, like the counts above, as the previous reading.
+  - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of run 155's
+    27 reported a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
     `test_729_add_collaborator.py` print an outcome for **none** of their tests, and
     `test_102`/`test_722`/`test_741`/`test_742` stop partway (e.g. "defines 77 tests but reported
     43"). A `FAIL`-grep scores those as passing modules. That is **L194**, and `run_all.py`'s roster
     guard is what makes it visible.
-  - **All 27 are host-platform artifacts, not repo defects, and they sort into four causes** — worth
-    knowing so a local red is triaged in seconds rather than investigated:
+  - **All 27 of run 155's were host-platform artifacts, not repo defects, and they sorted into four
+    causes** — worth knowing so a local red is triaged in seconds rather than investigated:
     `PermissionError [WinError 32]` / `[WinError 5]` tearing down a `TemporaryDirectory` (Windows
     will not unlink a file another process still holds); `FileNotFoundError` on a harness stub the
     module expected to have written (`gh.log`); `[WinError 2]` from `subprocess` when a POSIX tool
@@ -1110,8 +1112,8 @@ These are the ways that difference has actually bitten, each found the expensive
   explicit `encoding=`. `scripts/generate-agentic-os-status.py` is a production script that dies on
   an emoji in an issue title without it, and the public status feed now routinely contains 🚨 alert
   titles. Enumerated and tracked in #945.
-- **The full `tests/workflow-logic/` suite takes ~8 minutes here** once it actually runs (480s
-  measured run 142; see the fuller note above for the pass/fail baseline). Budget for it rather than
+- **The full `tests/workflow-logic/` suite takes ~23 minutes here** once it actually runs (1357s
+  measured run 243; see the fuller note above for the pass/fail baseline). Budget for it rather than
   treating it as a quick check, and background it — run 141 hit a 10-minute foreground cap. (Crashes
   used to make it finish fast — see ledger L35.)
 - **You cannot approve your own PR, and every agent authenticates as `clarkemoyer`.**

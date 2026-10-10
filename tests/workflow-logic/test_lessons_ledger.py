@@ -2165,7 +2165,7 @@ def test_a_reservation_must_name_who_holds_it():
 
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 _MARKER = "append-only on purpose"
-MARKER_LINE = 1809
+MARKER_LINE = 1811
 
 
 def marker_problems(text, label="CLAUDE.md", expected=MARKER_LINE):

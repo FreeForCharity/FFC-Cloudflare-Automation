@@ -6,7 +6,13 @@ human skimming a check list, and both mean "not mergeable":
   * a green PR with unresolved review threads (found 2026-08-04 on #1064/#825);
   * a green PR whose `Phantom Revert Guard` pass was measured before `main`
     moved (found 2026-08-05 on #1018/#1039/#1062, all 9 behind against a
-    threshold of 5, all reported CLEAN).
+    threshold of 5, all reported CLEAN);
+  * a green PR whose guard pass is stale for the guard's OTHER hard-fail cause
+    -- `main` changed a `CRITICAL_PATH_RE` file the PR does not touch -- which
+    needs no staleness at all (found 2026-10-10, run 246: #1602 merged one
+    `.github/workflows/` file and all 14 open PRs went red on re-trigger while
+    sitting at exactly the threshold, so the behind-count model cleared every
+    one of them).
 
 So the tests here are almost entirely about the ways this script could produce a
 **falsely clean** report, because that is the only failure that costs anything:
@@ -21,6 +27,13 @@ Locked down here:
     exits non-zero -- never "clean";
   * `behind == threshold` passes and `threshold + 1` fails, matching `-gt`
     exactly, so an off-by-one in either direction is caught;
+  * a critical-path hit is flagged **at** the threshold, where the behind-count
+    cause is silent -- the run-246 case, and the one a behind-only model misses;
+  * `critical_hits=None` (the file lists could not be read) is INCOMPLETE, never
+    clean, and `[]` is distinguished from `None` so "evaluated, no hits" cannot
+    be confused with "not evaluated";
+  * a truncated compare file list is refused rather than used short, because a
+    short list on either side of the set-difference is silently wrong;
   * a PENDING rollup is never called a stale green -- CI mid-run is an
     unfinished measurement, not a verdict, and flagging it would make the audit
     noisy in the way #992 warns about;
@@ -71,7 +84,23 @@ def check(name, cond, detail=""):
         _CURRENT.append("%s%s" % (name, " -- " + detail if detail else ""))
 
 
-def pr(number=1, rollup="SUCCESS", unresolved=0, behind=0, draft=True, title="t"):
+def pr(
+    number=1,
+    rollup="SUCCESS",
+    unresolved=0,
+    behind=0,
+    draft=True,
+    title="t",
+    critical_hits=(),
+):
+    """A PR dict as `classify` consumes it.
+
+    `critical_hits` defaults to `[]` -- "evaluated, no hits" -- because that is
+    the state almost every test is about. `None` is a separate, deliberate
+    value meaning "could not be read", and is asserted to be INCOMPLETE below;
+    the default must not be `None`, or every unrelated test would be asserting
+    the unreadable path by accident.
+    """
     return {
         "number": number,
         "title": title,
@@ -81,6 +110,7 @@ def pr(number=1, rollup="SUCCESS", unresolved=0, behind=0, draft=True, title="t"
         "rollup": rollup,
         "unresolved": unresolved,
         "behind": behind,
+        "critical_hits": None if critical_hits is None else list(critical_hits),
     }
 
 
@@ -137,6 +167,94 @@ def test_the_real_workflow_still_states_a_threshold():
         check("live 727 states a single threshold", False, str(exc))
 
 
+# --------------------------------------------------------- critical paths
+
+CRIT_YAML = (
+    "CRITICAL_PATH_RE='^(src/data/|\\.github/workflows/)'\n"
+    'CRITICAL_PATHS_HIT=$(echo "$X" | grep -E "$CRITICAL_PATH_RE" || true)\n'
+)
+
+
+def test_critical_path_pattern_is_parsed_not_hardcoded():
+    """Rewrite the pattern in the YAML; a hardcoded regex cannot follow it."""
+    p = M.critical_path_pattern(CRIT_YAML)
+    check("live-shaped pattern matches a workflow path", bool(p.search(".github/workflows/x.yml")))
+    moved = CRIT_YAML.replace("src/data/", "totally/elsewhere/")
+    q = M.critical_path_pattern(moved)
+    check(
+        "pattern follows the workflow",
+        bool(q.search("totally/elsewhere/a")) and not q.search("src/data/a"),
+        "a hardcoded pattern would still match src/data/",
+    )
+
+
+def test_absent_critical_path_pattern_is_incomplete_not_a_default():
+    try:
+        M.critical_path_pattern("jobs:\n  guard:\n    steps: []\n")
+        check("absent pattern is Incomplete", False, "returned a value")
+    except M.Incomplete:
+        check("absent pattern is Incomplete", True)
+
+
+def test_disagreeing_critical_path_patterns_are_incomplete():
+    yaml = "CRITICAL_PATH_RE='^(a/)'\nCRITICAL_PATH_RE='^(b/)'\n"
+    try:
+        M.critical_path_pattern(yaml)
+        check("disagreeing patterns are Incomplete", False, "no exception raised")
+    except M.Incomplete:
+        check("disagreeing patterns are Incomplete", True)
+
+
+def test_an_uncompilable_critical_path_pattern_is_incomplete():
+    try:
+        M.critical_path_pattern("CRITICAL_PATH_RE='^(unclosed'\n")
+        check("uncompilable pattern is Incomplete", False, "returned a value")
+    except M.Incomplete:
+        check("uncompilable pattern is Incomplete", True)
+
+
+def test_the_real_workflow_still_states_a_critical_path_pattern():
+    """If 727 stops stating one, that is the finding -- not a clean report."""
+    text = GUARD.read_text(encoding="utf-8")
+    try:
+        p = M.critical_path_pattern(text)
+        check(
+            "live 727 states a pattern that still matches .github/workflows/",
+            bool(p.search(".github/workflows/727-phantom-revert-guard.yml")),
+        )
+    except M.Incomplete as exc:
+        check("live 727 states a single critical-path pattern", False, str(exc))
+
+
+def test_critical_phantom_hits_is_the_set_difference_then_the_grep():
+    p = M.critical_path_pattern(CRIT_YAML)
+    base = [".github/workflows/a.yml", "docs/x.md", "src/data/d.json"]
+    prf = ["docs/x.md", "src/data/d.json"]
+    check(
+        "only the untouched critical file is a hit",
+        M.critical_phantom_hits(base, prf, p) == [".github/workflows/a.yml"],
+    )
+
+
+def test_a_file_the_pr_also_touches_is_not_a_phantom_candidate():
+    p = M.critical_path_pattern(CRIT_YAML)
+    base = [".github/workflows/a.yml"]
+    check(
+        "a file on both sides is not a candidate",
+        M.critical_phantom_hits(base, [".github/workflows/a.yml"], p) == [],
+        "this is the whole point of comm -23",
+    )
+
+
+def test_an_untouched_noncritical_file_is_not_a_hit():
+    p = M.critical_path_pattern(CRIT_YAML)
+    check(
+        "a non-critical untouched file is tolerated",
+        M.critical_phantom_hits(["docs/x.md"], [], p) == [],
+        "the guard allows those with a fresh branch",
+    )
+
+
 # ------------------------------------------------------------- classification
 
 
@@ -156,6 +274,54 @@ def test_the_run_97_case_is_flagged():
     check(
         "the run-97 case (green, 9 behind) is flagged",
         len(r["stale_green"]) == 1 and not r["unresolved_threads"],
+    )
+
+
+def test_the_run_246_case_is_flagged_at_the_threshold():
+    """The case a behind-only model clears: AT the threshold, with a hit.
+
+    On 2026-10-10 every open PR sat at exactly 5 behind -- passing `-gt 5` --
+    while #1602 had brought a `.github/workflows/` file none of them touched.
+    The guard hard-failed all of them; this script reported them clean.
+    """
+    r = M.classify(
+        [pr(number=1597, behind=5, critical_hits=[".github/workflows/321-x.yml"])], 5
+    )
+    check(
+        "a critical-path hit is flagged at the threshold",
+        len(r["stale_green"]) == 1 and not r["ok"],
+        "behind == threshold is silent, so only the other cause can catch this",
+    )
+
+
+def test_both_guard_causes_are_named_on_one_row():
+    r = M.classify([pr(behind=9, critical_hits=[".github/workflows/a.yml"])], 5)
+    check("one row, not two", len(r["stale_green"]) == 1)
+    reason = r["stale_green"][0]["reason"] if r["stale_green"] else ""
+    check(
+        "the row names both causes",
+        "behind main" in reason and "critical-path" in reason,
+        "fixing only the cause named first puts the PR straight back into red",
+    )
+
+
+def test_critical_hits_none_is_incomplete_not_a_pass():
+    r = M.classify([pr(behind=1, critical_hits=None)], 5)
+    check(
+        "unreadable critical-path input is incomplete",
+        len(r["incomplete"]) == 1 and not r["ok"] and not r["stale_green"],
+        "half a guard is not a pass",
+    )
+
+
+def test_a_critical_hit_on_a_red_pr_is_not_this_audit_finding():
+    r = M.classify(
+        [pr(rollup="FAILURE", behind=1, critical_hits=[".github/workflows/a.yml"])], 5
+    )
+    check(
+        "red + critical hit is not a stale green",
+        not r["stale_green"],
+        "CI is already the visible blocker there",
     )
 
 
@@ -349,21 +515,73 @@ def test_a_missing_rollup_reads_as_none_not_as_a_crash():
     check("absent rollup is None", prs[0]["rollup"] is None)
 
 
-def test_fetch_behind_returns_none_on_a_bad_payload():
+def test_fetch_relation_returns_blanks_on_a_bad_payload():
     def bad(url, token, accept=None):
         return {"unexpected": True}
 
     check(
         "a payload without behind_by yields None",
-        M.fetch_behind({"head": "b"}, "tok", request=bad) is None,
+        all(
+            v is None
+            for v in M.fetch_relation({"head": "b"}, "tok", request=bad).values()
+        ),
     )
 
 
-def test_fetch_behind_reads_the_number():
+def test_fetch_relation_reads_behind_merge_base_and_files():
     def good(url, token, accept=None):
-        return {"behind_by": 9, "ahead_by": 2}
+        return {
+            "behind_by": 9,
+            "ahead_by": 2,
+            "merge_base_commit": {"sha": "mb0"},
+            "files": [{"filename": "docs/x.md"}],
+        }
 
-    check("behind_by is read", M.fetch_behind({"head": "b"}, "tok", request=good) == 9)
+    rel = M.fetch_relation({"head": "b"}, "tok", request=good)
+    check("behind_by is read", rel["behind"] == 9)
+    check("merge base is read", rel["merge_base"] == "mb0")
+    check("pr files are read", rel["pr_files"] == ["docs/x.md"])
+
+
+def test_a_truncated_compare_file_list_is_refused_not_used_short():
+    """At the cap the list is real but not the whole diff, so it is unusable."""
+    capped = {
+        "behind_by": 1,
+        "merge_base_commit": {"sha": "mb0"},
+        "files": [{"filename": "f%d" % i} for i in range(M.COMPARE_FILE_CAP)],
+    }
+    rel = M.fetch_relation({"head": "b"}, "tok", request=lambda u, t, **k: capped)
+    check(
+        "a capped file list reads as None, not as a short list",
+        rel["pr_files"] is None and rel["behind"] == 1,
+        "a short list makes the set-difference silently wrong",
+    )
+
+
+def test_fetch_base_touched_reads_once_per_fork_point():
+    calls = {"n": 0}
+
+    def counting(url, token, **kw):
+        calls["n"] += 1
+        return {"files": [{"filename": ".github/workflows/a.yml"}]}
+
+    cache = {}
+    a = M.fetch_base_touched("mb0", "tok", cache, request=counting)
+    b = M.fetch_base_touched("mb0", "tok", cache, request=counting)
+    check("the files are read", a == [".github/workflows/a.yml"] and a == b)
+    check(
+        "a shared fork point costs one request, not one per PR",
+        calls["n"] == 1,
+        "got %d" % calls["n"],
+    )
+
+
+def test_fetch_base_touched_without_a_fork_point_is_none():
+    check(
+        "no merge base is not an empty file set",
+        M.fetch_base_touched(None, "tok", {}) is None,
+        "an empty set would read as 'no critical hits'",
+    )
 
 
 class _FakeResponse:

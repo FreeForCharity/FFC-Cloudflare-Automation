@@ -763,10 +763,10 @@ The scheduled Conductor runs on Windows 11 + git-bash. These cost real time to r
   - **Current baseline — run 243, 2026-10-10, clean `main` at `a35e5a15`:** **130 modules, 2607 PASS
     / 198 FAIL, `harness crashed` 0, and `::error::workflow-logic tests failed:` names 28 modules.**
     Run 155's figures (`93 modules, 1698 PASS / 171 FAIL / 27 modules`) are kept only as the
-    previous reading; the suite has grown ~44% in assertions since, and **every merged PR that adds
-    tests invalidates a recorded count**, so treat any number here as the previous reading and
-    re-derive. This line exists because run 154 found the recorded 16 and measured 27, and a stale
-    baseline is what makes a branch's red look like a regression (**L61**).
+    previous reading; the suite has grown ~54% in assertions since (2607/1698), and **every merged
+    PR that adds tests invalidates a recorded count**, so treat any number here as the previous
+    reading and re-derive. This line exists because run 154 found the recorded 16 and measured 27,
+    and a stale baseline is what makes a branch's red look like a regression (**L61**).
   - **Count the failing set from the `::error::` line, never by grepping `FAIL`.** Six of the 27
     report a **truncated roster** instead of failures — `test_120_cutover_gh_errors.py` and
     `test_729_add_collaborator.py` print an outcome for **none** of their tests, and

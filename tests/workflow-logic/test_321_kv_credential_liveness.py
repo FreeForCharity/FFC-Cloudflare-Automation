@@ -341,6 +341,54 @@ def test_a_valid_registry_passes_the_guard():
     assert assert_probes(const("PROBES")) == const("PROBES")
 
 
+def test_zeffy_and_wpmudev_are_probed_on_their_read_all_copies():
+    named = {p["secret"]: p["kind"] for p in const("PROBES")}
+    assert named.get("read-all-ffc-zeffy-api-key") == "zeffy-token", named
+    assert named.get("read-all-ffc-wpmudev-ga-api-token") == "wpmudev-token", named
+
+
+def test_zeffy_probe_calls_the_read_lane_endpoint_with_bearer():
+    k = const("PROBE_KINDS")["zeffy-token"]
+    assert k["url"].startswith("https://api.zeffy.com/api/v1/campaigns"), k
+    assert k["authScheme"] == "bearer", k
+    # 401 is the only authoritative rejection; 403 stays unverified, as Cloudflare.
+    assert k["deadStatuses"] == [401], k
+
+
+def test_wpmudev_probe_sends_the_raw_key_on_the_hub_sites_endpoint():
+    k = const("PROBE_KINDS")["wpmudev-token"]
+    assert k["url"].startswith("https://wpmudev.com/api/hub/v1/sites"), k
+    # The Hub API names the header "AUTHORIZATION" and takes the bare key, not a
+    # Bearer token (it answers the Bearer form with 403).
+    assert k["authScheme"] == "raw", k
+    assert k["deadStatuses"] == [401], k
+
+
+def test_a_401_on_the_new_kinds_is_dead_and_a_200_is_live():
+    for kind, secret in (
+        ("zeffy-token", "read-all-ffc-zeffy-api-key"),
+        ("wpmudev-token", "read-all-ffc-wpmudev-ga-api-token"),
+    ):
+        assert classify({"secret": secret, "kind": kind, "httpStatus": 401}) == "DEAD"
+        assert classify({"secret": secret, "kind": kind, "httpStatus": 200}) == "LIVE"
+        # A 403 on a resource endpoint is not a rejection it observed.
+        assert classify({"secret": secret, "kind": kind, "httpStatus": 403}) == "UNVERIFIED"
+
+
+def test_the_workflow_builds_a_raw_authorization_header_for_raw_kinds():
+    """wpmudev-token must reach the Hub API as `Authorization: <key>`, not
+    `Authorization: Bearer <key>` (the Hub rejects the Bearer form with 403).
+    The library declares authScheme; the workflow is what honours it, so assert
+    the workflow branches on it rather than hardcoding Bearer for every probe."""
+    step = next(
+        s
+        for s in load_workflow(WF_FILE)["jobs"]["monitor"]["steps"]
+        if "probe liveness" in (s.get("name") or "")
+    )
+    assert "authScheme" in step["run"], step["run"][:400]
+    assert "'raw'" in step["run"], step["run"][:400]
+
+
 def test_an_unknown_kind_is_refused_by_the_guard():
     err = assert_probes([{"secret": "read-all-x", "kind": "ssh-key"}], expect_fail=True)
     assert "unknown probe kind" in err, err
@@ -351,7 +399,12 @@ def test_every_probe_url_is_https_on_an_allowlisted_host():
     for name, k in kinds.items():
         assert k["url"].startswith("https://"), (name, k)
         host = k["url"].split("/")[2]
-        assert host in ("api.github.com", "api.cloudflare.com"), (name, host)
+        assert host in (
+            "api.github.com",
+            "api.cloudflare.com",
+            "api.zeffy.com",
+            "wpmudev.com",
+        ), (name, host)
 
 
 def test_the_cloudflare_probe_does_not_use_the_user_token_verify_endpoint():
@@ -563,7 +616,7 @@ def test_the_workflow_masks_before_it_uses_a_fetched_value():
     )
     run = step["run"]
     assert "::add-mask::" in run, run[:200]
-    assert run.index("::add-mask::") < run.index("Authorization = "), (
+    assert run.index("::add-mask::") < run.index("$headers['Authorization']"), (
         "the value must be masked before it is put in a header"
     )
 

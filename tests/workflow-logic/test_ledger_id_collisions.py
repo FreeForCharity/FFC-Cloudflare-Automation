@@ -330,6 +330,147 @@ def test_the_guard_fails_closed_rather_than_clean_when_it_cannot_look():
     assert "not found" in output, output
 
 
+# --- the reads themselves ---------------------------------------------------
+#
+# `collision_problems` is pure and every test above drives it directly. These
+# cover the half that reaches the network, because this guard's verdict is an
+# ABSENCE ("no other open PR claims this id") and a truncated list read makes an
+# absence unfalsifiable: the finding disappears and the guard prints OK. Copilot
+# found this on #1590 (threads r4236444130).
+#
+# The stub serves output that is ALREADY CONCATENATED across pages, because that
+# is what `--paginate` hands the caller -- one filter run per page, outputs joined.
+
+
+class _RecordingGh:
+    """A `_run` stand-in: records argv, serves canned multi-page output."""
+
+    def __init__(self, pull_lines, files_lines, ledger_text):
+        self.calls: list[list[str]] = []
+        self._pull_lines = pull_lines
+        self._files_lines = files_lines
+        self._ledger_text = ledger_text
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        endpoint = next(a for a in args if a.startswith("repos/"))
+        if "/pulls?" in endpoint:
+            return "".join(f"{line}\n" for line in self._pull_lines)
+        if "/files?" in endpoint:
+            return "".join(f"{line}\n" for line in self._files_lines)
+        if "/contents/" in endpoint:
+            return self._ledger_text
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+
+def _gather_with(pull_lines, files_lines=None, me="#1"):
+    """`gather_siblings` against a stubbed `_run`; returns (siblings, recorder)."""
+    fake = _RecordingGh(
+        pull_lines,
+        [guard.LEDGER_PATH] if files_lines is None else files_lines,
+        _ledger((352,)),
+    )
+    original = guard._run
+    guard._run = fake
+    try:
+        return guard.gather_siblings("FreeForCharity/FFC-Cloudflare-Automation", me), fake
+    finally:
+        guard._run = original
+
+
+def test_every_list_read_is_paginated():
+    """A `per_page=` endpoint here must carry `--paginate`.
+
+    `per_page=100` is a ceiling, not a promise, and a truncated page is
+    indistinguishable from a complete one. Because the only thing this guard ever
+    concludes is that an id is unclaimed, a dropped sibling does not degrade the
+    check -- it reverses it, and prints `OK`.
+    """
+    _, fake = _gather_with(["7 deadbeef"])
+    listish = [c for c in fake.calls if any("per_page=" in a for a in c)]
+    assert listish, f"expected at least one list read, got {fake.calls}"
+    for call in listish:
+        endpoint = next(a for a in call if a.startswith("repos/"))
+        assert "--paginate" in call, (
+            f"the list read of {endpoint} is unpaginated, so it cannot support "
+            f"this guard's absence claim (AGENTS.md: 'An unpaginated list read "
+            f"cannot support an ABSENCE claim'); argv was {call}"
+        )
+
+
+def test_no_paginated_read_builds_an_array_in_its_jq():
+    """`--paginate` plus `[.[] | ...]` emits `[...][...]`, which is not JSON.
+
+    This is the naive fix for the test above and it fails in a place far from its
+    cause -- `json.loads` reports a byte offset inside page two. Pinned so the
+    array-building form cannot come back while the pagination flag stays.
+    """
+    _, fake = _gather_with(["7 deadbeef"])
+    for call in fake.calls:
+        if "--paginate" not in call or "--jq" not in call:
+            continue
+        jq = call[call.index("--jq") + 1]
+        assert not jq.lstrip().startswith("["), (
+            f"paginated read uses an array-building jq filter {jq!r}; "
+            f"`--paginate` runs the filter once per page, so this emits "
+            f"concatenated arrays and is not valid JSON (CLAUDE.md). Use a "
+            f"streaming filter that prints one line per item."
+        )
+
+
+def test_an_open_PR_past_the_FIRST_PAGE_is_still_compared():
+    """A sibling beyond item 100 must survive into the comparison set.
+
+    The companion to the argv assertions: those prove every page is requested,
+    this proves the parse keeps what the later pages carried. A reader that
+    JSON-decoded the concatenated output, or sliced to one page, fails here.
+    """
+    pull_lines = [f"{n} sha{n}" for n in range(200, 340)]
+    assert len(pull_lines) > 100, "fixture must outrun a single page to mean anything"
+    siblings, _ = _gather_with(pull_lines)
+    assert "#339" in siblings, (
+        f"the last PR in a {len(pull_lines)}-entry list was dropped; "
+        f"collected {sorted(siblings)[:5]}... ({len(siblings)} total)"
+    )
+    assert len(siblings) == len(pull_lines), (
+        f"expected all {len(pull_lines)} siblings, got {len(siblings)}"
+    )
+
+
+def test_a_ledger_edit_past_the_FIRST_PAGE_of_a_siblings_files_is_still_seen():
+    """The ledger as file 140 of a sibling must not read as "does not touch it".
+
+    This is the quieter half of the same defect. The sibling is not reported as
+    unreadable, it is dropped from `siblings` -- and `checked` then names the
+    remaining PRs as the ones examined, so the output positively asserts a
+    comparison that never happened.
+    """
+    files = [f"docs/filler-{i}.md" for i in range(139)] + [guard.LEDGER_PATH]
+    assert len(files) > 100, "fixture must outrun a single page to mean anything"
+    siblings, _ = _gather_with(["7 deadbeef"], files_lines=files)
+    assert "#7" in siblings, (
+        f"a sibling whose ledger edit sits at file {len(files)} was treated as "
+        f"not touching the ledger; collected {sorted(siblings)}"
+    )
+
+
+def test_an_unreadable_row_in_the_open_PR_list_RAISES_rather_than_skipping_it():
+    """A row this parser cannot read is a PR it cannot compare -- so, fail closed.
+
+    Skipping the line would be the quiet direction again: one fewer sibling in
+    the set, no error, and a clean verdict. `main()` turns this into exit 2.
+    """
+    try:
+        _gather_with(["7 deadbeef", "this is not a row", "9 cafe"])
+    except RuntimeError as exc:
+        assert "unparseable" in str(exc), f"wrong error text: {exc}"
+    else:
+        raise AssertionError(
+            "an unparseable row in the open-PR list was skipped silently; it must "
+            "raise so main() can fail closed"
+        )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

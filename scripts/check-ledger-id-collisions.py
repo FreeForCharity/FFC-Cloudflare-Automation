@@ -190,31 +190,66 @@ def _this_pr() -> str:
 def gather_siblings(repo: str, me: str) -> dict[str, str]:
     """Every other open PR's ledger text, keyed by `#<number>`.
 
-    Only PRs that actually touch the ledger are fetched, so the usual cost is one
-    list call. Raises if any part of the read fails.
+    Only PRs that actually touch the ledger have their ledger fetched, so the
+    usual cost is the list read plus one `/files` read per open PR.
+
+    BOTH list reads are paginated, and that is load-bearing rather than tidiness.
+    `per_page=100` is a maximum and not a guarantee (AGENTS.md: "An unpaginated
+    list read cannot support an ABSENCE claim"), and *every* verdict this guard
+    reports rests on an absence -- "no other open PR claims this id". So a 101st
+    open PR falling off page one does not merely weaken the check, it inverts it:
+    a real collision renders as `OK: no ledger id on #N is claimed by another
+    open PR`. That is the precise shape #993's fail-closed rule exists to
+    prevent -- an unread input reported as a clean one -- reached here through a
+    truncation rather than through an error, so nothing is raised and no page is
+    missing from the caller's point of view. The same applies one level down: a
+    sibling whose `/files` list runs past a page would have its ledger edit read
+    as "this PR does not touch the ledger", which silently removes it from the
+    comparison set that `checked` then reports as examined.
+
+    The jq filters are deliberately STREAMING -- one line per item, never an
+    array. `--paginate` runs the filter once per page and concatenates the
+    outputs, so an array-building filter (`[.[] | ...]`) emits `[...][...]`,
+    which is not valid JSON; `json.loads` rejects it with a byte offset in the
+    middle of page two, nowhere near the command that caused it. See CLAUDE.md's
+    `--paginate` section. That trap is the reason this function parses lines
+    instead of JSON, and `test_ledger_id_collisions.py` asserts no paginated read
+    here ever grows an array-building filter back.
+
+    Raises if any part of the read fails.
     """
-    listed = json.loads(
-        _run(
-            [
-                "gh",
-                "api",
-                f"repos/{repo}/pulls?state=open&per_page=100",
-                "--jq",
-                "[.[] | {number, head: .head.sha}]",
-            ]
-        )
-        or "[]"
-    )
     mine = re.sub(r"\D", "", me)
     siblings: dict[str, str] = {}
-    for pull in listed:
-        number = str(pull.get("number"))
+    listed = _run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls?state=open&per_page=100",
+            "--jq",
+            r'.[] | "\(.number) \(.head.sha)"',
+        ]
+    )
+    for raw in listed.splitlines():
+        entry = raw.strip()
+        if not entry:
+            continue
+        number, _, head = entry.partition(" ")
+        head = head.strip()
+        if not number.isdigit() or not head:
+            raise RuntimeError(
+                f"unparseable row in the open-PR list: {entry!r} — expected "
+                f"`<number> <head sha>`. A row this function cannot read is a PR "
+                f"it cannot compare against, so it fails closed rather than "
+                f"skipping the line."
+            )
         if number == mine:
             continue
         files = _run(
             [
                 "gh",
                 "api",
+                "--paginate",
                 f"repos/{repo}/pulls/{number}/files?per_page=100",
                 "--jq",
                 ".[].filename",
@@ -226,7 +261,7 @@ def gather_siblings(repo: str, me: str) -> dict[str, str]:
             [
                 "gh",
                 "api",
-                f"repos/{repo}/contents/{LEDGER_PATH}?ref={pull['head']}",
+                f"repos/{repo}/contents/{LEDGER_PATH}?ref={head}",
                 "-H",
                 "Accept: application/vnd.github.raw",
             ]

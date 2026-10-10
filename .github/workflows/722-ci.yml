@@ -28,6 +28,11 @@ jobs:
       # (GET /repos/:owner/:repo/environments) — the scope workflow 730 uses for
       # the same endpoint. Read-only; nothing in this job deploys.
       actions: read
+      # Listing the OTHER open PRs and reading their copy of the lessons ledger
+      # (GET /pulls, /pulls/:n/files, /contents). Needed because a duplicate
+      # ledger id is invisible to a check that only sees one branch — see the
+      # "Validate no ledger id collides with another open PR" step below.
+      pull-requests: read
 
     steps:
       - name: Checkout repository
@@ -491,6 +496,35 @@ jobs:
             node "scripts/$s.mjs" --self-test
             echo "::endgroup::"
           done
+
+      - name: Validate no ledger id collides with another open PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          # The one check in this job that cannot be answered from our own
+          # files. Every other validator compares this tree to itself; a
+          # duplicate lessons-ledger id exists only in the UNION of two
+          # branches, so each PR reads 79 PASS / 0 FAIL while the pair ships
+          # two rows with the same id. Measured on #1584 + #1586 (run 240),
+          # where the colliding ids were L352-L355 against L352.
+          #
+          # The merge queue does catch it, on the merge GROUP — so the red
+          # names neither PR's own change and costs a full ~17-minute cycle.
+          # This step moves that discovery onto the PR that can act on it.
+          #
+          # Read-only, and skipped outside `pull_request` because there is no
+          # sibling set to compare against on a push or a merge group. It fails
+          # CLOSED on an unreadable PR list (#993): "we could not look" must
+          # never render as "nothing found".
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -qx 'docs/lessons-ledger.md'; then
+            python3 scripts/check-ledger-id-collisions.py
+          else
+            echo "docs/lessons-ledger.md untouched by this PR — nothing to compare."
+          fi
 
       - name: Check formatting (Prettier)
         run: |

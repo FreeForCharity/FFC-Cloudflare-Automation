@@ -53,14 +53,16 @@ GitHub environments offer two independent protections. The proposal is to use th
 everywhere and the first only where it earns its click:
 
 - **Required reviewers**: a person approves each run.
-- **Deployment branch policy, "Protected branches only"**: the job runs only from `main`.
+- **Deployment branch policy, "Selected branches" = `main`**: the job runs only from `main`. Use a
+  named `main` policy rather than "Protected branches only", which is defined by branch protection
+  rules and may not count the rulesets this org uses instead.
 
 The branch policy is what makes removing reviewers safe. Today a `workflow_dispatch` can name any
 ref, and the checked-out scripts come from that ref. That is a branch dispatch running **unreviewed
 code with production credentials**, flagged in
-[`gate-review-consolidation.md`](gate-review-consolidation.md). With "protected branches only" on
-every write environment, the only code that can hold a credential is code that passed review on
-`main`. That is the exact meaning of "hard security on commits to `main`".
+[`gate-review-consolidation.md`](gate-review-consolidation.md). With the `main`-only policy on every
+write environment, the only code that can hold a credential is code that passed review on `main`.
+That is the exact meaning of "hard security on commits to `main`".
 
 | Tier                | Protection                           | What belongs here                                                                                                                                                                                                                                                                                                  |
 | ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -98,8 +100,8 @@ every write environment, the only code that can hold a credential is code that p
 
 - **Extend `scripts/check-environment-protection.py`** (CI, #993) to assert the second protection
   too: every write environment, Tier 1 or Tier 2, must carry a deployment branch policy limited to
-  protected branches. Today it checks only `required_reviewers`, so a Tier 1 environment created
-  without the branch policy would be a fully open lane with the suite green.
+  `main`. Today it checks only `required_reviewers`, so a Tier 1 environment created without the
+  branch policy would be a fully open lane with the suite green.
 - **Re-run `730. Repo - Audit Environment Approval Gates`** after the settings change, and update §2
   of `workflow-safety-and-approvals.md` from its output.
 
@@ -237,8 +239,8 @@ These turn the tiers into behaviour for the routines that do the work:
 ## Decisions for Clarke
 
 1. Approve the tier split, and the Tier 2 list above, adding or removing items as you see fit.
-2. Create the Tier 1 environments and set **"Protected branches only"** on every write environment
-   (GitHub settings; a session cannot reach the environments API through the proxy).
+2. Create the Tier 1 environments and limit every write environment to the `main` branch (GitHub
+   settings; a session cannot reach the environments API through the proxy).
 3. Confirm the Claude GitHub App covers **All repositories** in the org.
 4. Decide whether fleet merges after a green canary may proceed without a per-repo instruction
    (workflow C).

@@ -41,3 +41,34 @@ data/dependabot-affected-repos.json
 /assets/clone-content-lib.ts
 /assets/clone-enhance.tsx
 /assets/ffc-footer.tsx
+
+# The lessons ledger: keep the table's cell padding AS-AUTHORED.
+#
+# Prettier aligns every cell of a markdown table to the widest cell in its
+# column. The ledger's lesson table is ~145 rows whose columns are already
+# 2131/856/945 characters wide, so a new row with a wider `evidence` or
+# `enforced by` cell re-pads EVERY OTHER ROW: measured with the CI-pinned
+# prettier@3.8.1, inserting one row with a 1200-char final cell rewrites 145
+# rows and widens the column to 1205 (#1584 did exactly this: 149/145 numstat
+# for one new lesson, columns 856->964 and 945->1082).
+#
+# Two costs, both paid repeatedly:
+#   * every ledger PR conflicts with every other ledger PR, for a purely
+#     cosmetic reason -- a `+1/-0` change collides with a `+1/-0` change, and
+#     the conflict hunk spans the whole table, so a union resolution duplicates
+#     all 145 rows. The conflict signal stops carrying any information about
+#     whether two ledger PRs are actually compatible.
+#   * the one row that is genuinely new is buried in a ~150-line diff.
+#
+# CI cannot see this churn: each padding width is canonical FOR ITS OWN
+# CONTENT, so `--check` exits 0 on the narrow table and on the re-padded one
+# alike. Exempting the file is what stops the re-pad; the table stays readable
+# because GitHub renders a ragged source table identically.
+#
+# This also removes the destructive half of #1055 -- prettier hard-wrapping a
+# row that sits one blank line adrift from its table, which destroys the lesson
+# while every guard stays green. `orphaned_row_problems` still reports the
+# adrift row; prettier just no longer eats it first.
+#
+# Guarded by tests/workflow-logic/test_ledger_is_exempt_from_prettier.py.
+docs/lessons-ledger.md

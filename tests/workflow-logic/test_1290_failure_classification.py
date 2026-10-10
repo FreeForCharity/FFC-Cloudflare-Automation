@@ -331,6 +331,58 @@ def test_a_green_sweep_prints_no_breakdown():
     assert "All 1 workflow-logic test modules passed." in out, out
 
 
+# --------------------------------------------------------------------------
+# The platform tag. A count without its host is not a measurement.
+# --------------------------------------------------------------------------
+
+
+def test_both_summary_lines_name_the_platform():
+    """A pass/fail count is meaningless without the host that produced it.
+
+    Two agents published figures for the same commit on 2026-10-10 -- 196 FAIL
+    from the Conductor's Windows host, 0 from a Linux runner -- and both were
+    right. The tag is on BOTH lines because a green sweep is exactly as
+    ambiguous as a red one: `main` passes on ubuntu and fails on Windows by ~28
+    modules for documented host reasons (#1119).
+    """
+    red = "\n".join(
+        run_all.summary_lines([("test_real.py", run_all.ASSERTION, "reported FAIL for test_b")])
+    )
+    assert run_all.platform_tag() in red, red
+    assert sys.platform in red, red
+
+    with tempfile.TemporaryDirectory(prefix="classify-plat-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(
+            d,
+            "test_green.py",
+            "import sys\n\ndef test_a():\n    assert True\n" + RUNNER,
+        )
+        code, out = _run_all_on(d)
+    assert code == 0, out
+    # The green line carries it too, and the full stop survives ahead of it --
+    # AGENTS.md greps `^All [0-9]+ workflow-logic test modules passed\.`
+    assert "All 1 workflow-logic test modules passed." in out, out
+    assert "workflow-logic test modules passed. [platform=" in out, out
+    # A green sweep still classifies nothing.
+    assert "failure breakdown" not in out, out
+
+
+def test_the_platform_tag_does_not_displace_the_canonical_last_line():
+    """The module list must stay the terminal line; AGENTS.md depends on it."""
+    with tempfile.TemporaryDirectory(prefix="classify-plat2-") as tmp:
+        d = pathlib.Path(tmp)
+        _write(d, "test_real_failure.py", ASSERTION_MODULE)
+        code, out = _run_all_on(d)
+    assert code == 1, out
+    last = [line for line in out.splitlines() if line.strip()][-1]
+    assert last.startswith("::error::workflow-logic tests failed:"), (
+        f"the canonical line must stay last\n{out}"
+    )
+    assert "[platform=" not in last, f"the tag belongs on the breakdown, not here\n{last}"
+    assert "[platform=" in out, f"...but it must be present somewhere\n{out}"
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

@@ -176,7 +176,11 @@ const MARKER = '<!-- conductor-liveness -->';
 const HISTORY_PREFIX = '<!-- conductor-liveness:history ';
 const HISTORY_SUFFIX = ' -->';
 
-const ISSUE_TITLE = 'Conductor liveness: the supervising routine may have stopped';
+// The stem every title starts with, so the rolling issue stays recognisable in a
+// listing. What follows it is rendered from the signals that actually fired --
+// see `issueTitle`. This used to be the WHOLE title, as the fixed string
+// 'Conductor liveness: the supervising routine may have stopped'.
+const TITLE_PREFIX = 'Conductor liveness';
 const ISSUE_LABELS = ['bug', 'agentic-os'];
 
 /**
@@ -626,6 +630,50 @@ function summary(a) {
   );
 }
 
+/**
+ * Title for the rolling issue, naming the signals that actually fired.
+ *
+ * The title used to be a fixed string -- 'the supervising routine may have
+ * stopped' -- for every finding this monitor can report. Four signals can fire
+ * here and only ONE of them is about the routine having stopped, so three
+ * quarters of the possible alerts asserted a cause their own body contradicted.
+ * Measured on #1598: `conductor-silence` read **OK, 0.7h**, the finding was
+ * `merge-silence` WARN at 24.2h, and the title still said the routine may have
+ * stopped. #1416, #1433 and #1453 carry the same title, byte-identical,
+ * whatever fired.
+ *
+ * That is the alert-fatigue failure this repo already names in
+ * `scripts/audit-agentic-os-board.py`: "an alert that fires most days is one
+ * nobody reads, and the day it catches a real six-hour gap it will look like
+ * the twenty days before it." A title that always names the most alarming
+ * cause is the same defect reached through wording rather than frequency -- a
+ * reader who checks the host, finds the routine running, and closes the tab has
+ * been trained to dismiss the next one.
+ *
+ * Safe to vary because the upsert finds its issue by `MARKER`, never by title
+ * (see `findRollingIssue`) -- so changing the text cannot orphan a rolling
+ * issue or open a duplicate.
+ *
+ * ALERT first, then WARN, then UNKNOWN, so the worst-standing signal leads.
+ * Truncated at 240 chars: GitHub's limit is 256 and a title that is silently
+ * rejected would take the whole `issues.create` call down with it.
+ *
+ * @param {object} a analysis from analyze()
+ * @returns {string} the issue title
+ */
+function issueTitle(a) {
+  const firing = [...(a.alert || []), ...(a.warn || []), ...(a.unknown || [])];
+  // Defensive: `hasFinding` false takes the close path and never titles an
+  // issue, so this branch is unreachable from the workflow. It exists so a
+  // future caller cannot get an empty suffix.
+  if (firing.length === 0) {
+    return `${TITLE_PREFIX}: all signals OK`;
+  }
+  const named = firing.map((s) => `${s.name} ${s.verdict}`).join(', ');
+  const title = `${TITLE_PREFIX}: ${named}`;
+  return title.length > 240 ? `${title.slice(0, 237)}...` : title;
+}
+
 const _ICON = { OK: '✅', WARN: '⚠️', ALERT: '🚨', UNKNOWN: '❓' };
 
 function _row(s) {
@@ -720,8 +768,9 @@ module.exports = {
   CONDUCTOR_RE,
   MARKER,
   HISTORY_PREFIX,
-  ISSUE_TITLE,
+  TITLE_PREFIX,
   ISSUE_LABELS,
+  issueTitle,
   ageInHours,
   parseConductorComments,
   classifySilence,

@@ -79,7 +79,7 @@ every write environment, the only code that can hold a credential is code that p
 
   ```yaml
   environment:
-    ${{ (inputs.dry_run == 'true' || needs.classify.outputs.live_site == 'false') &&
+    ${{ (inputs.dry_run == true || needs.classify.outputs.live_site == 'false') &&
     'cloudflare-prod-provision' || 'cloudflare-prod-write' }}
   ```
 

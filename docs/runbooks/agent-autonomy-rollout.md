@@ -128,7 +128,7 @@ Create it at <https://claude.ai/code/routines> (or `/schedule` in a CLI session)
 
 ```bash
 grep -lE "^\s*(pull_request|merge_group):" .github/workflows/*.yml \
-  | xargs grep -lE "environment:\s*(cloudflare-prod-write|whmcs-prod|github-prod|google-prod-write|m365-prod|wpmudev-prod)\b"
+  | xargs grep -lE "environment:\s*(cloudflare-prod-write|whmcs-prod|github-prod|google-prod-write|m365-prod|wpmudev-prod)\s*(#.*)?$"
 ```
 
 Each hit gets read before 4b. Expect none; any hit is a job to move or an exception to record.

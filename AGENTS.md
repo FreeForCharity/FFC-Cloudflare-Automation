@@ -734,8 +734,8 @@ also drew no AI review while they waited. Now a worker marks its own PR ready fo
 CI is green, and works the reviews it draws (see **Every agent marks its own PR ready** under
 [Merging](#merging-validated-flow--do-not-bypass)). The only step left for the Conductor is the
 enqueue, under the merge condition in **Who merges** (a live session may enqueue under the same
-condition), so a sweep that finds complete PRs still in draft has found worker work, not a Conductor
-wait.
+condition), so a sweep that finds green, resolved PRs still in draft has found worker work, not a
+Conductor wait.
 
 **A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
 reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even

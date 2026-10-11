@@ -701,15 +701,24 @@ def test_the_declined_gate_note_is_not_doubled_by_an_age_note():
     assert "last successful scheduled run" not in body, body
 
 
-def test_the_age_note_reuses_the_suppression_paths_lookup():
-    # Budget: the gate path already paid for `greenAge` to decide whether the
-    # suppression still holds. `green` is hoisted so the line builder reuses that
-    # result rather than asking twice in one sweep.
-    r = _run(
+def test_neither_failure_shape_pays_for_the_success_lookup_twice():
+    # Budget: each shape needs the success history for exactly one reason, so each
+    # must ask exactly once. The gate path asks to decide whether its suppression
+    # still holds and then states the duration itself; the ordinary path asks only
+    # to build the age note. Two calls in one sweep would be a refactor paying
+    # twice for one fact.
+    #
+    # This replaces a test that asserted the line builder REUSED the gate path's
+    # lookup. It could not fail: on the gate path `gateNote` is set, so the builder
+    # returns before `greenAge`, and the "reuse" was unreachable. Dropping the
+    # reuse flipped no test, which is how the dead code was found — a guard whose
+    # mutation changes nothing is measuring nothing.
+    gate = _run(
         "cancelled", open_issues=[_alert_issue(7)], jobs=_declined_gate_jobs(), last_green=41
     )
-    probes = [c for c in r["listWorkflowRunsCalls"] if c["status"] == "success"]
-    assert len(probes) == 1, probes
+    assert len([c for c in gate["listWorkflowRunsCalls"] if c["status"] == "success"]) == 1, gate
+    job = _run("failure", open_issues=[_alert_issue(7)], last_green=11)
+    assert len([c for c in job["listWorkflowRunsCalls"] if c["status"] == "success"]) == 1, job
 
 
 def test_the_success_lookup_is_scoped_like_the_poll():

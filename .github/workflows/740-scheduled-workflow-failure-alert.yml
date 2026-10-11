@@ -502,9 +502,6 @@ jobs:
               // So keep the suppression, but bound it: it holds only while the workflow is
               // still actually succeeding (see STALE_SUCCESS_DAYS above).
               let gateNote = '';
-              // Hoisted so the suppression path's lookup can be REUSED by the age note below
-              // rather than paid twice for one sweep.
-              let green = null;
               if (run.conclusion !== 'success') {
                 let jobs = null;
                 try {
@@ -521,7 +518,7 @@ jobs:
                   const failed = jobs.filter(j => j.conclusion === 'failure');
                   const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
                   if (failed.length === 0 && cancelled.length > 0) {
-                    green = await greenAge(t, workflowId, branch);
+                    const green = await greenAge(t, workflowId, branch);
                     if (green.days <= STALE_SUCCESS_DAYS) {
                       stats.benign++;
                       core.notice(`Not alerting on ${where}: no job failed and ${cancelled.length} were cancelled (declined approval gate, or a superseded run), and it last succeeded ${green.days}d ago. ${run.html_url}`);
@@ -619,12 +616,20 @@ jobs:
               // 48×/day against a 5,000/hr pool shared with every other agent. A line is
               // written at most ONCE PER FAILING RUN — the `recordedRun` check below returns
               // before this is ever called on the other 47 sweeps — so the cost is ~1 extra
-              // call per broken workflow per DAY, not per sweep. `green` is reused when the
-              // suppression path above already paid for it.
+              // call per broken workflow per DAY, not per sweep.
+              //
+              // And it is skipped entirely on the gate path, which has already stated its own
+              // duration inside `gateNote` in a sentence tuned to that remedy. So the two
+              // shapes each pay exactly one lookup and neither pays two. An earlier draft
+              // hoisted `green` to "reuse" the suppression path's result here; that reuse is
+              // unreachable — whenever `green` is set we are on the gate path, where
+              // `!gateNote` is false — and the test written to guard it could not fail. Caught
+              // by mutation (dropping the reuse flipped nothing), which is the whole reason the
+              // mutation step exists.
               const buildLine = async () => {
                 let ageNote = '';
                 if (!gateNote) {
-                  if (!green) green = await greenAge(t, workflowId, branch);
+                  const green = await greenAge(t, workflowId, branch);
                   ageNote = green.why
                     ? ` — ${green.why}`
                     : ` — last successful scheduled run ${green.at} (${green.days}d ago)`;

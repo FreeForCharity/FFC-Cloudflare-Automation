@@ -2384,9 +2384,17 @@ def test_post_edit_ledger_citation_nudge():
     # ledger_hint's repo-boundary rule: the Conductor edits five clones with
     # the hub's hooks loaded, so a basename match in another repo would be a
     # confident hint about the wrong ledger.
+    #
+    # The sibling path must carry a basename this ledger DOES cite. An
+    # uncited basename (`package.json`) passes whether or not the boundary
+    # check exists, because ledger_citing_rows returns [] either way -- the
+    # first draft of this case used one, and dropping the check flipped
+    # nothing. A case that cannot fail is measuring its own construction.
     outside = post_edit.ledger_hint(
-        os.path.join(os.path.dirname(REPO), "FFC-IN-ffcadmin.org", "package.json"), REPO)
-    ok("a path outside the repo root is silent", outside is None, repr(outside))
+        os.path.join(os.path.dirname(REPO), "FFC-IN-freeforcharity.org",
+                     ".github", "workflows",
+                     "740-scheduled-workflow-failure-alert.yml"), REPO)
+    ok("a cited basename in a SIBLING clone is silent", outside is None, repr(outside))
 
     hint = post_edit.ledger_hint(os.path.join(REPO, "docs", "lessons-ledger.md"), REPO)
     ok("editing the ledger itself nudges",

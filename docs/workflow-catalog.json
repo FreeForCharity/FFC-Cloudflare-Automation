@@ -1180,6 +1180,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 232,
+      "title": "WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "232-whmcs-charity-lane-verdicts.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3)) and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE, with machine-readable reason codes, from the machine-checkable subset of the ffcadmin inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33: a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain, and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE. FraudLabs Pro is readable only through 228's own environment, so every row reports fraud_check: not_run. It accepts nothing and writes nothing to WHMCS.  Output is PII-free (this repo is public): order id, client id, pid, gate, org name, desired domain, verdict, reason codes, readiness score. Job summary table + the charity-lane-verdicts.json artifact; optionally the same table as a comment on `issue_number` (the 219 pattern).  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "read-only verdicts (`ACCEPT` / `NEED_INFO` / `ESCALATE` + reason codes) for Pending pid 16/33/40 orders; accepts nothing; PII-free output (ids, org name, desired domain, verdict, codes, readiness); public GETs to ProPublica and the org Facebook/LinkedIn pages; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

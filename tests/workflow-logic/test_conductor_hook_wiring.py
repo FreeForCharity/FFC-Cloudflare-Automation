@@ -1060,6 +1060,113 @@ def test_the_template_lets_the_conductor_promote_and_enqueue_but_never_admin_mer
     assert any("--admin" in rule and rule.startswith("Bash(gh pr merge") for rule in deny), deny
     assert not any("--admin" in rule for rule in allow), allow
 
+# --------------------------------------------------------------------------
+# Permissions drift (run 254). #1616 put Clarke's grants in the template; these
+# cover whether they have REACHED a session, which is a different question and
+# the one that was answered an hour late.
+# --------------------------------------------------------------------------
+
+
+def _wired_workspace(td: str, permissions: dict | None = None) -> pathlib.Path:
+    """A workspace whose guards pass both probes AND looks rendered from the template.
+
+    The `_comment` marker is what scopes the drift check to a Conductor
+    workspace, so a fixture without it is "not applicable" rather than wired or
+    drifted -- which is the correct answer for every other fixture in this module
+    and would make these five tests assert nothing. Read out of the template so
+    the fixture cannot drift from what `render()` actually writes.
+    """
+    ws = pathlib.Path(td)
+    guard = ws / "guard_bash.py"
+    behaving_guard(guard)
+    config = guard_config(str(guard))
+    config["_comment"] = json.loads(TEMPLATE.read_text(encoding="utf-8"))["_comment"]
+    if permissions is not None:
+        config["permissions"] = permissions
+    write_settings(ws, config)
+    return ws
+
+
+def test_a_wired_workspace_without_the_templates_grants_exits_3_not_1():
+    """The distinct exit code is the point, not the wording.
+
+    Run 254's step 0 read `rc != 0` as "unguarded" and nothing else. Collapsing
+    drift into 1 would send the next run hunting a hook defect that is not there,
+    while the guards it is worried about are demonstrably firing.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        ws = _wired_workspace(td)
+        proc = run("--workspace", str(ws))
+        assert proc.returncode == 3, (proc.returncode, proc.stdout)
+        assert "HOOKS: wired" in proc.stdout, proc.stdout
+        assert "PERMISSIONS: NOT WIRED" in proc.stdout, proc.stdout
+
+
+def test_a_workspace_carrying_every_declared_grant_is_permissions_wired():
+    with tempfile.TemporaryDirectory() as td:
+        declared = _vch().template_permissions()
+        ws = _wired_workspace(td, permissions={k: list(v) for k, v in declared.items()})
+        proc = run("--workspace", str(ws))
+        assert proc.returncode == 0, (proc.returncode, proc.stdout)
+        assert "PERMISSIONS: wired" in proc.stdout, proc.stdout
+
+
+def test_grants_split_across_settings_and_settings_local_are_unioned():
+    """The shallow-merge trap, and the Conductor's actual workspace shape.
+
+    `load_settings` merges with `dict.update`, so a `permissions` block in
+    `settings.local.json` REPLACES the one in `settings.json`. Reading drift off
+    that merged view reports a rule as missing because a *second* file also
+    carried permissions -- a false NOT WIRED on a correctly granted session,
+    which would teach the next run to ignore the line.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        declared = _vch().template_permissions()
+        allow = list(declared["allow"])
+        assert len(allow) >= 2, allow  # the split needs something to split
+        ws = _wired_workspace(
+            td, permissions={"allow": allow[:1], "deny": list(declared["deny"])}
+        )
+        write_settings(ws, {"permissions": {"allow": allow[1:]}}, name="settings.local.json")
+        proc = run("--workspace", str(ws))
+        assert proc.returncode == 0, (proc.returncode, proc.stdout)
+        assert "PERMISSIONS: wired" in proc.stdout, proc.stdout
+
+
+def test_a_template_declaring_nothing_leaves_the_check_silent():
+    """Fail-open is correct HERE, and only here.
+
+    The check asks "has the grant reached the session?". With no grant declared
+    there is nothing to reach it, so a red would block every bootstrap on a
+    repo-side edit to the template. Asserted against the parser rather than the
+    live template so it keeps testing the branch after someone edits the file.
+    """
+    vch = _vch()
+    report = {"wired": True}
+    with tempfile.TemporaryDirectory() as td:
+        original = vch.template_permissions
+        vch.template_permissions = lambda: {"allow": [], "deny": []}
+        try:
+            vch.check_permissions(pathlib.Path(td), report)
+        finally:
+            vch.template_permissions = original
+    assert report["permissions_wired"] is True, report
+    assert vch.exit_code(report) == 0, report
+    assert "none declared" in vch.permissions_line(report), vch.permissions_line(report)
+
+
+def test_the_drift_remedy_is_addressed_to_clarke_and_not_to_the_conductor():
+    """The whole lesson. The Conductor cannot run this remedy -- rendering its own
+    permission file is refused as `[Self-Modification]` -- so a remedy printed in
+    the usual voice would be followed, refused, and re-attempted every run."""
+    with tempfile.TemporaryDirectory() as td:
+        ws = _wired_workspace(td)
+        proc = run("--workspace", str(ws))
+        assert "@clarkemoyer" in proc.stdout, proc.stdout
+        assert "Self-Modification" in proc.stdout, proc.stdout
+        assert "--force" in proc.stdout, proc.stdout
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

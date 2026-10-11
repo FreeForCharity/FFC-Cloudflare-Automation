@@ -177,11 +177,14 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   merges go through the **merge queue**, which builds a merge group and re-runs those checks.
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
-- **Agents land their own PRs (Clarke, 2026-10-11).** When a PR you opened is green on its current
-  head, has no merge conflict, has every review thread resolved, and is **not** in a reserved lane,
-  promote it out of draft and enqueue it yourself. Do not wait for the Conductor or a human. Hard
-  security stays on `main` itself: the required checks, Copilot review and the merge queue still all
-  have to pass, and nothing here bypasses them.
+- **Who lands a PR (Clarke, 2026-10-11).** Unattended work is landed by the **Conductor**: a
+  scheduled cloud worker leaves its green PR as a draft for the Conductor to promote and enqueue
+  (see the landing sweep below). A **live session working with Clarke** lands its own PR: once the
+  PR is green on its current head, has no merge conflict, has every review thread resolved, and is
+  **not** in a reserved lane, promote it and enqueue it in the same turn. Do not end the turn with
+  "ready for you to queue". On 2026-10-10 a live session sat on green #1595 for 16 hours that way,
+  until Clarke asked why it had not merged. Hard security stays on `main` itself: the required
+  checks, Copilot review and the merge queue still all have to pass, and nothing here bypasses them.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
@@ -695,13 +698,11 @@ fifteen, which is exactly why they went unread. At minimum it must carry the old
 and the merge-activity reading above: both change even when the verdict does not, so a reader sees
 movement or its absence without diffing prose.
 
-**A complete PR is worker-actionable: promote and enqueue it (changed 2026-10-11).** Until then
-promotion belonged to the Conductor alone, so a worker could not clear the cap itself, however many
-runs it spent trying. Run 153 put it exactly: _"The verification was never the bottleneck. Promotion
-was, and promotion is ours alone."_ That bottleneck is now removed by rule: under **Agents land
-their own PRs** in [Merging](#merging-validated-flow--do-not-bypass), a complete PR outside a
-reserved lane is landing work. Promote it and enqueue it in the same run. The sweep's terminal state
-is therefore "no complete, unreserved PR left unqueued", not "0 worker-actionable PRs".
+**Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
+only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
+enqueue, and both are outside a sandbox worker's authority — so a worker cannot clear the cap
+itself, however many runs it spends trying. Run 153's finding put it exactly: _"The verification was
+never the bottleneck. Promotion was, and promotion is ours alone."_
 
 **A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
 reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even

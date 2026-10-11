@@ -1138,6 +1138,57 @@ so the run after you does not re-score it. When you need the answer sooner than 
 directly (most audit scripts run locally with `GH_TOKEN="$(gh auth token)"`) rather than
 reinterpreting a stale run. Ledger **L267**.
 
+**A dependency-advisory red is dated by the advisory's publication, not by your last commit.** The
+sibling trap to L267: there, a scheduled workflow held a verdict that predated your fix. Here it
+holds a verdict that postdates nothing at all — no code changed, and the repo went red anyway.
+`pnpm audit --audit-level high` compares an unchanged lockfile against a database that moves without
+you, so the transition from green to red carries **no commit to blame**, and every instinct that
+says "find what broke it" is pointed at the wrong object.
+
+Measured on 2026-10-11 across three repos. `FFC-IN-ffcadmin.org` and `FFC-EX-canary` both ran their
+daily `Security Audit` green on **2026-09-30** and red on **2026-10-01**, and stayed red for 11
+consecutive scheduled runs. Neither repo's `next` pin moved. What moved was
+[`GHSA-vcvr-r3jv-pc5j`](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), published
+**2026-09-30T14:48:30Z** — after that day's cron, before the next one. Two independent repos
+flipping on the same tick is the signature: a code change cannot red-line repos that share no
+commit, but an advisory covering a version range they both satisfy does it to all of them at once.
+
+The same measurement produced the second half of the rule. `ffcadmin` **was** remediated — it moved
+to `16.3.6`, exactly the patch floor for the 09-30 critical — and it is still red today, because
+[`GHSA-cjq9-62q9-8jv4`](https://github.com/advisories/GHSA-cjq9-62q9-8jv4) published
+**2026-10-07T20:30:55Z** and moved the floor to `16.3.8`. So a repo can be correctly fixed and go
+red again a week later with no regression, and the rolling alert issue shows one unbroken 11-day
+failure streak across **two different causes**. Scoring that streak as a single outage — or as a fix
+that did not work — is wrong in both directions. (The mechanical half of this is #1152: 740 records
+the run conclusion and not the cause, so a failure that changes cause reads as the same outage
+continuing.)
+
+What to do instead, before you attribute a `Security Audit` or `audit`-class red to anything:
+
+1. **Read the repo's open Dependabot alerts and the newest `published_at` among them.** One call:
+   `gh api repos/OWNER/REPO/dependabot/alerts?state=open --jq '...'`, and
+   `gh api advisories/GHSA-xxxx --jq '.published_at, .severity'` for the dates. If the newest
+   publication falls between the last green tick and the first red one, the advisory is your cause
+   and **no commit is implicated**.
+2. **Date the streak by cause, not by colour.** Use the workflow endpoint
+   (`actions/workflows/<id>/runs?event=schedule`), not the repo run feed — the repo feed serves a
+   slice capped across all workflows, which under-reports a daily job's history to a day or two.
+3. **Separate inherent severity from reachability before escalating.** A `critical` from Dependabot
+   is the advisory's severity, not this deployment's exposure. Every FFC site builds
+   `output: 'export'` with `images.unoptimized: true` and ships static files to Pages — there is no
+   Next.js server, route handler or middleware in production, so the server-side RCE paths in these
+   advisories are **not reachable on the live sites**. Both templates carry that config and
+   reference `next/og` in zero files, so the whole FFC-EX fleet inherits it. These bumps are
+   CI-greening and build-runner hygiene. They are real work and they are **not** a production
+   incident, and paging a human as though they were spends credibility that the next real incident
+   needs.
+4. **Check whether an open issue already says all of this.** #1511's body carried the reachability
+   analysis in §"Severity: fix the CI, do not panic about production" from 2026-10-09; run 250's END
+   nonetheless escalated the same facts as an unqualified 🚨, and runs 251 and 252 carried the
+   escalation forward before run 252 re-derived the analysis from scratch and found it already
+   written. A security escalation whose premise contradicts an open `priority: high` issue in the
+   same repo is a regression against your own prior work, not a discovery.
+
 ## Key docs
 
 | Doc                                                            | What                                                                                                |

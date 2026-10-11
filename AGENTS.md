@@ -184,31 +184,48 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   Copilot or a human: fix the real findings, answer the rest, resolve the threads, and re-check
   after each push (reviewers re-review). Opening a PR as a draft while CI is still running is fine;
   leaving it a draft after CI is green is not.
-- **Who merges (Clarke, 2026-10-11): no agent turns on auto-merge.** On this repo, auto-merge is not
-  a convenience flag. With a merge queue, "auto-merge" means _enqueue the moment the required checks
-  pass_, and the only things `main` requires are **Validate Repository**, **Phantom Revert Guard**
-  and resolved review threads, with **0 approving reviews**. AI reviews are requested but never
-  required: a thread blocks only once it exists. So auto-merge set when a PR is opened or promoted
-  lets it land as soon as CI is green, often before Gemini, Codex or Copilot has posted anything,
-  and the agent that set it has in effect merged its own PR. Workers and live sessions therefore
-  never set auto-merge (`gh pr merge --auto`, `ccr/auto_merge`, `enablePullRequestAutoMerge`) and
-  never enqueue. The **Conductor** enqueues a PR only after it has seen the reviews land: green,
-  reviewed, conflict-free, every thread resolved (see the landing sweep below). It enqueues at that
-  moment, never ahead of the reviews. A live session working with Clarke leaves a green, reviewed PR
-  for the Conductor or for Clarke and says so; it does not enqueue it. Hard security stays on `main`
-  itself, and nothing here bypasses the required checks or the merge queue.
+- **Who merges (Clarke, 2026-10-11): the Conductor or a live session, after review, never by
+  auto-merge.** A live session working with Clarke counts as a human session: he is present and the
+  work is being discussed. So either the **Conductor** or a **live session** may review a PR and
+  enqueue it. A **scheduled worker** never enqueues its own PR. No agent turns on auto-merge
+  (`gh pr merge --auto` on a PR that is not yet ready, `ccr/auto_merge`,
+  `enablePullRequestAutoMerge`). With a merge queue, auto-merge means _enqueue the moment the
+  required checks pass_. The only things `main` requires are **Validate Repository**, **Phantom
+  Revert Guard** and resolved review threads, with **0 approving reviews**. AI reviews are requested
+  but never required, and a review thread blocks only once it exists. So auto-merge set when a PR is
+  opened or promoted lets it land before any reviewer has posted.
+  - **The merge condition: no open question, every test passing, and enough test coverage to trust
+    that.** Do not wait on a human whose review would only be a look-over with no question in it.
+    Enqueue when all of these hold on the **current head**:
+    1. **CI is green** and the PR is conflict-free.
+    2. **Copilot has reviewed the current head.** That means a review from
+       `copilot-pull-request-reviewer[bot]` whose `commit_id` is the head, or an earlier commit when
+       everything since is merges of `main`. Its body must open with `<!-- ccr-overview-v2 -->`;
+       Copilot's error bodies ("wasn't able to review", "encountered an error") are not reviews.
+       While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
+       has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
+       that has started (Gemini, Codex, Claude) must also have finished.
+    3. **No open question.** Every review thread is answered and resolved. Nothing in a review, a
+       comment or the PR body asks for a decision that has not been made.
+    4. **Coverage matches the change.** New or changed behaviour has a test that would fail without
+       it, and that test runs in CI. A documentation-only PR needs only the repository's existing
+       checks. A behaviour change with no covering test is not ready: add the test, or say why it
+       cannot have one and leave the PR for Clarke.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
     tenants); and any PR that decides policy rather than implements it (privacy or legal wording,
-    for example). Leave those green and say so; do not enqueue them.
+    for example). Leave those green and say so; do not enqueue them unless Clarke, in a live
+    session, says to.
   - **Marking ready from a cloud session** (the GitHub proxy has no GraphQL):
     `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`. From a local session:
     `gh pr ready <n>`. Neither turns on auto-merge, and neither should be followed by anything that
     does.
-  - **The Conductor's enqueue,** once the reviews are in: `enqueuePullRequest` (or
-    `gh pr merge <n> --auto` on a PR that is already green and reviewed, which enqueues it at once),
-    confirmed with `mergeQueueEntry` as described below.
+  - **Enqueueing once the condition holds:** from a local or Conductor session, `enqueuePullRequest`
+    (or `gh pr merge <n> --auto` on a PR that already meets it, which enqueues it at once),
+    confirmed with `mergeQueueEntry` as described below. From a cloud live session, which has no
+    GraphQL, `gh api -X PUT repos/<owner>/<repo>/pulls/<n>/ccr/auto_merge` at that moment and not
+    before, confirmed with `git ls-remote --heads origin 'gh-readonly-queue/main/pr-<n>-*'`.
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.
@@ -716,7 +733,8 @@ _"The verification was never the bottleneck. Promotion was, and promotion is our
 also drew no AI review while they waited. Now a worker marks its own PR ready for review as soon as
 CI is green, and works the reviews it draws (see **Every agent marks its own PR ready** under
 [Merging](#merging-validated-flow--do-not-bypass)). The only step left for the Conductor is the
-enqueue, so a sweep that finds complete PRs still in draft has found worker work, not a Conductor
+enqueue, under the merge condition in **Who merges** (a live session may enqueue under the same
+condition), so a sweep that finds complete PRs still in draft has found worker work, not a Conductor
 wait.
 
 **A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is

@@ -25,14 +25,18 @@ human review is the charity looking at its finished site on the GitHub Pages def
 step up to that point is automated, and a human is pulled in only for a **real problem** (below) or
 a **Tier 2** action.
 
-## Three tiers
+## Three roles
 
-| Tier                     | Who                                    | Does                                                                                                                       |
-| ------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| 1. Workers               | Site Builder routine (and future ones) | Narrow, well-understood work: write a charity's site content and deliver it through a hub workflow                         |
-| 2. Onboarding Conductor  | Scheduled cloud routine                | Runs the four gates: decides applications, starts workers, validates the preview, notifies the charity, prepares DNS       |
-| 3. Clarke                | Phone                                  | Only Tier 2 actions and real problems, as numbered `DECISION NEEDED:` lines on the conductor ledger                        |
-| (internal lane) Platform | Platform Conductor                     | Reviews and lands PRs to this hub and to `FFC-IN-*` repos under the AGENTS.md merge rules. Reserved lanes stay with Clarke |
+"Tier 1" and "Tier 2" in this document always mean the **action** classes from
+[human-intervention-map.md](human-intervention-map.md) (Tier 2 = money, a live site's DNS, cancels,
+deletes, identity). The actors are named roles:
+
+| Role                          | Who                                         | Does                                                                                                                       |
+| ----------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Workers                       | Cloud Worker routine picking up tagged work | Narrow, well-understood work: write a charity's site content and deliver it through a hub workflow                         |
+| Onboarding Conductor          | Scheduled cloud routine                     | Runs the four gates: decides applications, queues workers, validates the preview, notifies the charity, prepares DNS       |
+| Clarke                        | Phone                                       | Only Tier 2 actions and real problems, as numbered `DECISION NEEDED:` lines on the conductor ledger                        |
+| Platform (internal lane only) | Platform Conductor                          | Reviews and lands PRs to this hub and to `FFC-IN-*` repos under the AGENTS.md merge rules. Reserved lanes stay with Clarke |
 
 ### Two lanes, split by where a change lands
 

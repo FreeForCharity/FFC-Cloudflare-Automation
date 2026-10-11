@@ -502,6 +502,9 @@ jobs:
               // So keep the suppression, but bound it: it holds only while the workflow is
               // still actually succeeding (see STALE_SUCCESS_DAYS above).
               let gateNote = '';
+              // Hoisted so the suppression path's lookup can be REUSED by the age note below
+              // rather than paid twice for one sweep.
+              let green = null;
               if (run.conclusion !== 'success') {
                 let jobs = null;
                 try {
@@ -518,7 +521,7 @@ jobs:
                   const failed = jobs.filter(j => j.conclusion === 'failure');
                   const cancelled = jobs.filter(j => j.conclusion === 'cancelled');
                   if (failed.length === 0 && cancelled.length > 0) {
-                    const green = await greenAge(t, workflowId, branch);
+                    green = await greenAge(t, workflowId, branch);
                     if (green.days <= STALE_SUCCESS_DAYS) {
                       stats.benign++;
                       core.notice(`Not alerting on ${where}: no job failed and ${cancelled.length} were cancelled (declined approval gate, or a superseded run), and it last succeeded ${green.days}d ago. ${run.html_url}`);
@@ -595,7 +598,39 @@ jobs:
               stats.failing++;
               // The repo is named in the line as well as the title: an alert read from a
               // notification email shows the line, not the issue title.
-              const line = `- ${new Date().toISOString()} — **${wfName}**${t.isHub ? '' : ` (${t.slug})`} [run ${run.run_number}](${run.html_url}) → ${run.conclusion}${gateNote}`;
+              // A FAILING JOB NEEDS ITS DURATION TOO, and until now only the gate shape got
+              // one. `greenAge` was reached solely from the `cancelled && !failed` branch, so a
+              // declined gate was reported as "it has not succeeded in N days" while an
+              // ordinary broken job got a bare conclusion. The rolling issue then accrues one
+              // near-identical line per occurrence — timestamp, run number, `failure` — which
+              // conveys recurrence and says nothing about EXTENT.
+              //
+              // That is not cosmetic, because a reader has to recover the extent from
+              // somewhere, and the nearest source is the runs LIST, which serves a stale slice
+              // and under-reports (L341, #1584). Measured on this repo: Conductor run 249
+              // recorded `FFC-IN-ffcadmin.org`'s Security Audit as **4** consecutive scheduled
+              // reds; the workflow endpoint says **11** (last scheduled green 2026-09-30). That
+              // red is an unpatched high-severity Next.js SSRF (GHSA-cjq9-62q9-8jv4) on a live
+              // public site — so the number understated by 7 days was the age of a security
+              // exposure, understated on the public record, in the direction of calm.
+              //
+              // BUILT LAZILY, which is what keeps the budget guard's promise intact. The
+              // `success` lookup must not cost anything on the ordinary paths: this sweep runs
+              // 48×/day against a 5,000/hr pool shared with every other agent. A line is
+              // written at most ONCE PER FAILING RUN — the `recordedRun` check below returns
+              // before this is ever called on the other 47 sweeps — so the cost is ~1 extra
+              // call per broken workflow per DAY, not per sweep. `green` is reused when the
+              // suppression path above already paid for it.
+              const buildLine = async () => {
+                let ageNote = '';
+                if (!gateNote) {
+                  if (!green) green = await greenAge(t, workflowId, branch);
+                  ageNote = green.why
+                    ? ` — ${green.why}`
+                    : ` — last successful scheduled run ${green.at} (${green.days}d ago)`;
+                }
+                return `- ${new Date().toISOString()} — **${wfName}**${t.isHub ? '' : ` (${t.slug})`} [run ${run.run_number}](${run.html_url}) → ${run.conclusion}${gateNote}${ageNote}`;
+              };
               if (existing) {
                 // ONE COMMENT PER FAILING RUN, NOT ONE PER SWEEP. The event-driven version saw
                 // each run once, so appending on every observation was the same thing. A poll
@@ -609,6 +644,7 @@ jobs:
                   return;
                 }
                 stats.appended++;
+                const line = await buildLine();
                 if (DRY_RUN) {
                   core.notice(`[dry run] would APPEND to alert #${existing.number}: ${line}`);
                   return;
@@ -621,6 +657,7 @@ jobs:
                   body: withRecordedRun(existing.body, run.id),
                 });
               } else {
+                const line = await buildLine();
                 await createAlert(t, title, `${marker}\n${RUN_MARKER_OPEN}${run.id}${RUN_MARKER_CLOSE}\n**${wfName}**${t.isHub ? '' : ` in [${t.slug}](https://github.com/${t.slug})`} ended in a bad conclusion. This rolling issue tracks that one workflow and auto-closes on its next green run.\n\nEach entry below records what was observed — the run's conclusion and a link. Open the run to see which job failed before assuming a cause.\n\n${line}\n\n_Managed by 740. Repo - Scheduled Workflow Failure Alert._`);
               }
             };

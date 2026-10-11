@@ -178,32 +178,37 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
 - **Every agent marks its own PR ready for review; do not leave work as a draft (Clarke,
-  2026-10-11).** AI reviewers skip drafts, so a draft collects no review and simply waits. As soon
-  as your PR's CI is green, mark it ready for review, whether you are a scheduled worker, the
-  Conductor or a live session. Then work the reviews it draws, from Gemini, Claude, Codex, Copilot
-  or a human: fix the real findings, answer the rest, resolve the threads, and re-check after each
-  push (reviewers re-review). Opening a PR as a draft while CI is still running is fine; leaving it
-  a draft after CI is green is not.
-- **Who merges (Clarke, 2026-10-11).** Unattended work is merged by the **Conductor**: it enqueues a
-  worker's PR once that PR is green, reviewed, conflict-free and has every thread resolved (see the
-  landing sweep below). A **live session working with Clarke** enqueues its own PR at that same
-  point, in the same turn. It does not end the turn with "ready for you to queue". On 2026-10-10 a
-  live session sat on green #1595 for 16 hours that way, until Clarke asked why it had not merged.
-  Hard security stays on `main` itself: the required checks, Copilot review and the merge queue
-  still all have to pass, and nothing here bypasses them.
+  2026-10-11).** Gemini and Codex skip drafts, so a draft collects little review and simply waits.
+  As soon as your PR's CI is green, mark it ready for review, whether you are a scheduled worker,
+  the Conductor or a live session. Then work the reviews it draws, from Gemini, Claude, Codex,
+  Copilot or a human: fix the real findings, answer the rest, resolve the threads, and re-check
+  after each push (reviewers re-review). Opening a PR as a draft while CI is still running is fine;
+  leaving it a draft after CI is green is not.
+- **Who merges (Clarke, 2026-10-11): no agent turns on auto-merge.** On this repo, auto-merge is not
+  a convenience flag. With a merge queue, "auto-merge" means _enqueue the moment the required checks
+  pass_, and the only things `main` requires are **Validate Repository**, **Phantom Revert Guard**
+  and resolved review threads, with **0 approving reviews**. AI reviews are requested but never
+  required: a thread blocks only once it exists. So auto-merge set when a PR is opened or promoted
+  lets it land as soon as CI is green, often before Gemini, Codex or Copilot has posted anything,
+  and the agent that set it has in effect merged its own PR. Workers and live sessions therefore
+  never set auto-merge (`gh pr merge --auto`, `ccr/auto_merge`, `enablePullRequestAutoMerge`) and
+  never enqueue. The **Conductor** enqueues a PR only after it has seen the reviews land: green,
+  reviewed, conflict-free, every thread resolved (see the landing sweep below). It enqueues at that
+  moment, never ahead of the reviews. A live session working with Clarke leaves a green, reviewed PR
+  for the Conductor or for Clarke and says so; it does not enqueue it. Hard security stays on `main`
+  itself, and nothing here bypasses the required checks or the merge queue.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
     tenants); and any PR that decides policy rather than implements it (privacy or legal wording,
     for example). Leave those green and say so; do not enqueue them.
-  - **From a cloud session** (the GitHub proxy has no GraphQL):
-    `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`, then
-    `gh api -X PUT repos/<owner>/<repo>/pulls/<n>/ccr/auto_merge` (answers `{"enabled":true,…}`).
-    `POST` on `auto_merge` is not a route. Confirm the queue took it with
-    `git ls-remote --heads origin 'gh-readonly-queue/main/pr-<n>-*'`, or later with
-    `pulls/<n> --jq .merged`.
-  - **From a local or Conductor session:** `gh pr ready <n>`, then `gh pr merge <n> --auto`, and
-    confirm with `mergeQueueEntry` as described below.
+  - **Marking ready from a cloud session** (the GitHub proxy has no GraphQL):
+    `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`. From a local session:
+    `gh pr ready <n>`. Neither turns on auto-merge, and neither should be followed by anything that
+    does.
+  - **The Conductor's enqueue,** once the reviews are in: `enqueuePullRequest` (or
+    `gh pr merge <n> --auto` on a PR that is already green and reviewed, which enqueues it at once),
+    confirmed with `mergeQueueEntry` as described below.
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.

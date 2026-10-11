@@ -177,14 +177,20 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   merges go through the **merge queue**, which builds a merge group and re-runs those checks.
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
-- **Who lands a PR (Clarke, 2026-10-11).** Unattended work is landed by the **Conductor**: a
-  scheduled cloud worker leaves its green PR as a draft for the Conductor to promote and enqueue
-  (see the landing sweep below). A **live session working with Clarke** lands its own PR: once the
-  PR is green on its current head, has no merge conflict, has every review thread resolved, and is
-  **not** in a reserved lane, promote it and enqueue it in the same turn. Do not end the turn with
-  "ready for you to queue". On 2026-10-10 a live session sat on green #1595 for 16 hours that way,
-  until Clarke asked why it had not merged. Hard security stays on `main` itself: the required
-  checks, Copilot review and the merge queue still all have to pass, and nothing here bypasses them.
+- **Every agent marks its own PR ready for review; do not leave work as a draft (Clarke,
+  2026-10-11).** AI reviewers skip drafts, so a draft collects no review and simply waits. As soon
+  as your PR's CI is green, mark it ready for review, whether you are a scheduled worker, the
+  Conductor or a live session. Then work the reviews it draws, from Gemini, Claude, Codex, Copilot
+  or a human: fix the real findings, answer the rest, resolve the threads, and re-check after each
+  push (reviewers re-review). Opening a PR as a draft while CI is still running is fine; leaving it
+  a draft after CI is green is not.
+- **Who merges (Clarke, 2026-10-11).** Unattended work is merged by the **Conductor**: it enqueues a
+  worker's PR once that PR is green, reviewed, conflict-free and has every thread resolved (see the
+  landing sweep below). A **live session working with Clarke** enqueues its own PR at that same
+  point, in the same turn. It does not end the turn with "ready for you to queue". On 2026-10-10 a
+  live session sat on green #1595 for 16 hours that way, until Clarke asked why it had not merged.
+  Hard security stays on `main` itself: the required checks, Copilot review and the merge queue
+  still all have to pass, and nothing here bypasses them.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
@@ -698,11 +704,14 @@ fifteen, which is exactly why they went unread. At minimum it must carry the old
 and the merge-activity reading above: both change even when the verdict does not, so a reader sees
 movement or its absence without diffing prose.
 
-**Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
-only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
-enqueue, and both are outside a sandbox worker's authority — so a worker cannot clear the cap
-itself, however many runs it spends trying. Run 153's finding put it exactly: _"The verification was
-never the bottleneck. Promotion was, and promotion is ours alone."_
+**Who does what on a complete PR: the worker promotes, the Conductor enqueues (changed
+2026-10-11).** Until then both steps were the Conductor's alone, and run 153 put the cost exactly:
+_"The verification was never the bottleneck. Promotion was, and promotion is ours alone."_ Drafts
+also drew no AI review while they waited. Now a worker marks its own PR ready for review as soon as
+CI is green, and works the reviews it draws (see **Every agent marks its own PR ready** under
+[Merging](#merging-validated-flow--do-not-bypass)). The only step left for the Conductor is the
+enqueue, so a sweep that finds complete PRs still in draft has found worker work, not a Conductor
+wait.
 
 **A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
 reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even

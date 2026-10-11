@@ -141,6 +141,9 @@ ALREADY_GUARDED = {
     ("120-bulk-cutover-to-github-pages.yml", "post-cutover-smoke"),
     ("122-cloudflare-zone-member-add.yml", "apply"),
     ("742-fleet-security-audit-backfill.yml", "apply"),
+    # Ungated `validate` is its rehearsal (same guard script, an anonymous clone of
+    # the target); `apply` is skipped on a dry run and holds the only credential.
+    ("707-website-content-apply.yml", "apply"),
 }
 
 # Credential-bearing jobs in dry-run-capable workflows that a dry run STILL

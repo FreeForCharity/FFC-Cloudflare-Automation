@@ -15,6 +15,9 @@ which ones pause for approval, see
 > website-provision `repo` step is chained behind DNS approval. Expect the rhythm: _dispatch → wait
 > for approval → continue_. Phases that gate are marked **⏸ waits for approval** below.
 
+> **Unattended version:** [charity-lane-pipeline.md](charity-lane-pipeline.md) maps each phase onto
+> the four-gate journey and says which steps the Onboarding Conductor runs without a human.
+
 ## Prerequisites & roles
 
 - **Operator** (files/assigns issues, dispatches workflows): needs **write** access to this repo.

@@ -128,7 +128,7 @@ jobs:
                   owner,
                   repo,
                   issue_number: existing.number,
-                  body: `✅ Recovered: every published copy of the Agentic OS status feed is readable and within ${lib.STALE_AFTER_HOURS}h (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                  body: `✅ Recovered: every published copy of the Agentic OS status feed is readable, within ${lib.STALE_AFTER_HOURS}h, and asserts no work queue older than ${lib.ACTIONABLE_STALE_AFTER_HOURS}h (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
                 });
                 await github.rest.issues.update({
                   owner,

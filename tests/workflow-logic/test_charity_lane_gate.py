@@ -180,6 +180,11 @@ def test_never_list_has_no_matching_rule():
         assert "m365-prod" not in r["environments"]
 
 
+def test_live_site_subcommand_rejects_non_hostnames():
+    assert gate.main(["live-site", "evil.com/x#"]) == 2
+    assert gate.main(["live-site", "https://a.org"]) == 2
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

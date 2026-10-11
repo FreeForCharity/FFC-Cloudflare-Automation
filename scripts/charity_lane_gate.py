@@ -301,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.cmd == "live-site":
+            domain_spec = find_rule(load_policy(), "103-pages-apex")["inputs"]["domain"]
+            if not re.fullmatch(domain_spec["pattern"], args.domain):
+                raise PolicyError(f"live-site: {args.domain!r} is not a valid domain")
             is_live, reason = live_site(args.domain)
             print(json.dumps({"domain": args.domain, "live": is_live, "reason": reason}))
             return 0

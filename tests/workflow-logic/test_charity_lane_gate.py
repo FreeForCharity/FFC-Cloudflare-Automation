@@ -180,6 +180,32 @@ def test_never_list_has_no_matching_rule():
         assert "m365-prod" not in r["environments"]
 
 
+def test_dispatched_but_unidentified_exits_3_and_audits():
+    calls = []
+
+    def fake_gh(args, body=None):
+        calls.append((args[0], body))
+        if args[0] == "user":
+            return {"login": "clarkemoyer"}
+        if args[0].endswith("/runs?event=workflow_dispatch&per_page=20"):
+            return {"workflow_runs": []}  # the new run never shows up
+        return None
+
+    real_gh, real_sleep = gate.gh, gate.time.sleep
+    gate.gh, gate.time.sleep = fake_gh, lambda s: None
+    try:
+        rule = gate.find_rule(POLICY, "226-report")
+        code = gate.cmd_run(POLICY, rule, {"mode": "report"}, timeout_s=1, audit=True)
+    finally:
+        gate.gh, gate.time.sleep = real_gh, real_sleep
+    assert code == 3, code
+    paths = [c[0] for c in calls]
+    assert any(p.endswith("/dispatches") for p in paths)
+    assert not any("pending_deployments" in p for p in paths)
+    audit = [b for p, b in calls if p.endswith("/issues/1608/comments")]
+    assert audit and "RUN NOT IDENTIFIED" in audit[0]["body"]
+
+
 def test_live_site_subcommand_rejects_non_hostnames():
     assert gate.main(["live-site", "evil.com/x#"]) == 2
     assert gate.main(["live-site", "https://a.org"]) == 2

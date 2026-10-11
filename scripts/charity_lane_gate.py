@@ -25,8 +25,9 @@ Order of operations for `run`:
   5. One audit comment goes to the ledger issue: run, rule, inputs (PII-free keys
      only), every approval and every refusal.
 
-Exit codes: 0 done (including runs left waiting for a human), 2 refused by policy,
-1 error.
+Exit codes: 0 done (including runs left waiting for a human); 2 refused by policy,
+nothing dispatched; 3 dispatched but the run could not be identified, nothing
+approved, audit posted: never re-dispatch on 3; 1 error.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ POLICY_PATH = REPO_ROOT / "config" / "charity-lane-gate-policy.json"
 GITHUB_PAGES_IPV4 = {"185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153"}
 # Inputs that may carry contact details; their values never go into the audit comment.
 PII_INPUTS = {"footer_email", "footer_phone", "footer_address", "message", "leadership_lines", "social_links"}
+EXIT_DISPATCHED_UNIDENTIFIED = 3
 
 
 class PolicyError(Exception):
@@ -229,7 +231,23 @@ def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, au
         except PolicyError:
             continue
     if run is None:
-        raise PolicyError("dispatched, but could not identify exactly one new run; approving nothing")
+        # The dispatch already happened, so this is not a policy refusal: say so on
+        # the ledger (a run may now sit at a gate unsupervised) and use a distinct
+        # exit code so the caller never treats it as "nothing happened, retry".
+        msg = "dispatched, but could not identify exactly one new run; approved nothing"
+        print(f"DISPATCHED-UNIDENTIFIED: {msg}", file=sys.stderr)
+        if audit:
+            post_audit(
+                policy,
+                [
+                    f"**Charity-lane gate - rule `{rule['id']}`** - DISPATCHED, RUN NOT IDENTIFIED",
+                    f"- workflow `{wf}`, dispatched {started.isoformat(timespec='seconds')}",
+                    f"- inputs: `{json.dumps(audit_inputs(inputs))}`",
+                    "- approved: none. Any run waiting at a gate from this dispatch is left for Clarke.",
+                    "- DECISION NEEDED: check the workflow's recent runs; do not re-dispatch.",
+                ],
+            )
+        return EXIT_DISPATCHED_UNIDENTIFIED
 
     rid, url = run["id"], run["html_url"]
     approved, refused = [], []

@@ -2193,45 +2193,60 @@ One thing the provenance check does **not** extend: #1614 is about landing PRs. 
 about deployment gates, and a write-environment gate still needs Clarke's explicit yes in the run
 that approves it.
 
-## REST reports `mergeable: null` for every PR on first touch, and a batch read makes that look systemic (validated 2026-10-11, Conductor run 253)
+## Mergeability is computed lazily, so the FIRST read returns `UNKNOWN` in BOTH protocols — and a batch of first touches reads as a repo-wide finding (validated 2026-10-11, Conductor run 253)
 
-GitHub computes a PR's merge commit **lazily**. The first `GET /repos/{o}/{r}/pulls/{n}` after the
-base moves schedules that computation and returns
+GitHub computes a PR's merge commit on demand. The first read after the base moves schedules that
+computation and answers with a placeholder:
 
-```
-"mergeable": null,  "mergeable_state": "unknown"
-```
+| read                                               | first touch          | second touch          |
+| -------------------------------------------------- | -------------------- | --------------------- |
+| REST `pulls/{n}` `.mergeable` / `.mergeable_state` | `null` / `"unknown"` | `true` / `"clean"`    |
+| GraphQL `mergeable` / `mergeStateStatus`           | `"UNKNOWN"`          | `MERGEABLE` / `CLEAN` |
 
-Run 253 read eleven candidate PRs this way, one call each, and got `null`/`unknown` for **all
+Run 253 read eleven candidate PRs over REST, one call each, and got `null`/`unknown` for **all
 eleven**. Read one at a time that is a documented retry; read as a batch it presents as a property
 of the repository — "the base just moved and nothing is mergeable yet", or an outage — and the
-natural next action is to wait, re-poll, or report the queue as unreadable. Nothing in the payload
-says the value was never computed rather than computed as unknown.
+natural next action is to wait, re-poll the base, or report the queue as unreadable. Nothing in the
+payload distinguishes "never computed" from "computed as unknown".
 
-**The tell is the uniformity, not the value.** Eleven PRs with different bases, different ages and
-different file sets cannot genuinely share one merge state; agreement between reads that must differ
-is the same signature as the dropped-query-parameter rule above, where three filters that had to
-disagree returned 94 three times.
+**The tell is the uniformity, not the value.** Eleven PRs with different bases, ages and file sets
+cannot genuinely share one merge state; agreement between reads that must differ is the same
+signature as the dropped-query-parameter rule above, where three filters that had to disagree all
+returned `94`.
 
-**GraphQL does not have the defect** — `mergeable` and `mergeStateStatus` block on the computation
-and return real values on the first call, for every PR, in one request:
+### ⚠️ The remedy is a SECOND read, not a different protocol — and this section shipped the wrong cause first
+
+This is the part worth keeping, because the wrong version was already pushed to #1615 before it was
+measured. Having seen REST answer `null` eleven times, the run re-asked in **GraphQL** and got
+`MERGEABLE`/`CLEAN` for all eleven immediately. The obvious reading — _REST's field is unsound here,
+use GraphQL_ — is the one that got written down, and it is a **confound**: GraphQL was not the first
+read. The eleven REST calls had already scheduled the computation, so the GraphQL call was the
+second touch and would have succeeded in either protocol.
+
+Falsified in the same run, on a different set. Ten reserved-lane PRs, read **GraphQL first** with no
+REST call ahead of them, came back `mergeStateStatus: UNKNOWN` for all ten; the identical query
+re-issued seconds later returned `CLEAN` for nine and `BLOCKED` for the tenth. So GraphQL has
+exactly the same first-touch behaviour, and the recorded fix worked for a reason that was not the
+one claimed.
 
 ```bash
-# one call, N PRs, real values -- plus the two things REST cannot answer at all
-gh api graphql -F o=OWNER -F r=REPO -F query='query($o:String!,$r:String!){repository(owner:$o,name:$r){
-  p1: pullRequest(number:1613){ ...F }  p2: pullRequest(number:1609){ ...F } }}
-  fragment F on PullRequest{ number isDraft mergeable mergeStateStatus
-    reviewThreads(first:50){nodes{isResolved}} mergeQueueEntry{position state}
-    commits(last:1){nodes{commit{statusCheckRollup{state}}}} }'
-# -> MERGEABLE / CLEAN for all eleven, immediately
+# the probe that settles it -- same query twice, no REST call in between
+gh api graphql -F o=OWNER -F r=REPO -F query=@q.graphql   # UNKNOWN for every PR
+gh api graphql -F o=OWNER -F r=REPO -F query=@q.graphql   # CLEAN / BLOCKED / BEHIND -- real values
 ```
 
-Prefer it for any landability question. It is also the only source for `reviewThreads` and
-`mergeQueueEntry`, both of which this file already establishes as the authoritative reads for "is
-anything unresolved" and "is it enqueued" — so the GraphQL call replaces three REST calls rather
-than adding one, and the REST reads it replaces are the two that are known-unsound here.
+Two things follow:
 
-The REST field is not _wrong_, and this is not a reason to distrust REST generally: re-read the same
-endpoint a few seconds later and it answers correctly. The failure is that a **batch** of first
-touches is indistinguishable from a real finding, and the run is at its least sceptical at exactly
-that moment, because it has just started measuring and has no prior to contradict.
+- **Read it twice and use the second answer**, in whichever protocol. Discard a uniformly-unknown
+  batch as "not yet computed" rather than reasoning from it.
+- **When a substitution fixes something, check it was the substitution.** A remedy applied after a
+  failed attempt is always the _later_ attempt too, and lazy computation, caches and eventual
+  consistency all reward the second try regardless of what changed. The same mistake is recorded
+  above as "a symptom that disappears on its own has not verified your fix" — this is its mirror: a
+  symptom that disappears when you change tool has not verified the tool.
+
+Prefer GraphQL here anyway, for an unrelated and still-true reason: it is the only source for
+`reviewThreads` and `mergeQueueEntry`, which this file already establishes as the authoritative
+reads for "is anything unresolved" and "is it enqueued", and it answers N PRs in one request. That
+is a request-count argument, **not** a correctness one, and it was the correctness claim that was
+wrong.

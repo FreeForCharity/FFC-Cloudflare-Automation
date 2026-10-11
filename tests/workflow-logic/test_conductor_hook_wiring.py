@@ -1162,7 +1162,13 @@ def test_the_drift_remedy_is_addressed_to_clarke_and_not_to_the_conductor():
     with tempfile.TemporaryDirectory() as td:
         ws = _wired_workspace(td)
         proc = run("--workspace", str(ws))
-        assert "@clarkemoyer" in proc.stdout, proc.stdout
+        # Anchored on the REMEDY HEADING, not on a bare `@clarkemoyer`. Mutation
+        # M3 blanked the heading to the ordinary "Remedy:" and this test still
+        # passed, because the verdict line two lines up also says
+        # "@clarkemoyer must render it" -- an assertion satisfied by something
+        # other than the thing it names is not a test of it.
+        remedy = [ln for ln in proc.stdout.splitlines() if ln.startswith("Remedy")]
+        assert remedy == ["Remedy (@clarkemoyer, not the Conductor):"], proc.stdout
         assert "Self-Modification" in proc.stdout, proc.stdout
         assert "--force" in proc.stdout, proc.stdout
 

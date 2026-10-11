@@ -607,8 +607,9 @@ natural terminal state, and that is what this section supplies.
 **A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
 review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
 PR against that test **before** starting a sweep. Every clause is measured **per PR against
-`main`**, which is what the test is for and also its limit — read "the cohort is not the sum of its
-PRs" below before publishing any punch list built from it.
+`main`**, which is what the test is for and also its limit. A PR that passes all four but is still a
+draft is not complete: marking it ready is the worker's job (see **Merging**) — read "the cohort is
+not the sum of its PRs" below before publishing any punch list built from it.
 
 **A fully-complete PR set is a reportable failure of the system, not a clean result.** It means no
 _worker_ action is available; it does not mean nothing is wrong. Five complete PRs aged 3–7 days is
@@ -624,14 +625,14 @@ different escalations:
 
 | reading                                                                        | cause                                                                                                   | what the note must say                                                            |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| no merges at all in the recent window                                          | **nobody with promotion rights is present**                                                             | escalate the absence                                                              |
+| no merges at all in the recent window                                          | **nobody with enqueue rights is present**                                                               | escalate the absence                                                              |
 | merges landing, none from the stalled cohort, **and the supervisor is silent** | **the landing actor itself is absent** — nothing is wrong with the PRs and no actor exists to move them | escalate the **supervisor's** absence, and say the cohort is merely waiting on it |
 | merges landing, none from the stalled cohort, **supervisor alive**             | **queue starvation** — a human is present, working another lane                                         | escalate _that_, by name, with the punch list                                     |
 
 **The middle row is the one this section was written without, and it is the one that actually
 happened** (Conductor run 175). The first sixteen escalations measured `main` correctly, found it
 frozen, and reported **starvation** — a human present and prioritising elsewhere. The true cause was
-that the Conductor, which is what promotes and enqueues, had not run for **fourteen days**: six
+that the Conductor, which then both promoted and enqueued, had not run for **fourteen days**: six
 complete PRs, nothing structurally wrong with any of them, and no actor to move them. Every fact
 quoted was right and the label was wrong, which is the same failure this section exists to prevent,
 one level in.
@@ -731,12 +732,13 @@ delivery channel rather than inventing one here.
 
 **Before filing a sweep as a normal terminal state, check that the actor you are waiting on still
 exists (#1339).** A complete PR set means no landing work is available — and it reads exactly the
-same whether the Conductor is healthy with nothing to promote or has not run in five days. On
+same whether the Conductor is healthy with nothing to enqueue or has not run in five days. On
 2026-09-14 it stopped mid-run and **~39 consecutive worker runs** each computed "0 worker-actionable
 PRs" correctly, in increasing detail, and filed it as routine; the open pile grew 4 → 13 with all 17
 monitoring workflows green. The sentence _"the only remaining action is promotion, which is the
-Conductor's"_ is true on a healthy day and true during an outage, and the cohort's state cannot tell
-them apart. **A terminal state reached 39 times in a row is not a terminal state, it is an outage.**
+Conductor's"_ (pre-2026-10-11 wording; the remaining action is now the Conductor's enqueue) is true
+on a healthy day and true during an outage, and the cohort's state cannot tell them apart. **A
+terminal state reached 39 times in a row is not a terminal state, it is an outage.**
 
 So when the sweep terminates with 0 actionable PRs, spend one read on the supervisor before
 concluding anything:
@@ -836,7 +838,7 @@ cleanly. #1346 (which appends row `L302`) and #1347 (which appends `L303` **and*
 rows kept, block untouched — then fails that module. The correct end state is the same whichever
 merges second: **both rows present in id order, and the `reserved-ids` block empty.**
 
-Two mechanics for whoever does have promotion authority, both already paid for:
+Two mechanics for whoever promotes or enqueues, both already paid for:
 
 - **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with
   `Required status check "Phantom Revert Guard" is expected`, even when that exact SHA already

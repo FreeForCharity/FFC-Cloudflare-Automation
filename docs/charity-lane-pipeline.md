@@ -1,7 +1,14 @@
 # Charity-lane pipeline: unattended onboarding from application to preview
 
-**Status:** design, adopted by Clarke on 2026-10-11. Parts marked **(build)** do not exist yet; the
-[build order](#build-order) lists them.
+**Status: TESTING PERIOD.** Adopted by Clarke on 2026-10-11 and under test until the charity-lane
+epic (label `epic:charity-lane`) shows every step working end to end on real charities. Parts marked
+**(build)** do not exist yet; the [build order](#build-order) lists them.
+
+**Constraint (Clarke, 2026-10-11):** the pipeline must run on capabilities and credentials that
+already exist: no new GitHub environments and no new tokens. The provision environments and the
+routine API trigger described below are therefore **superseded**. How gates are cleared under this
+constraint is an **open decision** tracked on the epic; until it is settled, gated steps wait for a
+human approval.
 
 This is the automated version of ffcadmin's four-gate journey. The journey itself (policy, gates,
 proof fields) stays authoritative in FFC-IN-ffcadmin.org:

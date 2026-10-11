@@ -177,6 +177,30 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   merges go through the **merge queue**, which builds a merge group and re-runs those checks.
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
+- **Who lands a PR (Clarke, 2026-10-11).** Unattended work is landed by the **Conductor**: a
+  scheduled cloud worker leaves its green PR as a draft for the Conductor to promote and enqueue
+  (see the landing sweep below). A **live session working with Clarke** lands its own PR: once the
+  PR is green on its current head, has no merge conflict, has every review thread resolved, and is
+  **not** in a reserved lane, promote it and enqueue it in the same turn. Do not end the turn with
+  "ready for you to queue". On 2026-10-10 a live session sat on green #1595 for 16 hours that way,
+  until Clarke asked why it had not merged. Hard security stays on `main` itself: the required
+  checks, Copilot review and the merge queue still all have to pass, and nothing here bypasses them.
+  - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
+    `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
+    `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
+    tenants); and any PR that decides policy rather than implements it (privacy or legal wording,
+    for example). Leave those green and say so; do not enqueue them.
+  - **From a cloud session** (the GitHub proxy has no GraphQL):
+    `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`, then
+    `gh api -X PUT repos/<owner>/<repo>/pulls/<n>/ccr/auto_merge` (answers `{"enabled":true,…}`).
+    `POST` on `auto_merge` is not a route. Confirm the queue took it with
+    `git ls-remote --heads origin 'gh-readonly-queue/main/pr-<n>-*'`, or later with
+    `pulls/<n> --jq .merged`.
+  - **From a local or Conductor session:** `gh pr ready <n>`, then `gh pr merge <n> --auto`, and
+    confirm with `mergeQueueEntry` as described below.
+  - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
+    merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
+    wait.
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).

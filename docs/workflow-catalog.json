@@ -268,7 +268,7 @@
       "description": "Serialize: this rewrites A records across many zones; parallel dispatches must not race.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "high blast radius; serialized",
+      "guard": "high blast radius; serialized; **ungated `preflight` prints the IP pair + whole-estate zone scope into the run summary before the gate (#1509)**",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },
@@ -409,7 +409,7 @@
       "description": "Serialize: this writes CNAMEs across many FFC-EX zones; parallel dispatches must not race.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
-      "guard": "`dry_run` (default true); serialized",
+      "guard": "`dry_run` (default true); serialized; **ungated `preflight` names every `staging.<domain>` zone and the delete-then-create edge in the run summary before the gate (#1509)**",
       "category": "Cloudflare / DNS / Domain",
       "categoryCode": "CF"
     },

@@ -139,11 +139,12 @@ marker orders from `224` need no gate.
    once for the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the
    site's `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
-   `preview_ready` template and the preview URL. Workflow 233 classifies the charity's reply as
-   APPROVED, CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638). APPROVED completes Gate
-   3, and the charity may order its domain. CHANGES go back to the worker (how the change text
-   reaches the worker is an open decision on #1618). UNCLEAR, or no reply after 14 days, is a
-   decision.
+   `preview_ready` template and the preview URL. Workflow `233. WHMCS - Charity-Lane Ticket Reply`
+   (ungated, `subject_prefix=[Website Preview]`) classifies the charity's reply as APPROVED,
+   CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638), and fails closed toward UNCLEAR.
+   APPROVED completes Gate 3, and the charity may order its domain. CHANGES go back to the worker
+   (how the change text reaches the worker is an open decision on #1618). UNCLEAR, or no reply after
+   14 days, is a decision. See [whmcs-support-tickets.md](whmcs-support-tickets.md).
 
 ### Gate 4: domain and DNS
 

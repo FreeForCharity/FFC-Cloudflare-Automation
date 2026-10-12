@@ -143,9 +143,12 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
   `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the previous lane
   label).
 - **Existing live site** (step 3 found one, or the live-site check says live): stop at **ready for
-  cutover**. Run `121` (ungated preflight) for the domain and post
-  `DECISION NEEDED: cutover <domain> (121 READY, preview approved <date>)`. Never run `103` or `120`
-  for it.
+  cutover**. Run `121` (ungated preflight) for the domain. A site still on the default Pages URL
+  always shows one expected blocker, "Artifact apex-ready (no project-basePath refs)": the build
+  switches to the custom domain only when `120` flips the CNAME at cutover. So the charity is ready
+  for cutover when "Pages origin healthy" passes and that is the only blocker; post
+  `DECISION NEEDED: cutover <domain> (121 run <link>: origin healthy, only the expected basePath blocker; preview approved <date>)`.
+  Any other blocker is reported with the decision. Never run `103` or `120` for it.
 
 8. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
 9. **Report.** Post one comment on #1608:

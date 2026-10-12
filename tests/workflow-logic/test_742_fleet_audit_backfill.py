@@ -1130,13 +1130,13 @@ def test_apply_fetches_an_existing_backfill_branch_before_the_lease_push():
     info whenever a previous 742 PR is still open. The "updated existing PR"
     path would then be unreachable. Found on #1641 (751), tracked as #1642.
     """
-    run = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
-    fetch = run.index('git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"')
-    push = run.index('git push -u origin "$BRANCH" --force-with-lease')
-    assert run.index('git clone --depth 1') < fetch < push
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    fetch = raw.index('git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"')
+    push = raw.index('git push -u origin "$BRANCH" --force-with-lease')
+    assert raw.index('git clone --depth 1') < fetch < push
 
 
-TESTS =[v for k, v in sorted(globals().items()) if k.startswith("test_")]
+TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
     failures = 0

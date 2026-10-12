@@ -80,6 +80,7 @@
             "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
           ]
         },
+        "skip_dns": { "enum": ["true", "false"] },
         "charity_name": { "maxlen": 200 },
         "footer_email": { "maxlen": 200 },
         "footer_phone": { "maxlen": 50 },

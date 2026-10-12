@@ -126,17 +126,24 @@ marker orders from `224` need no gate.
    application (ffcadmin's footer bridge, fail-closed) and page data under `src/data/`, and pushes
    the files to the hub branch `claude/site-content/<domain>`. That branch is transport only and is
    never merged. The conductor then delivers it with `707. Website - Content Apply`, which opens a
-   PR in the `FFC-EX-*` repo and accepts only allowlisted content paths. **Known gap:** FFC-EX repos
-   have auto-merge off and no required checks, so the content PR is left open until it is merged
-   (epic item G3.3b).
-5. **Validate:** ffcadmin's `Gate 3 Auto-Validation` covers HTTP 200, the footer markers, viewport
-   and broken asset paths today. CI status, required sections, a 375px pass, console errors and
-   accessibility are still MANUAL rows (epic item G3.4). A FAIL goes back to the worker; a second
-   consecutive FAIL on the same row is a real problem.
+   PR in the `FFC-EX-*` repo and accepts only allowlisted content paths. 707 then waits for the
+   site's own CI and merges the PR when every check passed (G3.3b, #1626); otherwise it leaves the
+   PR open and prints the reason, which the conductor raises as a decision.
+5. **Validate:** ffcadmin's `Gate 3 Auto-Validation` checks HTTP 200, the footer markers, viewport
+   and broken asset paths. With FFC-IN-ffcadmin.org#1448, CI status, required sections, a 375px
+   pass, console errors and accessibility become PASS/FAIL rows too, and only the charity's approval
+   stays MANUAL. The Cloud Worker runs it and posts the table on the hub item. A FAIL goes back to
+   the worker; a second consecutive FAIL on the same row is a real problem. One exception: when the
+   only FAIL is CI on the site's Security Audit (`pnpm audit (production)`), the worker can't fix
+   it, because dependencies are outside its content paths. The conductor runs workflow 751 once for
+   the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the site's
+   `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
-   `preview_ready` template and the preview URL. The charity's reply (read through `209`) is either
-   change requests, which go back to the worker, or approval, which completes Gate 3: the charity
-   may order its domain.
+   `preview_ready` template and the preview URL. Workflow 233 classifies the charity's reply as
+   APPROVED, CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638). APPROVED completes Gate
+   3, and the charity may order its domain. CHANGES go back to the worker (how the change text
+   reaches the worker is an open decision on #1618). UNCLEAR, or no reply after 14 days, is a
+   decision.
 
 ### Gate 4: domain and DNS
 
@@ -221,4 +228,6 @@ a policy change for Clarke. `.claude/settings.json` allows only the script's sub
 | Charity reply classifier          | `233-whmcs-charity-lane-ticket-reply.yml` (no reply text printed)                | #1638                    |
 | Public website fields             | `234-whmcs-charity-lane-site-fields.yml`, `config/charity-lane-site-fields.json` | #1639                    |
 | Gate 3 validation rows            | ffcadmin `gate3-validate`                                                        | FFC-IN-ffcadmin.org#1448 |
-| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                                   | (build)                  |
+| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                                   | #1635                    |
+| Security Audit fix (site deps)    | `751-website-security-overrides-sync.yml`, `scripts/fleet-overrides-sync.js`     | #1641                    |
+| Conductor runs 751 (audit only)   | rule `751-overrides-sync`, brief step 6                                          | #1644                    |

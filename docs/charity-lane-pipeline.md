@@ -134,10 +134,10 @@ marker orders from `224` need no gate.
    pass, console errors and accessibility become PASS/FAIL rows too, and only the charity's approval
    stays MANUAL. The Cloud Worker runs it and posts the table on the hub item. A FAIL goes back to
    the worker; a second consecutive FAIL on the same row is a real problem. One exception: when the
-   only FAIL is CI on the site's Security Audit (`pnpm audit (production)`), the worker can't fix
-   it, because dependencies are outside its content paths. The conductor runs workflow 751 once for
-   the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the site's
-   `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
+   only FAIL is CI and the only failing workflow it lists is the site's `Security Audit`, the worker
+   can't fix it, because dependencies are outside its content paths. The conductor runs workflow 751
+   once for the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the
+   site's `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
    `preview_ready` template and the preview URL. Workflow 233 classifies the charity's reply as
    APPROVED, CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638). APPROVED completes Gate

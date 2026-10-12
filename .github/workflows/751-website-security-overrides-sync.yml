@@ -1,0 +1,439 @@
+name: '751. Website - Security Overrides Sync (FFC-EX) [GH]'
+run-name:
+  'Security Overrides Sync (dry_run=${{ inputs.dry_run }}, repos=${{ inputs.target_repos }})'
+
+# Brings named FFC-EX sites up to the dependency security floor of the template
+# each one was made from, as one pull request per repo. Never merges.
+#
+# Why this exists (#1640, epic #1618): the charity lane's Gate 3 CI row counts
+# the site's Security Audit, and on most FFC-EX repos that audit is red in a way
+# Dependabot cannot fix. The open advisory is transitive (`source-map-js` via
+# `postcss`), and Dependabot bumps direct dependencies only. The templates fix it
+# with a `pnpm.overrides` block that older sites lack. Measured 2026-10-12: about
+# 90 open Dependabot PRs, nearly all still failing `pnpm audit (production)`;
+# the same change made by hand turned five in-flight sites green.
+#
+# What it changes, per repo, and nothing else:
+#   - `package.json`: the template's `pnpm.overrides` (template value wins on a
+#     shared key, repo-only keys kept, scoped keys a bare pin makes dead dropped),
+#     and `next` / `postcss` raised to the template's floor
+#     (scripts/fleet-overrides-sync.js);
+#   - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm;
+#   - `types/*.d.ts` copied from the template, only when the build fails without
+#     them (Next 16.3 type-checks the test files; the template's matcher types
+#     are what fixed that there).
+#
+# Two jobs, the 742 shape:
+#   - plan  — ungated, job token, read-only. Clones each repo anonymously, makes
+#             the change, installs, audits and builds. A repo is READY only when
+#             its high-level audit passes and it builds. dry_run=true (the
+#             default) stops here; the patches are uploaded as an artifact.
+#   - apply — dry_run=false only, gated `github-prod`. Applies exactly the
+#             patches the plan produced (the gate approver reviews that plan),
+#             pushes one branch per repo and opens a PR. It never merges, never
+#             approves and never enables auto-merge: landing is the target
+#             repo's merge condition.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repos:
+        description: 'Comma-separated FFC-EX repo names (at most 10), e.g. FFC-EX-example.org'
+        required: true
+        type: string
+      dry_run:
+        description: 'Plan only: build and audit each repo, open no PRs (no approval needed)'
+        required: false
+        default: true
+        type: boolean
+
+# Workflow scope is read-only. `id-token: write` is granted to the apply job
+# alone: the plan job runs each charity repo's own install and build scripts,
+# and must not be able to mint an OIDC token.
+permissions:
+  contents: read
+
+concurrency:
+  group: 751-security-overrides-sync
+  cancel-in-progress: false
+
+env:
+  ORG: FreeForCharity
+  BRANCH: fix/security-overrides-sync
+
+jobs:
+  plan:
+    name: Plan (read-only)
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+    steps:
+      - name: Checkout (for the sync script)
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Validate inputs
+        id: inputs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOS: ${{ inputs.target_repos }}
+        run: |
+          set -euo pipefail
+          repos="$(printf '%s' "$TARGET_REPOS" | tr -d '[:space:]' | tr ',' '\n' | awk 'NF' | sort -u)"
+          count="$(printf '%s\n' "$repos" | awk 'NF' | wc -l)"
+          if [ "$count" -lt 1 ] || [ "$count" -gt 10 ]; then
+            echo "::error::target_repos must name 1 to 10 repos, got $count"
+            exit 1
+          fi
+          while read -r r; do
+            if ! [[ "$r" =~ ^FFC-EX-[A-Za-z0-9.-]{3,100}$ ]]; then
+              echo "::error::'$r' is not an FFC-EX repo name"
+              exit 1
+            fi
+            archived="$(gh api "repos/${ORG}/${r}" --jq .archived)" || {
+              echo "::error::${ORG}/${r} does not exist or is not readable"
+              exit 1
+            }
+            if [ "$archived" = "true" ]; then
+              echo "::error::${ORG}/${r} is archived"
+              exit 1
+            fi
+          done <<< "$repos"
+          printf '%s\n' "$repos" > repos.txt
+          echo "::notice::$count repo(s) to plan"
+
+      - name: Fetch both templates' package.json and types
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for pair in footer:FFC-IN-Footer_Only_Template single:FFC-IN-FFC_Single_Page_Template; do
+            kind="${pair%%:*}"
+            repo="${ORG}/${pair#*:}"
+            mkdir -p "templates/${kind}/types"
+            gh api "repos/${repo}/contents/package.json" \
+              -H "Accept: application/vnd.github.raw" > "templates/${kind}/package.json"
+            # A template without types/ is fine: the fallback just has nothing to
+            # copy. Exit code checked explicitly, because gh writes its error
+            # body to stdout (ledger L02).
+            if ! names="$(gh api "repos/${repo}/contents/types" --jq '.[].name')"; then
+              echo "::notice::${repo} has no readable types/ directory; the types fallback will have nothing to copy"
+              names=""
+            fi
+            for n in $names; do
+              case "$n" in
+                *.d.ts)
+                  gh api "repos/${repo}/contents/types/${n}" \
+                    -H "Accept: application/vnd.github.raw" > "templates/${kind}/types/${n}"
+                  ;;
+              esac
+            done
+          done
+
+      - name: Plan each repo (change, install, audit, build)
+        id: plan
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          # No token in this step's environment: it runs each charity repo's own
+          # install and build scripts.
+          corepack enable
+          export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+          mkdir -p out/patches
+          echo '[]' > out/results.json
+          {
+            echo '## 751 Security Overrides Sync — plan'
+            echo ''
+            echo '| Repo | Template | Result | Audit (high) | Build | Changes |'
+            echo '| --- | --- | --- | --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          record() {
+            # repo template status audit build changes reason
+            jq --arg r "$1" --arg t "$2" --arg s "$3" --arg a "$4" --arg b "$5" \
+              --argjson c "$6" --arg why "$7" \
+              '. += [{"repo":$r,"template":$t,"status":$s,"audit":$a,"build":$b,"changes":$c,"reason":$why}]' \
+              out/results.json > out/results.tmp && mv out/results.tmp out/results.json
+            echo "| $1 | $2 | $3${7:+ — $7} | $4 | $5 | $6 |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          while read -r name; do
+            [ -z "$name" ] && continue
+            echo "::group::$name"
+            rm -rf site
+            if ! git clone -q --depth 1 "https://github.com/${ORG}/${name}.git" site; then
+              record "$name" '-' blocked '-' '-' 0 'clone failed'
+              echo "::endgroup::"; continue
+            fi
+            if [ ! -f site/pnpm-lock.yaml ] || [ ! -f site/scripts/check-drift.mjs ]; then
+              record "$name" '-' blocked '-' '-' 0 'not a pnpm template site (no pnpm-lock.yaml or drift guard)'
+              echo "::endgroup::"; continue
+            fi
+            if ! kind="$(node scripts/fleet-overrides-sync.js detect site/scripts/check-drift.mjs)"; then
+              record "$name" '-' blocked '-' '-' 0 'drift guard matches neither template'
+              echo "::endgroup::"; continue
+            fi
+            if ! merged="$(node scripts/fleet-overrides-sync.js merge "templates/${kind}/package.json" site/package.json)"; then
+              record "$name" "$kind" blocked '-' '-' 0 'package.json could not be merged'
+              echo "::endgroup::"; continue
+            fi
+            nchanges="$(printf '%s' "$merged" | jq '.changes | length')"
+            printf '%s' "$merged" | jq -r '.changes[]'
+            if [ "$nchanges" -eq 0 ]; then
+              record "$name" "$kind" current '-' '-' 0 ''
+              echo "::endgroup::"; continue
+            fi
+
+            if ! (cd site && corepack pnpm install --no-frozen-lockfile > ../install.log 2>&1); then
+              tail -40 install.log
+              record "$name" "$kind" blocked '-' '-' "$nchanges" 'pnpm install failed'
+              echo "::endgroup::"; continue
+            fi
+
+            audit=pass
+            if ! (cd site && corepack pnpm audit --prod --audit-level high); then audit=fail; fi
+
+            build=pass
+            if ! (cd site && corepack pnpm run build > ../build.log 2>&1); then
+              build=fail
+              copied=0
+              for f in "templates/${kind}/types/"*.d.ts; do
+                [ -f "$f" ] || continue
+                mkdir -p site/types
+                if [ ! -f "site/types/$(basename "$f")" ]; then
+                  cp "$f" site/types/
+                  copied=1
+                fi
+              done
+              if [ "$copied" -eq 1 ] && (cd site && corepack pnpm run build > ../build.log 2>&1); then
+                build='pass (template types added)'
+              fi
+            fi
+            if [ "$build" = fail ]; then tail -40 build.log; fi
+
+            # This change owns three kinds of path. Anything else changed means
+            # the edit went somewhere unintended.
+            git -C site add -A
+            unexpected="$(git -C site diff --cached --name-only \
+              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts)$' || true)"
+            if [ -n "$unexpected" ]; then
+              record "$name" "$kind" blocked "$audit" "$build" "$nchanges" "unexpected paths changed: $(echo "$unexpected" | tr '\n' ' ')"
+              echo "::endgroup::"; continue
+            fi
+
+            if [ "$audit" = pass ] && [ "$build" != fail ]; then
+              git -C site diff --cached --binary > "out/patches/${name}.patch"
+              printf '%s' "$merged" | jq -r '.changes[]' > "out/patches/${name}.changes.txt"
+              record "$name" "$kind" ready "$audit" "$build" "$nchanges" ''
+            else
+              record "$name" "$kind" blocked "$audit" "$build" "$nchanges" 'audit or build still fails after the change'
+            fi
+            echo "::endgroup::"
+          done < repos.txt
+
+          ready="$(jq -c '[.[] | select(.status == "ready") | {repo, template, build}]' out/results.json)"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "::notice::ready=$(jq length <<< "$ready") of $(jq length out/results.json)"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo 'dry_run=true — plan above, no PRs opened.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-overrides-plan
+          path: out/
+          retention-days: 7
+
+  apply:
+    name: Apply (one PR per ready repo)
+    needs: plan
+    if: ${{ inputs.dry_run == false && needs.plan.outputs.ready != '[]' }}
+    runs-on: ubuntu-latest
+    environment: github-prod
+    permissions:
+      contents: read
+      # Required for the Key Vault OIDC exchange (#844).
+      id-token: write
+    steps:
+      - name: Download the plan
+        uses: actions/download-artifact@v8
+        with:
+          name: security-overrides-plan
+          path: out
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). This step
+      # is 742's, verbatim: tests/workflow-logic/test_pat_liveness_probe.py pins it.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Liveness, not just presence (#1102). A revoked-but-present PAT clears the
+          # emptiness check above and fails two to four steps later inside a script,
+          # naming the wrong subsystem -- that is how 502's dead credential was read as
+          # a Key Vault RBAC problem for nine days (#848). The two causes have different
+          # remedies (role assignment vs remint), so both checks stay and their messages
+          # stay distinguishable.
+          #
+          # Probe by status code only: the token goes into a request header and never
+          # into output. `-o /dev/null` discards the body; `-D` keeps the RESPONSE
+          # headers, which carry no credential and are what separates a throttled token
+          # from a rejected one below.
+          #
+          # `|| true` is load-bearing, not defensive habit. The runner invokes this body
+          # under `-e`, and `set -euo pipefail` above keeps it: without it a curl that
+          # cannot reach the network aborts the assignment and the step dies before the
+          # branch below ever runs, with no message of ours (L73). With it, curl's own
+          # `000` reaches the check and fails closed.
+          #
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # GitHub answers a PRIMARY rate limit with 403 + `x-ratelimit-remaining: 0`
+          # and a SECONDARY one with 403 + `retry-after`. Either way the credential is
+          # LIVE, so it must not be handed the revoked wording below: prescribing a
+          # remint for a throttled token is the same wrong-subsystem failure this guard
+          # exists to remove. 321 draws the same line for Cloudflare, where a 403 on a
+          # resource endpoint is authenticated-but-unauthorized and never "dead".
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+      - name: Open one PR per ready repo
+        shell: bash
+        env:
+          READY_JSON: ${{ needs.plan.outputs.ready }}
+        run: |
+          set -uo pipefail
+          gh auth setup-git
+          git config --global user.name "ffc-automation[bot]"
+          git config --global user.email "actions@github.com"
+          failures=0
+          {
+            echo '## 751 Security Overrides Sync — results'
+            echo ''
+            echo '| Repo | Result | PR |'
+            echo '| --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          title='fix(deps): bring the security overrides up to the template floor'
+          total="$(jq 'length' <<< "$READY_JSON")"
+          for i in $(seq 0 $((total - 1))); do
+            name="$(jq -r ".[$i].repo" <<< "$READY_JSON")"
+            kind="$(jq -r ".[$i].template" <<< "$READY_JSON")"
+            build="$(jq -r ".[$i].build" <<< "$READY_JSON")"
+            patch="out/patches/${name}.patch"
+            echo "::group::$name"
+            if ! [[ "$name" =~ ^FFC-EX-[A-Za-z0-9.-]{3,100}$ ]] || [ ! -f "$patch" ]; then
+              echo "| $name | ❌ no patch for this name | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1)); echo "::endgroup::"; continue
+            fi
+            rm -rf site
+            if ! git clone -q --depth 1 "https://github.com/${ORG}/${name}.git" site; then
+              echo "| $name | ❌ clone failed | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1)); echo "::endgroup::"; continue
+            fi
+            cd site || exit 1
+            # The plan was made against the default branch as it was then. If it
+            # moved, the patch no longer applies: re-plan rather than force it.
+            if ! git apply --index "../${patch}"; then
+              echo "| $name | ⏭️ patch is stale (default branch moved) — re-run the plan | — |" >> "$GITHUB_STEP_SUMMARY"
+              cd ..; echo "::endgroup::"; continue
+            fi
+            unexpected="$(git diff --cached --name-only \
+              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts)$' || true)"
+            if [ -n "$unexpected" ]; then
+              echo "| $name | ❌ unexpected paths in patch | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1)); cd ..; echo "::endgroup::"; continue
+            fi
+            defbranch="$(git symbolic-ref --short HEAD)"
+            git checkout -q -b "$BRANCH"
+            # A shallow clone tracks only the default branch. Fetch the sync
+            # branch when it already exists (an open 751 PR), so the lease below
+            # compares against its real tip instead of an absent ref, which git
+            # rejects as "stale info". Absent branch: nothing to fetch.
+            git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
+            git commit -q -m "$title" \
+              -m "Template: ${kind}. Generated by workflow 751 (FreeForCharity/FFC-Cloudflare-Automation#1640)."
+            if ! git push -q -u origin "$BRANCH" --force-with-lease; then
+              echo "| $name | ❌ push failed | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1)); cd ..; echo "::endgroup::"; continue
+            fi
+            cd ..
+            if url="$(gh pr view "$BRANCH" --repo "${ORG}/${name}" --json url --jq .url 2>/dev/null)"; then
+              echo "| $name | ♻️ updated existing PR | $url |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::endgroup::"; continue
+            fi
+            {
+              echo '## Summary'
+              echo "Brings this site up to the dependency security floor of the ${kind} template it was made from. Dependabot cannot do this: the open advisories are transitive (for example \`source-map-js\` through \`postcss\`)."
+              echo ''
+              echo '**Changes**'
+              sed 's/^/- /' "out/patches/${name}.changes.txt"
+              if [ "$build" != pass ]; then echo "- template \`types/*.d.ts\` added: the build failed without them (Next 16.3 type-checks the tests)"; fi
+              echo "- \`pnpm-lock.yaml\` regenerated with the pinned pnpm"
+              echo ''
+              echo '## Test plan'
+              echo "- [x] Workflow 751's plan job: \`pnpm audit --prod --audit-level high\` passes and \`pnpm run build\` passes on this change"
+              echo '- [ ] This repo'"'"'s CI is green on this PR'
+              echo ''
+              echo 'Opened by workflow 751 (FreeForCharity/FFC-Cloudflare-Automation#1640). It never merges: landing is this repo'"'"'s merge condition. It supersedes the open Dependabot dependency PRs.'
+            } > pr-body.md
+            if url="$(gh pr create --repo "${ORG}/${name}" --base "$defbranch" --head "$BRANCH" \
+              --title "$title" --body-file pr-body.md)"; then
+              echo "| $name | 🆕 PR opened | $url |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $name | ⚠️ pushed, PR create failed | — |" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$failures" -gt 0 ]; then
+            echo "::error::$failures repo(s) failed — see the summary table"
+            exit 1
+          fi

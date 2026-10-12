@@ -663,6 +663,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 748 | Repo - Template Provisioning Matrix [Repo] | `748-template-provisioning-matrix.yml` | pull_request, schedule, workflow_dispatch | Reads | — |
 | 749 | Org - Invite Member [Org] | `749-org-invite-member.yml` | workflow_call, workflow_dispatch | Writes (dry-run default) | ✅ github-prod (invite job only) |
 | 750 | Repo - Charity-Lane Duplicate Lookup (read-only) [GH] | `750-charity-lane-lookup.yml` | workflow_dispatch | Reads | — |
+| 751 | Website - Security Overrides Sync (FFC-EX) [GH] | `751-website-security-overrides-sync.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

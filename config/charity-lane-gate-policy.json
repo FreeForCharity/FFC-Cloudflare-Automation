@@ -51,7 +51,7 @@
       "purpose": "Charity tickets from an allowlisted template only (onboarding_need_info, preview_ready)",
       "workflow": "205-whmcs-ticket-open.yml",
       "environments": ["whmcs-prod"],
-      "required": ["template", "client_id"],
+      "required": ["template", "client_id", "extra_message"],
       "inputs": {
         "template": { "enum": ["onboarding_need_info", "preview_ready"] },
         "client_id": { "pattern": "^[0-9]{1,9}$" },

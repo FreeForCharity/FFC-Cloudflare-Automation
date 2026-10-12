@@ -91,8 +91,8 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `lane:built`). On a failure, comment the reason and set the label back to `lane:build-ready`
      (remove `lane:built`); a second failure is `DECISION NEEDED`.
 
-   Items labelled `lane:needs-info` get the `need_info` ticket (step 2) and go back to
-   `lane:build-ready` after the charity's data changes.
+   Items labelled `lane:needs-info` get the `need_info` ticket (step 2). After the charity's data
+   changes, set the label back to `lane:build-ready` (remove `lane:needs-info`).
 
 5b. **Validate and hand to the charity** (items labelled `lane:validate`, one per run). - Check the
 preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP 200 and carries

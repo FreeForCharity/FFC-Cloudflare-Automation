@@ -187,15 +187,8 @@ jobs:
               echo "::endgroup::"; continue
             fi
 
-            (
-              cd site || exit 1
-              if ! corepack pnpm install --no-frozen-lockfile > ../install.log 2>&1; then
-                tail -40 ../install.log
-                exit 3
-              fi
-              exit 0
-            )
-            if [ $? -ne 0 ]; then
+            if ! (cd site && corepack pnpm install --no-frozen-lockfile > ../install.log 2>&1); then
+              tail -40 install.log
               record "$name" "$kind" blocked '-' '-' "$nchanges" 'pnpm install failed'
               echo "::endgroup::"; continue
             fi
@@ -219,7 +212,7 @@ jobs:
                 build='pass (template types added)'
               fi
             fi
-            [ "$build" = fail ] && tail -40 build.log
+            if [ "$build" = fail ]; then tail -40 build.log; fi
 
             # This change owns three kinds of path. Anything else changed means
             # the edit went somewhere unintended.
@@ -385,7 +378,7 @@ jobs:
               echo '**Changes**'
               sed 's/^/- /' "out/patches/${name}.changes.txt"
               if [ "$build" != pass ]; then echo "- template \`types/*.d.ts\` added: the build failed without them (Next 16.3 type-checks the tests)"; fi
-              echo '- `pnpm-lock.yaml` regenerated with the pinned pnpm'
+              echo "- \`pnpm-lock.yaml\` regenerated with the pinned pnpm"
               echo ''
               echo '## Test plan'
               echo "- [x] Workflow 751's plan job: \`pnpm audit --prod --audit-level high\` passes and \`pnpm run build\` passes on this change"

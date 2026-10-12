@@ -210,6 +210,20 @@ def test_charity_build_step_has_no_token_in_its_environment():
     assert checkout["with"]["persist-credentials"] is False
 
 
+def test_only_the_apply_job_can_mint_an_oidc_token():
+    wf = _wf()
+    assert "id-token" not in (wf.get("permissions") or {})
+    assert "id-token" not in (wf["jobs"]["plan"].get("permissions") or {})
+    assert wf["jobs"]["apply"]["permissions"]["id-token"] == "write"
+
+
+def test_apply_fetches_an_existing_sync_branch_before_the_lease_push():
+    run = find_step(_wf(), "apply", "Open one PR")["run"]
+    fetch = run.index('git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"')
+    push = run.index('git push -q -u origin "$BRANCH" --force-with-lease')
+    assert fetch < push
+
+
 def test_nothing_in_the_workflow_merges_or_approves():
     text = _wf_text()
     for forbidden in ("gh pr merge", "/merge", "--auto", "--admin", "pulls/reviews", "enablePullRequestAutoMerge"):

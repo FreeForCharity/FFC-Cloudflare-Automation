@@ -2309,6 +2309,26 @@
       "categoryCode": "GH"
     },
     {
+      "number": 751,
+      "title": "Website - Security Overrides Sync (FFC-EX)",
+      "apis": [
+        "GH"
+      ],
+      "file": "751-website-security-overrides-sync.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Brings named FFC-EX sites up to the dependency security floor of the template each one was made from, as one pull request per repo. Never merges.  Why this exists (#1640, epic #1618): the charity lane's Gate 3 CI row counts the site's Security Audit, and on most FFC-EX repos that audit is red in a way Dependabot cannot fix. The open advisory is transitive (`source-map-js` via `postcss`), and Dependabot bumps direct dependencies only. The templates fix it with a `pnpm.overrides` block that older sites lack. Measured 2026-10-12: about 90 open Dependabot PRs, nearly all still failing `pnpm audit (production)`; the same change made by hand turned five in-flight sites green.  What it changes, per repo, and nothing else: - `package.json`: the template's `pnpm.overrides` (template value wins on a shared key, repo-only keys kept, scoped keys a bare pin makes dead dropped), and `next` / `postcss` raised to the template's floor (scripts/fleet-overrides-sync.js); - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm; - `types/*.d.ts` copied from the template, only when the build fails without them (Next 16.3 type-checks the test files; the template's matcher types are what fixed that there).  Two jobs, the 742 shape: - plan  \u2014 ungated, job token, read-only. Clones each repo anonymously, makes the change, installs, audits and builds. A repo is READY only when its high-level audit passes and it builds. dry_run=true (the default) stops here; the patches are uploaded as an artifact. - apply \u2014 dry_run=false only, gated `github-prod`. Applies exactly the patches the plan produced (the gate approver reviews that plan), pushes one branch per repo and opens a PR. It never merges, never approves and never enables auto-merge: landing is the target repo's merge condition.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only, no environment) clones each repo anonymously, detects its template from the drift-guard banner (refuses a repo matching neither), merges that template's `pnpm.overrides` and the `next`/`postcss` floor (scripts/fleet-overrides-sync.js), regenerates `pnpm-lock.yaml`, and marks a repo ready only when `pnpm audit --prod --audit-level high` and the build pass; the charity's own build runs with no token in its environment; the gated `apply` job applies exactly the planned patches, refuses any path outside `package.json`, `pnpm-lock.yaml` and `types/*.d.ts`, and opens one PR per repo; never merges, approves or enables auto-merge (#1640)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

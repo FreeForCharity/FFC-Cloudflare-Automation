@@ -307,9 +307,20 @@ function Get-LaneOrgName {
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return [pscustomobject]@{ Name = ''; Raw = ''; Status = 'missing' }
     }
-    if (-not [string]::IsNullOrWhiteSpace($ApplicantFullName) -and
-        $raw.ToLowerInvariant() -eq $ApplicantFullName.Trim().ToLowerInvariant()) {
-        return [pscustomobject]@{ Name = ''; Raw = $raw; Status = 'applicant' }
+    if (-not [string]::IsNullOrWhiteSpace($ApplicantFullName)) {
+        # Exact match, or every word of the "org name" is a word of the applicant's
+        # own name ("James" for James Smith, "Smith Jane" for Jane Smith): both are
+        # the applicant, and this report is public.
+        $tok = { param([string]$s) @(($s.ToLowerInvariant() -replace '[^a-z0-9\s]', ' ') -split '\s+' | Where-Object { $_.Length -ge 2 }) }
+        $orgWords = & $tok $raw
+        $personWords = & $tok $ApplicantFullName
+        $isApplicant = $raw.ToLowerInvariant() -eq $ApplicantFullName.Trim().ToLowerInvariant()
+        if (-not $isApplicant -and $orgWords.Count -gt 0 -and $personWords.Count -gt 0) {
+            $isApplicant = @($orgWords | Where-Object { $personWords -notcontains $_ }).Count -eq 0
+        }
+        if ($isApplicant) {
+            return [pscustomobject]@{ Name = ''; Raw = $raw; Status = 'applicant' }
+        }
     }
     $withheld = $false
     if ((Test-PersonNameCompany -Name $raw).IsPerson) { $withheld = $true }

@@ -115,12 +115,16 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
 6. **Validate and hand to the charity** (items labelled `lane:validate`, one per run).
    - Check the preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP
      200 and carries the FFC footer (org name, EIN for a 501(c)(3), the freeforcharity.org link).
-     Put the preview URL in your report; the full Gate 3 checklist lives on the ffcadmin work order
-     and its `Gate 3 Auto-Validation` workflow.
-   - All machine checks pass: run rule `205-templated` with `template=preview_ready`, the
-     `client_id`, and the preview URL as `extra_message`; set the label to `lane:charity-review`
-     (remove `lane:validate`). A failure sets it back to `lane:build-ready` (remove `lane:validate`)
-     with the reason.
+     Put the preview URL in your report.
+   - The full Gate 3 checklist runs in ffcadmin, which you cannot reach: the Cloud Worker runs it
+     and posts the verdict table on the hub item as `<!-- charity-lane:gate3 -->`
+     (`.claude/routines/site-builder.md` step 5). No such comment for the current preview yet: leave
+     the item for the next run. A FAIL row sets the label back to `lane:build-ready` (remove
+     `lane:validate`) with the failing rows; WARN rows are reported, not blocking.
+   - Your check and every Gate 3 machine row pass: run rule `205-templated` with
+     `template=preview_ready`, the `client_id`, and the preview URL as `extra_message`; set the
+     label to `lane:charity-review` (remove `lane:validate`). A failure sets it back to
+     `lane:build-ready` (remove `lane:validate`) with the reason.
    - Items in `lane:charity-review`: classify the charity's reply with workflow `233` [ticket-reply
      classifier] (`client_id`, `subject_prefix=[Website Preview]`, `issue_number` = the hub item).
      `APPROVED`: set `lane:gate3-done` (remove `lane:charity-review`); the charity may now order its

@@ -60,6 +60,19 @@ the charity's public contact.
 2. Relabel the item `lane:built` (remove `lane:building`) and comment the branch link, the file
    list, the build and drift results, and the pending fields.
 
+## 5. Gate 3 validation run (items labelled `lane:validate`)
+
+The conductor cannot reach ffcadmin; you can. Before picking new build work, take at most one
+`lane:validate` item that has no `<!-- charity-lane:gate3 -->` comment for its current preview:
+
+1. On its ffcadmin work order, set the `Live site:` line to
+   `https://freeforcharity.github.io/FFC-EX-<domain>/` if it is still the placeholder.
+2. Dispatch ffcadmin's `gate3-validate.yml` (REST `…/dispatches`) with the work-order issue number,
+   wait for it, and read the verdict comment it posts on the work order.
+3. Copy the verdict table (row, PASS / FAIL / WARN / MANUAL, short detail) to the hub item in one
+   comment starting `<!-- charity-lane:gate3 -->`, with the run link. Copy nothing else from the
+   work order. You do not decide: the conductor reads this comment and acts.
+
 ## Rules
 
 - Never dispatch `707`, never call `pending_deployments`, never merge, never push to `main`, never

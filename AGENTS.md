@@ -1203,7 +1203,7 @@ holds a verdict that postdates nothing at all — no code changed, and the repo 
 you, so the transition from green to red carries **no commit to blame**, and every instinct that
 says "find what broke it" is pointed at the wrong object.
 
-Measured on 2026-10-11 across three repos. `FFC-IN-ffcadmin.org` and `FFC-EX-canary` both ran their
+Measured on 2026-10-11 across two repos. `FFC-IN-ffcadmin.org` and `FFC-EX-canary` both ran their
 daily `Security Audit` green on **2026-09-30** and red on **2026-10-01**, and stayed red for 11
 consecutive scheduled runs. Neither repo's `next` pin moved. What moved was
 [`GHSA-vcvr-r3jv-pc5j`](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), published

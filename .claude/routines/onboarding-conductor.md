@@ -136,6 +136,18 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      (`.claude/routines/site-builder.md` step 5). No such comment for the current preview yet: leave
      the item for the next run. A FAIL row sets the label back to `lane:build-ready` (remove
      `lane:validate`) with the failing rows; WARN rows are reported, not blocking.
+   - **Security Audit only** [workflow 751; policy rule `751-overrides-sync`]: when the only FAIL
+     row is CI and the only workflow it lists is `Security Audit` (the row names failing workflows,
+     not jobs), the worker cannot fix it (dependencies are outside its content paths). Keep the item
+     at `lane:validate` and, if the item has no `<!-- charity-lane:overrides-sync -->` comment yet,
+     run
+     `charity_lane_gate.py run --rule 751-overrides-sync --input target_repos=FFC-EX-<domain> --input dry_run=false`.
+     Read the job logs: the apply job prints the PR link, and the plan job says why a repo is not
+     ready (no drift guard, or the audit or build still fails after the sync). Comment
+     `<!-- charity-lane:overrides-sync -->` with the PR link, or the not-ready reason, on the item.
+     Run it once per item: while that comment exists, never dispatch 751 for the repo again. A PR
+     waits for the repo's merge condition; list it on the ledger as waiting, and re-check the item
+     when a new Gate 3 table arrives. A not-ready result is `DECISION NEEDED` with the reason.
    - Your check and every Gate 3 machine row pass [`extra_message` on rule `205-templated`, #1632]:
      run rule `205-templated` with `template=preview_ready`, the `client_id`, and the preview URL as
      `extra_message`; set the label to `lane:charity-review` (remove `lane:validate`). A failure

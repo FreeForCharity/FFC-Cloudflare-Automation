@@ -169,6 +169,17 @@
         "skip_cname": { "enum": ["false"] },
         "dry_run": { "enum": ["true", "false"] }
       }
+    },
+    {
+      "id": "751-overrides-sync",
+      "purpose": "Gate 3: open one PR syncing an in-flight site's security overrides to its template when the CI row fails on the audit (751 never merges)",
+      "workflow": "751-website-security-overrides-sync.yml",
+      "environments": ["github-prod"],
+      "required": ["target_repos"],
+      "inputs": {
+        "target_repos": { "pattern": "^FFC-EX-[a-z0-9.-]{3,100}$" },
+        "dry_run": { "enum": ["true", "false"] }
+      }
     }
   ]
 }

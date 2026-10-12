@@ -1,0 +1,8 @@
+{
+  "$comment": "Path allowlist for workflow 707 (Website - Content Apply). Only a repo-relative path matching an `allow` glob, and matching no `deny` glob, may be written into an FFC-EX repo. Globs: `*` matches within one path segment, `**/` matches zero or more whole segments. The `allow` set is the content surface of both FFC templates (FFC-IN-FFC_Single_Page_Template, FFC-IN-Footer_Only_Template), found by inspecting their trees: the canonical `src/lib/site.config.ts` plus the `src/data/` JSON records and the `.ts` modules that import them. Hard refusals that no edit here can relax live in scripts/website-content-apply-guard.ps1: `.github/`, workflow files, CNAME, package manifests and lockfiles, `..`, absolute paths, any extension outside `allowed_extensions`, NUL bytes. Pester: scripts/tests/website-content-apply-guard.Tests.ps1.",
+  "max_total_bytes": 61440,
+  "max_files": 50,
+  "allowed_extensions": [".ts", ".json"],
+  "allow": ["src/lib/site.config.ts", "src/data/*.ts", "src/data/**/*.json"],
+  "deny": ["src/data/events.generated.json"]
+}

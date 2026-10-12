@@ -2182,6 +2182,43 @@ def test_no_hook_module_has_an_invalid_escape_sequence():
            not offenders, "\n".join(offenders))
 
 
+def test_graphql_is_not_a_recognised_api_endpoint():
+    """Rule 10b's `graphql` exemption is unreachable, and this says why.
+
+    `_gh_api_endpoint` does not treat a bare `graphql` token as a route -- it
+    returns `(None, None)` -- so rule 10b's `fpath` is falsy for every GraphQL
+    call and the `!= "graphql"` arm never evaluates. Mutating that arm away
+    flips ZERO registered cases, which is the signature of a dead branch
+    (L: an alternation branch needs a case only it satisfies).
+
+    The arm is kept rather than deleted, because if `_gh_api_endpoint` is ever
+    taught to recognise `graphql` -- a plausible change, since rules 10 and 11
+    would then cover it -- its absence would make rule 10b BLOCK every
+    `gh api graphql --paginate -f query=...` in the fleet, which is the standard
+    paginated-GraphQL shape. This test is what makes that coupling visible: it
+    fails the moment the assumption stops holding, and names rule 10b.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_gb_endpoint_test", GUARD_BASH)
+    gb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gb)
+
+    for cmd in ("gh api graphql -f query='{viewer{login}}'",
+                "gh api graphql --paginate -f query='x' --jq '.data.a.nodes[]'"):
+        path, _query = gb._gh_api_endpoint(cmd)
+        record(f"`graphql` is not a recognised endpoint, so rule 10b cannot reach it: {cmd[:46]}",
+               path is None,
+               f"_gh_api_endpoint returned {path!r}. If this is now a real endpoint, rule 10b's "
+               "`graphql` exemption has become LIVE -- keep it, and give it a firing case.")
+
+    # The control: a real route IS recognised, so the assertion above is about
+    # `graphql` specifically and not about a resolver that answers None always.
+    path, _query = gb._gh_api_endpoint("gh api repos/O/R/issues -f state=open --paginate")
+    record("a real collection route is still recognised (control for the above)",
+           path == "repos/O/R/issues", f"got {path!r}")
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -2323,6 +2360,7 @@ def main():
     print("guard_bash meta-tests (over the rule registry):")
     test_rule_polarity()
     test_strip_quoted_matches_a_bash_accurate_scanner()
+    test_graphql_is_not_a_recognised_api_endpoint()
     test_rule_attribution()
     test_refusal_site_coverage()
     test_no_hook_module_has_an_invalid_escape_sequence()

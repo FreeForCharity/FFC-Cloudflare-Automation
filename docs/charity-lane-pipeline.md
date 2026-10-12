@@ -57,7 +57,7 @@ through a hub workflow that refuses any repo outside `FFC-EX-*`.
 flowchart TD
   A[232 verdicts<br/>pending pid 16/33/40] --> B{Verdict}
   B -- ACCEPT --> C[226 approve / 211 accept<br/>via gate script]
-  B -- NEED_INFO --> N[205 need_info ticket<br/>via gate script]
+  B -- NEED_INFO --> N[205 onboarding_need_info ticket<br/>via gate script]
   B -- ESCALATE --> X[DECISION NEEDED]
   C --> D[ffcadmin WHMCS Intake sync<br/>kind:intake work order]
   D --> Q[Hub item CHARITY-LANE<br/>lane:build-ready]
@@ -85,14 +85,20 @@ flowchart TD
    or ESCALATE, with reason codes. The checks are the machine-checkable part of the inventory §5
    set: organization Facebook and LinkedIn pages answer, the ToS and US attestations are ticked, the
    track matches the legal-status answer, the EIN is present (and a confirmed 501(c)(3) for pid 33),
-   and there is no duplicate client, org or domain. Fraud screening is not wired yet
-   (`FRAUD_CHECK_NOT_RUN`).
+   and there is no duplicate client, org or domain. Every order is then screened with FraudLabs Pro
+   exactly as `228` does it (228's `fraudlabspro-prod-read` environment and key), deciding on the
+   FraudLabs status alone: `APPROVE` passes, `REJECT` is ESCALATE `FRAUD_FLAGGED`, `REVIEW` is
+   ESCALATE `FRAUD_REVIEW`, and a failed or missing lookup is ESCALATE `FRAUD_CHECK_FAILED`. The
+   score is reported but never decisive: a high score on a $0 onboarding order is the documented
+   false-positive pattern (#813). The decision table is the `finalize` job's; the WHMCS job's own
+   report is unscreened and is transport only.
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts
      per run during the testing period; still no bulk accept.
-   - **NEED_INFO:** `205` with the `need_info` template (rule `205-templated`), at most once per
-     order per week. The order stays Pending and is re-checked next run.
+   - **NEED_INFO:** `205` with the `onboarding_need_info` template and a plain-English list of the
+     missing items (rule `205-templated`), at most once per order per week. The order stays Pending
+     and is re-checked next run.
    - **ESCALATE:** a `DECISION NEEDED` line. Cancels and fraud marks stay Tier 2.
 3. Acceptance turns the service **Active**. ffcadmin's `WHMCS Intake` sync (daily 08:00 UTC) opens
    the `kind:intake` work order, which carries the Gate 3 checklist.
@@ -109,7 +115,10 @@ marker orders from `224` need no gate.
    `[CHARITY-LANE] <domain or org>` labelled `charity-lane` and `lane:build-ready`, linking the
    ffcadmin work order. Labels move it through `lane:building`, `lane:built` and `lane:validate`.
 2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. pid 33 has no domain
-   question, so a missing desired domain is a `need_info` ticket, not a guess.
+   question, so the conductor first searches for an existing site (750's EIN-based query, then a web
+   search) and otherwise sends an `onboarding_need_info` ticket asking for the domain; it never
+   guesses. A charity found to have its own live site is provisioned with 701 `skip_dns=true` and
+   follows the ready-for-cutover path.
 3. **Provision:** `701. Website - Provision` with `dry_run=false` through the gate script (rule
    `701-provision`). A charity at this gate has no FFC zone yet, so 701 publishes on
    `https://freeforcharity.github.io/FFC-EX-<domain>/` and skips DNS.
@@ -117,17 +126,24 @@ marker orders from `224` need no gate.
    application (ffcadmin's footer bridge, fail-closed) and page data under `src/data/`, and pushes
    the files to the hub branch `claude/site-content/<domain>`. That branch is transport only and is
    never merged. The conductor then delivers it with `707. Website - Content Apply`, which opens a
-   PR in the `FFC-EX-*` repo and accepts only allowlisted content paths. **Known gap:** FFC-EX repos
-   have auto-merge off and no required checks, so the content PR is left open until it is merged
-   (epic item G3.3b).
-5. **Validate:** ffcadmin's `Gate 3 Auto-Validation` covers HTTP 200, the footer markers, viewport
-   and broken asset paths today. CI status, required sections, a 375px pass, console errors and
-   accessibility are still MANUAL rows (epic item G3.4). A FAIL goes back to the worker; a second
-   consecutive FAIL on the same row is a real problem.
+   PR in the `FFC-EX-*` repo and accepts only allowlisted content paths. 707 then waits for the
+   site's own CI and merges the PR when every check passed (G3.3b, #1626); otherwise it leaves the
+   PR open and prints the reason, which the conductor raises as a decision.
+5. **Validate:** ffcadmin's `Gate 3 Auto-Validation` checks HTTP 200, the footer markers, viewport
+   and broken asset paths. With FFC-IN-ffcadmin.org#1448, CI status, required sections, a 375px
+   pass, console errors and accessibility become PASS/FAIL rows too, and only the charity's approval
+   stays MANUAL. The Cloud Worker runs it and posts the table on the hub item. A FAIL goes back to
+   the worker; a second consecutive FAIL on the same row is a real problem. One exception: when the
+   only FAIL is CI and the only failing workflow it lists is the site's `Security Audit`, the worker
+   can't fix it, because dependencies are outside its content paths. The conductor runs workflow 751
+   once for the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the
+   site's `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
-   `preview_ready` template and the preview URL. The charity's reply (read through `209`) is either
-   change requests, which go back to the worker, or approval, which completes Gate 3: the charity
-   may order its domain.
+   `preview_ready` template and the preview URL. Workflow 233 classifies the charity's reply as
+   APPROVED, CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638). APPROVED completes Gate
+   3, and the charity may order its domain. CHANGES go back to the worker (how the change text
+   reaches the worker is an open decision on #1618). UNCLEAR, or no reply after 14 days, is a
+   decision.
 
 ### Gate 4: domain and DNS
 
@@ -141,6 +157,22 @@ marker orders from `224` need no gate.
   the charity's own tenant (lifecycle Phase 2).
 - **Domain already serving a live site:** the conductor stops at **ready for cutover**: `121`
   preflight READY, preview approved by the charity. The cutover itself (`120`) is Tier 2.
+
+## Queue labels
+
+Each charity has one hub issue, `[CHARITY-LANE] <domain or org>`, labelled `charity-lane` plus
+exactly one lane label. Every transition removes the previous lane label.
+
+| Label                 | Meaning                                                      | Set by    | Next                                         |
+| --------------------- | ------------------------------------------------------------ | --------- | -------------------------------------------- |
+| `lane:build-ready`    | Accepted; waiting for the Cloud Worker                       | conductor | `lane:building`                              |
+| `lane:building`       | A worker has claimed it (lease in a claim comment)           | worker    | `lane:built`, `lane:needs-info`              |
+| `lane:needs-info`     | The application is missing data; `onboarding_need_info` sent | worker    | `lane:build-ready` once the data changes     |
+| `lane:built`          | Content is on `claude/site-content/<domain>`                 | worker    | `lane:validate` after 707 delivers and lands |
+| `lane:validate`       | Preview is live; Gate 3 checks running                       | conductor | `lane:charity-review`, or back to build      |
+| `lane:charity-review` | `preview_ready` ticket sent; waiting for the charity         | conductor | `lane:gate3-done`, or back to build          |
+| `lane:gate3-done`     | The charity approved its preview                             | conductor | Gate 4                                       |
+| `lane:live`           | Brand-new domain serving the site on its apex                | conductor | (done)                                       |
 
 ## Gate clearing
 
@@ -181,13 +213,21 @@ a policy change for Clarke. `.claude/settings.json` allows only the script's sub
 
 ## Components
 
-| Piece                    | Where                                                                  | PR      |
-| ------------------------ | ---------------------------------------------------------------------- | ------- |
-| Design (this page)       | `docs/charity-lane-pipeline.md`                                        | #1617   |
-| Gate 1/2 verdicts        | `232-whmcs-charity-lane-verdicts.yml`                                  | #1620   |
-| Gate clearing            | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json` | #1621   |
-| Conductor brief          | `.claude/routines/onboarding-conductor.md`                             | #1622   |
-| Content delivery         | `707-website-content-apply.yml`; `205` templates                       | #1623   |
-| Worker brief and queue   | `.claude/routines/site-builder.md`                                     | (build) |
-| Gate 3 validation rows   | ffcadmin `gate3-validate`                                              | (build) |
-| Land content PRs (G3.3b) | `707`                                                                  | (build) |
+| Piece                             | Where                                                                            | PR                       |
+| --------------------------------- | -------------------------------------------------------------------------------- | ------------------------ |
+| Design (this page)                | `docs/charity-lane-pipeline.md`                                                  | #1617, #1624             |
+| Gate 1/2 verdicts                 | `232-whmcs-charity-lane-verdicts.yml`                                            | #1620                    |
+| Gate clearing                     | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json`           | #1621, #1627             |
+| Conductor brief                   | `.claude/routines/onboarding-conductor.md`                                       | #1622, #1625, #1630      |
+| Content delivery                  | `707-website-content-apply.yml`; `205` templates                                 | #1623                    |
+| Land content PRs (G3.3b)          | `707` waits for the site's CI, then merges                                       | #1626                    |
+| Worker brief and queue            | `.claude/routines/site-builder.md`                                               | #1625                    |
+| Duplicate lookup                  | `750-charity-lane-lookup.yml`, `scripts/charity_lane_lookup.py`                  | #1628                    |
+| Existing live site: build, no DNS | `701` input `skip_dns`                                                           | #1631                    |
+| Onboarding need-info ticket       | `onboarding_need_info` in `config/whmcs-ticket-templates.json`                   | #1632                    |
+| Charity reply classifier          | `233-whmcs-charity-lane-ticket-reply.yml` (no reply text printed)                | #1638                    |
+| Public website fields             | `234-whmcs-charity-lane-site-fields.yml`, `config/charity-lane-site-fields.json` | #1639                    |
+| Gate 3 validation rows            | ffcadmin `gate3-validate`                                                        | FFC-IN-ffcadmin.org#1448 |
+| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                                   | #1635                    |
+| Security Audit fix (site deps)    | `751-website-security-overrides-sync.yml`, `scripts/fleet-overrides-sync.js`     | #1641                    |
+| Conductor runs 751 (audit only)   | rule `751-overrides-sync`, brief step 6                                          | #1644                    |

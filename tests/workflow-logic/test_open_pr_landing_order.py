@@ -347,6 +347,85 @@ def test_measure_conflicts_runs_the_base_sweep_BEFORE_the_pair_loop():
     )
 
 
+def test_a_failed_base_checkout_RAISES_instead_of_measuring_the_wrong_base():
+    """Copilot's second finding on this PR. The checkout ran `check=False` with
+    its return code never inspected, so a failed `git checkout -f --detach
+    <base>` left HEAD wherever the worktree happened to be and every merge after
+    it measured against the wrong commit -- producing a confident landing plan
+    for a base nobody asked about, which is the exact failure class this script
+    exists to prevent. `main()` turns the raise into exit 2."""
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "error: pathspec 'origin/nope'")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        try:
+            _mod.checkout_base("/tmp/wt", "origin/nope")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "origin/nope" in msg, f"the raise must name the base it failed on: {msg}"
+            assert "wrong base" in msg, (
+                f"the raise must say why it matters, not just that git exited 1: {msg}"
+            )
+        else:
+            raise AssertionError(
+                "a failed base checkout returned normally; the conflict graph that "
+                "follows would be measured against a stale HEAD"
+            )
+    finally:
+        _mod._run = original
+    assert calls, "checkout_base did not invoke git at all"
+    assert calls[0][:4] == ["git", "checkout", "-f", "--detach"], (
+        f"unexpected checkout invocation: {calls[0]}"
+    )
+
+
+def test_a_successful_base_checkout_returns_normally():
+    """The polarity check: failing closed must not refuse the ordinary case, or
+    the script trades a wrong plan for no plan at all."""
+    import subprocess
+
+    def fake_run(cmd, cwd=None, check=True):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        _mod.checkout_base("/tmp/wt", "origin/main")
+    finally:
+        _mod._run = original
+
+
+def test_BOTH_checkout_sites_go_through_the_failing_closed_helper():
+    """There were two, and fixing only the one Copilot pointed at would leave
+    the pairwise loop measuring against a stale HEAD. Asserted at source level
+    because `measure_conflicts` shells out to git and is not reachable here."""
+    import inspect
+
+    src = inspect.getsource(_mod.measure_conflicts)
+    assert "checkout_base" in src, "measure_conflicts no longer uses checkout_base"
+    bad = [
+        ln.strip()
+        for ln in src.splitlines()
+        if '"checkout"' in ln and "checkout_base" not in ln
+    ]
+    assert not bad, (
+        "a raw `git checkout` with an uninspected return code is back in "
+        "measure_conflicts:\n  " + "\n  ".join(bad)
+    )
+    # Two call sites: the base sweep and the pairwise loop.
+    assert src.count("checkout_base(") == 2, (
+        f"expected both checkout sites to use the helper, found "
+        f"{src.count('checkout_base(')}"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

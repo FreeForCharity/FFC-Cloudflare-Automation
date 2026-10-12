@@ -230,6 +230,33 @@ def fetch_pr_heads(worktree, prs):
         verify_fetched_head(number, sha, observed)
 
 
+def checkout_base(worktree, base):
+    """`git checkout -f --detach <base>` in `worktree`, failing closed.
+
+    This ran with `check=False` and its return code was never inspected, unlike
+    every `git merge` in `measure_conflicts`. A failed checkout -- `--base`
+    misspelled, the worktree pointed somewhere unexpected, `origin/main` not
+    fetched -- leaves HEAD on whatever the worktree was last left at, and the
+    merge that follows then measures against the **wrong base**. Both answers
+    the measurement can give are bogus in that case: `merges_into_base` returns
+    a True/False about a base nobody asked about, and the pairwise loop builds
+    its conflict graph on a stale HEAD. The script then prints a confident
+    landing plan computed against the wrong commit, which is the one failure
+    mode it exists to prevent.
+
+    So this raises instead, and the raise is what `main()` turns into exit 2.
+    """
+    r = _run(
+        ["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"could not check out {base} in {worktree} (git exited "
+            f"{r.returncode}): {(r.stderr or '').strip()[:300]} -- every merge "
+            f"after this would measure against the wrong base"
+        )
+
+
 def base_merge_failures(numbers, merges_into_base):
     """Which PRs in the SET do not merge into `base` on their own.
 
@@ -271,7 +298,7 @@ def measure_conflicts(worktree, base, prs):
     numbers = [n for n, _ in prs]
 
     def merges_into_base(number):
-        _run(["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False)
+        checkout_base(worktree, base)
         r = _run(["git", "merge", "--no-edit", pr_ref(number)], cwd=worktree, check=False)
         if r.returncode != 0:
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
@@ -288,7 +315,7 @@ def measure_conflicts(worktree, base, prs):
 
     edges = []
     for a, b in itertools.combinations(numbers, 2):
-        _run(["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False)
+        checkout_base(worktree, base)
         first = _run(["git", "merge", "--no-edit", pr_ref(a)], cwd=worktree, check=False)
         if first.returncode != 0:
             # Unreachable after the up-front sweep unless a head moved under us,

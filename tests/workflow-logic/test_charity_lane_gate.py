@@ -175,9 +175,39 @@ def test_audit_redacts_contact_inputs():
 def test_never_list_has_no_matching_rule():
     workflows = {r["workflow"] for r in POLICY["rules"]}
     assert "113-domain-register.yml" not in workflows
-    assert not any(r["workflow"].startswith("120-") for r in POLICY["rules"])
     for r in POLICY["rules"]:
         assert "m365-prod" not in r["environments"]
+        if r["workflow"].startswith("120-"):
+            # 120 only as the CNAME-only step for one new domain, never its DNS flip.
+            assert r["environments"] == ["github-prod"]
+            assert r["inputs"]["skip_dns"] == {"enum": ["true"]}
+            assert "cloudflare-prod-write" not in r["environments"]
+
+
+def test_707_rule_only_targets_ffc_ex_and_caps_payload():
+    ok = {"target_repo": "FFC-EX-hope-house.org", "content_json": "{}", "dry_run": "false"}
+    assert not refused("707-content-apply", ok)
+    assert refused("707-content-apply", {**ok, "target_repo": "FFC-IN-ffcadmin.org"})
+    assert refused("707-content-apply", {**ok, "target_repo": "FFC-Cloudflare-Automation"})
+    assert refused("707-content-apply", {**ok, "content_json": "x" * 61441})
+    assert refused("707-content-apply", {**ok, "issue_url": "https://evil.example/issues/1"})
+
+
+def test_120_rule_is_one_domain_cname_only():
+    ok = {"domains": "newcharity.org", "skip_dns": "true", "dry_run": "false"}
+    assert not refused("120-cname-new-domain", ok)
+    assert refused("120-cname-new-domain", {**ok, "skip_dns": "false"})
+    assert refused("120-cname-new-domain", {**ok, "domains": "a.org,b.org"})
+    assert refused("120-cname-new-domain", {**ok, "legacy_apex_ip": "1.2.3.4"})
+    assert refused("120-cname-new-domain", {**ok, "skip_cname": "true"})
+
+
+def test_120_github_prod_needs_the_live_site_check():
+    rule = gate.find_rule(POLICY, "120-cname-new-domain")
+    todo, why = gate.decide(rule, [dep("github-prod")], (True, "A records point outside GitHub Pages"))
+    assert not todo and "live-site" in why[0]
+    todo, _ = gate.decide(rule, [dep("github-prod")], (False, "ok"))
+    assert len(todo) == 1
 
 
 def test_dispatched_but_unidentified_exits_3_and_audits():

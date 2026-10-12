@@ -7,7 +7,7 @@
     "211 cancel or fraud",
     "226 reconcile or reconcile-report, or approve with more than one order id",
     "113 domain register (spends money)",
-    "120 cutover of a live site",
+    "120 with DNS (skip_dns=false), more than one domain, or for a domain serving a live site",
     "accepting a pid 39 / 41 domain order",
     "any m365-prod write",
     "any run this script did not dispatch"
@@ -80,6 +80,7 @@
             "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
           ]
         },
+        "skip_dns": { "enum": ["true", "false"] },
         "charity_name": { "maxlen": 200 },
         "footer_email": { "maxlen": 200 },
         "footer_phone": { "maxlen": 50 },
@@ -131,6 +132,41 @@
         "github_pages_only": { "enum": ["true"] },
         "skip_m365": { "enum": ["true"] },
         "issue_number": { "pattern": "^[0-9]{1,6}$" }
+      }
+    },
+    {
+      "id": "707-content-apply",
+      "purpose": "Gate 3: deliver worker-built content into the charity's FFC-EX repo as a PR (707 refuses non-allowlisted paths itself)",
+      "workflow": "707-website-content-apply.yml",
+      "environments": ["github-prod"],
+      "required": ["target_repo", "content_json"],
+      "inputs": {
+        "target_repo": { "pattern": "^FFC-EX-[a-z0-9.-]{3,100}$" },
+        "content_json": { "maxlen": 61440 },
+        "title": { "maxlen": 200 },
+        "issue_url": {
+          "pattern": "^(https://github\\.com/FreeForCharity/[A-Za-z0-9._-]+/issues/[0-9]+)?$"
+        },
+        "auto_merge": { "enum": ["true", "false"] },
+        "land_when_green": { "enum": ["true", "false"] },
+        "land_wait_minutes": { "pattern": "^([1-9]|[12][0-9]|30)$" },
+        "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
+      "id": "120-cname-new-domain",
+      "purpose": "Gate 4: point one brand-new domain's FFC-EX repo at its apex (public/CNAME only; DNS was set by 103). The live-site check must pass first.",
+      "workflow": "120-bulk-cutover-to-github-pages.yml",
+      "environments": ["github-prod"],
+      "live_site_check": ["github-prod"],
+      "required": ["domains", "skip_dns"],
+      "inputs": {
+        "domains": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+        },
+        "skip_dns": { "enum": ["true"] },
+        "skip_cname": { "enum": ["false"] },
+        "dry_run": { "enum": ["true", "false"] }
       }
     }
   ]

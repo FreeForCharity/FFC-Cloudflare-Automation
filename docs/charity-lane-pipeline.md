@@ -57,7 +57,7 @@ through a hub workflow that refuses any repo outside `FFC-EX-*`.
 flowchart TD
   A[232 verdicts<br/>pending pid 16/33/40] --> B{Verdict}
   B -- ACCEPT --> C[226 approve / 211 accept<br/>via gate script]
-  B -- NEED_INFO --> N[205 need_info ticket<br/>via gate script]
+  B -- NEED_INFO --> N[205 onboarding_need_info ticket<br/>via gate script]
   B -- ESCALATE --> X[DECISION NEEDED]
   C --> D[ffcadmin WHMCS Intake sync<br/>kind:intake work order]
   D --> Q[Hub item CHARITY-LANE<br/>lane:build-ready]
@@ -91,8 +91,9 @@ flowchart TD
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts
      per run during the testing period; still no bulk accept.
-   - **NEED_INFO:** `205` with the `need_info` template (rule `205-templated`), at most once per
-     order per week. The order stays Pending and is re-checked next run.
+   - **NEED_INFO:** `205` with the `onboarding_need_info` template and a plain-English list of the
+     missing items (rule `205-templated`), at most once per order per week. The order stays Pending
+     and is re-checked next run.
    - **ESCALATE:** a `DECISION NEEDED` line. Cancels and fraud marks stay Tier 2.
 3. Acceptance turns the service **Active**. ffcadmin's `WHMCS Intake` sync (daily 08:00 UTC) opens
    the `kind:intake` work order, which carries the Gate 3 checklist.
@@ -109,7 +110,10 @@ marker orders from `224` need no gate.
    `[CHARITY-LANE] <domain or org>` labelled `charity-lane` and `lane:build-ready`, linking the
    ffcadmin work order. Labels move it through `lane:building`, `lane:built` and `lane:validate`.
 2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. pid 33 has no domain
-   question, so a missing desired domain is a `need_info` ticket, not a guess.
+   question, so the conductor first searches for an existing site (750's EIN-based query, then a web
+   search) and otherwise sends an `onboarding_need_info` ticket asking for the domain; it never
+   guesses. A charity found to have its own live site is provisioned with 701 `skip_dns=true` and
+   follows the ready-for-cutover path.
 3. **Provision:** `701. Website - Provision` with `dry_run=false` through the gate script (rule
    `701-provision`). A charity at this gate has no FFC zone yet, so 701 publishes on
    `https://freeforcharity.github.io/FFC-EX-<domain>/` and skips DNS.
@@ -181,13 +185,17 @@ a policy change for Clarke. `.claude/settings.json` allows only the script's sub
 
 ## Components
 
-| Piece                    | Where                                                                  | PR      |
-| ------------------------ | ---------------------------------------------------------------------- | ------- |
-| Design (this page)       | `docs/charity-lane-pipeline.md`                                        | #1617   |
-| Gate 1/2 verdicts        | `232-whmcs-charity-lane-verdicts.yml`                                  | #1620   |
-| Gate clearing            | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json` | #1621   |
-| Conductor brief          | `.claude/routines/onboarding-conductor.md`                             | #1622   |
-| Content delivery         | `707-website-content-apply.yml`; `205` templates                       | #1623   |
-| Worker brief and queue   | `.claude/routines/site-builder.md`                                     | (build) |
-| Gate 3 validation rows   | ffcadmin `gate3-validate`                                              | (build) |
-| Land content PRs (G3.3b) | `707`                                                                  | (build) |
+| Piece                             | Where                                                                  | PR                       |
+| --------------------------------- | ---------------------------------------------------------------------- | ------------------------ |
+| Design (this page)                | `docs/charity-lane-pipeline.md`                                        | #1617, #1624             |
+| Gate 1/2 verdicts                 | `232-whmcs-charity-lane-verdicts.yml`                                  | #1620                    |
+| Gate clearing                     | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json` | #1621, #1627             |
+| Conductor brief                   | `.claude/routines/onboarding-conductor.md`                             | #1622, #1625, #1630      |
+| Content delivery                  | `707-website-content-apply.yml`; `205` templates                       | #1623                    |
+| Land content PRs (G3.3b)          | `707` waits for the site's CI, then merges                             | #1626                    |
+| Worker brief and queue            | `.claude/routines/site-builder.md`                                     | #1625                    |
+| Duplicate lookup                  | `750-charity-lane-lookup.yml`, `scripts/charity_lane_lookup.py`        | #1628                    |
+| Existing live site: build, no DNS | `701` input `skip_dns`                                                 | #1631                    |
+| Onboarding need-info ticket       | `onboarding_need_info` in `config/whmcs-ticket-templates.json`         | #1632                    |
+| Gate 3 validation rows            | ffcadmin `gate3-validate`                                              | FFC-IN-ffcadmin.org#1448 |
+| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                         | (build)                  |

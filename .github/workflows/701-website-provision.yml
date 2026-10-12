@@ -43,6 +43,14 @@ on:
         options:
           - FreeForCharity/FFC-IN-Footer_Only_Template
           - FreeForCharity/FFC-IN-FFC_Single_Page_Template
+      skip_dns:
+        description: >-
+          Build on the default GitHub Pages URL only: never touch DNS and never set a custom domain,
+          even when the zone is in FFC Cloudflare. For a domain that already serves a live site (the
+          charity lane's "ready for cutover" path); the cutover itself stays a separate step.
+        required: false
+        type: boolean
+        default: false
       charity_name:
         description:
           'Organization display name (optional; required only to apply the React template footer).'
@@ -928,6 +936,9 @@ jobs:
         # makes every parsed field attacker-authored. See ledger L28.
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
+          # Dispatch-only; null on the issues / repository_dispatch paths, which
+          # therefore behave exactly as before.
+          SKIP_DNS: ${{ inputs.skip_dns }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = [string]$env:DOMAIN
@@ -948,6 +959,14 @@ jobs:
           $existsFfc = [bool]$ffc.exists
           $existsCm  = [bool]$cm.exists
           $controlled = ($existsFfc -or $existsCm)
+
+          # skip_dns: report the zone as not controlled for THIS run, so dns_preview,
+          # dns and verify skip and the repo job builds on the default Pages URL
+          # (no CNAME). The zone_exists_* flags still tell the truth.
+          if ([string]$env:SKIP_DNS -eq 'true' -and $controlled) {
+            Write-Output "::notice::skip_dns=true: $domain is in FFC Cloudflare ($(if ($existsFfc) { 'FFC' } else { 'CM' })), but this run leaves DNS alone and builds on the default Pages URL."
+            $controlled = $false
+          }
 
           $account = ''
           if ($existsFfc) { $account = 'FFC' }

@@ -83,6 +83,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      the ready-for-cutover path in step 7, never the brand-new-domain path. If nothing is found,
      send the `onboarding_need_info` ticket asking for the desired domain and label the item
      `lane:needs-info`.
+   - Backlog: the newest `BACKLOG:` lines the Cloud Worker posted on #1608 are approved charities
+     with a work order but no lane item (its client id is in the line). Treat each like an accepted
+     order here (750 first; an existing repo means an in-flight item at `lane:validate`), at most 3
+     per run.
    - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
      `charity-lane` and `lane:build-ready`, carrying the WHMCS client id, the order ids and the 750
      run. Queue right after the accept: you cannot read ffcadmin (this routine is attached to the

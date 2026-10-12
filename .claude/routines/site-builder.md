@@ -15,8 +15,14 @@ the charity's public contact.
 
 ## 1. Pick and claim
 
-1. List open hub issues labelled `charity-lane` and `lane:build-ready`, oldest first. None: skip
-   this brief and continue with your normal queue.
+1. List open hub issues labelled `charity-lane` and `lane:build-ready`, oldest first. None: report
+   the backlog (below), then continue with your normal queue.
+
+   **Backlog report** (only when there is no build work): list open FFC-IN-ffcadmin.org issues
+   labelled `kind:intake` and `status:needs-admin` that have no `[CHARITY-LANE]` hub item linking
+   them, and post one comment on #1608 with a `BACKLOG:` line per work order (issue link, org name,
+   `ffc-<client id>` from its marker). Do not create items: the conductor decides what to queue.
+
 2. Skip an item whose newest `<!-- charity-lane:claim ... -->` comment has `until` in the future.
 3. Claim the first one left: remove `lane:build-ready`, add `lane:building`, and comment
    `<!-- charity-lane:claim holder=<your session URL> until=<now + 3 h, UTC ISO> -->`. Re-read the

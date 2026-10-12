@@ -125,9 +125,11 @@ marker orders from `224` need no gate.
    accessibility are still MANUAL rows (epic item G3.4). A FAIL goes back to the worker; a second
    consecutive FAIL on the same row is a real problem.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
-   `preview_ready` template and the preview URL. The charity's reply (read through `209`) is either
-   change requests, which go back to the worker, or approval, which completes Gate 3: the charity
-   may order its domain.
+   `preview_ready` template and the preview URL. The charity's reply is read by
+   `233. WHMCS - Charity-Lane Ticket Reply` (ungated, `subject_prefix=[Website Preview]`), which
+   classifies it without printing it: `CHANGES` goes back to the worker, `APPROVED` completes Gate 3
+   and the charity may order its domain. `UNCLEAR` and `NO_REPLY` are not an approval (233 fails
+   closed toward `UNCLEAR`). See [whmcs-support-tickets.md](whmcs-support-tickets.md).
 
 ### Gate 4: domain and DNS
 

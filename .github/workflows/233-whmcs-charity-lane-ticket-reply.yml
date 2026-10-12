@@ -1,0 +1,108 @@
+name: '233. WHMCS - Charity-Lane Ticket Reply (classify, read-only) [WHMCS]'
+run-name: 'WHMCS Charity-Lane Ticket Reply: client ${{ inputs.client_id }}'
+
+# Read-only. Step G3.6 of the charity-lane pipeline (docs/charity-lane-pipeline.md,
+# epic #1618). After 205 sends a charity the `preview_ready` ticket ("[Website
+# Preview] Your new website is ready to review"), this finds that client's most
+# recent ticket with the chosen subject prefix (GetTickets by clientid, then
+# GetTicket), takes the client's latest reply after FFC's opening message (client
+# vs admin by the API's `admin` field), and classifies it: APPROVED / CHANGES /
+# UNCLEAR / NO_REPLY / TICKET_NOT_FOUND. It fails closed: anything unsure is UNCLEAR.
+#
+# This repo is PUBLIC. The reply text is never written anywhere: the job summary
+# and the optional issue comment (marker `<!-- charity-lane:ticket-reply -->`)
+# carry only client id, ticket id, ticket status, reply date (UTC),
+# classification and the matched signal LABELS from fixed word lists. No
+# artifact is uploaded.
+#
+# Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as
+# 219/221/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader)
+# identity. Every input reaches the script through env:, never the script text.
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: 'WHMCS client id (digits)'
+        required: true
+        type: string
+      subject_prefix:
+        description: 'Ticket subject prefix to look for (205 template prefix)'
+        required: true
+        type: choice
+        default: '[Website Preview]'
+        options:
+          - '[Website Preview]'
+          - '[Application]'
+      issue_number:
+        description: 'Optional: hub issue number to comment the result back to (digits)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  ticket_reply:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer.
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Classify the charity's ticket reply (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          SUBJECT_PREFIX: ${{ inputs.subject_prefix }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Validate every input before any WHMCS call. Bad values are not echoed:
+          # the run log of this public repo carries fixed text only.
+          $clientId = 0
+          if ([string]::IsNullOrWhiteSpace($env:CLIENT_ID) -or $env:CLIENT_ID -notmatch '^\d{1,9}$' -or
+              -not [int]::TryParse($env:CLIENT_ID, [ref]$clientId) -or $clientId -lt 1) {
+            Write-Output '::error::client_id must be a positive integer (digits only).'
+            exit 1
+          }
+          $prefixes = @('[Website Preview]', '[Application]')
+          if ([string]::IsNullOrWhiteSpace($env:SUBJECT_PREFIX) -or $prefixes -cnotcontains $env:SUBJECT_PREFIX) {
+            Write-Output "::error::subject_prefix must be one of: $($prefixes -join ', ')."
+            exit 1
+          }
+          $prefix = $env:SUBJECT_PREFIX
+          $issue = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            if ($env:ISSUE_NUMBER -notmatch '^\d{1,9}$' -or -not [int]::TryParse($env:ISSUE_NUMBER, [ref]$issue) -or $issue -lt 1) {
+              Write-Output '::error::issue_number must be a positive integer (digits only).'
+              exit 1
+            }
+          }
+
+          $json = Join-Path $env:RUNNER_TEMP 'charity-lane-ticket-reply.json'
+          $md = Join-Path $env:RUNNER_TEMP 'charity-lane-ticket-reply.md'
+          # In-process call (`&`, not `pwsh -File`): PowerShell's own binder, so an
+          # empty value can never shift the arguments (ledger L214).
+          & .\scripts\whmcs-charity-lane-ticket-reply.ps1 -ApiUrl $env:WHMCS_API_URL -ClientId $clientId -SubjectPrefix $prefix -OutputFile $json -MarkdownFile $md
+          if ($LASTEXITCODE -ne 0) { throw "Ticket reply classification failed (exit $LASTEXITCODE)." }
+
+          if ($issue -gt 0) {
+            gh issue comment $issue --repo $env:GITHUB_REPOSITORY --body-file $md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $issue (exit $LASTEXITCODE)." }
+          }

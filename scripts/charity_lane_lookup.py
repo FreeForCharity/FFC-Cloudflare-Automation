@@ -24,7 +24,7 @@ source with a strength: `exact` (same domain or repo), `strong` (a full slug equ
 a repo/domain stem), or `weak` (a phrase hit in an issue, a slug inside a longer
 name). Exit 0 always for a completed search; 1 on an error.
 
-Runs locally under your `gh` auth and in workflow 233 under the job token. Public
+Runs locally under your `gh` auth and in workflow 750 under the job token. Public
 data only, nothing is written.
 """
 

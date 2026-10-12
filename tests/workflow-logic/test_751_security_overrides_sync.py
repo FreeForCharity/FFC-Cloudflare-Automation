@@ -176,6 +176,56 @@ def test_unparseable_package_json_is_blocked_not_rewritten():
         assert tgt.read_text(encoding="utf-8") == "{ not json"
 
 
+# --- add-dev (the build fallback for a template test's devDependency) ---------
+
+DEV_TEMPLATE = {"devDependencies": {"@jest/globals": "^30.5.2", "jest": "^30.5.2"}}
+
+
+def add_dev(raw: str, name: str = "@jest/globals", template: dict | None = None):
+    with tempfile.TemporaryDirectory() as d:
+        tpl = pathlib.Path(d, "template.json")
+        tgt = pathlib.Path(d, "package.json")
+        tpl.write_text(json.dumps(template or DEV_TEMPLATE), encoding="utf-8")
+        tgt.write_bytes(raw.encode("utf-8"))
+        r = node("add-dev", str(tpl), str(tgt), name)
+        return r, tgt.read_bytes().decode("utf-8")
+
+
+def test_add_dev_adds_the_template_version_when_missing():
+    r, written = add_dev(json.dumps({"devDependencies": {"jest": "^30.2.0"}}, indent=2) + "\n")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(written)["devDependencies"]["@jest/globals"] == "^30.5.2"
+    assert json.loads(r.stdout)["changes"] == ["devDependency @jest/globals: (none) -> ^30.5.2"]
+
+
+def test_add_dev_is_a_no_op_when_the_site_already_has_it():
+    for section in ("dependencies", "devDependencies"):
+        raw = json.dumps({section: {"@jest/globals": "^29.0.0"}}, indent=2) + "\n"
+        r, written = add_dev(raw)
+        assert r.returncode == 0 and json.loads(r.stdout)["changes"] == []
+        assert written == raw, "a present dependency is never rewritten or bumped"
+
+
+def test_add_dev_refuses_a_package_outside_the_allowlist():
+    raw = json.dumps({"devDependencies": {}}, indent=2) + "\n"
+    r, written = add_dev(raw, name="left-pad", template={"devDependencies": {"left-pad": "1.0.0"}})
+    assert r.returncode == 2 and written == raw
+
+
+def test_add_dev_refuses_when_the_template_does_not_carry_it():
+    raw = json.dumps({"devDependencies": {}}, indent=2) + "\n"
+    r, written = add_dev(raw, template={"devDependencies": {"jest": "^30"}})
+    assert r.returncode == 2 and written == raw
+
+
+def test_add_dev_keeps_crlf_and_indent():
+    raw = '{\r\n    "devDependencies": {\r\n        "jest": "^30.2.0"\r\n    }\r\n}\r\n'
+    r, written = add_dev(raw)
+    assert r.returncode == 0, r.stderr
+    assert "\r\n" in written and "\n\n" not in written.replace("\r\n", "\n")
+    assert '\r\n        "@jest/globals": "^30.5.2"' in written
+
+
 # --- workflow wiring ----------------------------------------------------------
 
 
@@ -276,6 +326,24 @@ def test_every_apply_result_goes_through_row():
     body = run.replace(_shell_fn(run, "row"), "")
     assert '| $name |' not in body
     assert body.count('row "$name"') == 8
+
+
+def test_test_dependency_fallback_is_gated_on_the_exact_error():
+    """Only a build that failed on the missing `@jest/globals` module gets the
+    devDependency, it goes through the allowlisted CLI, and the addition is
+    listed with the other changes in the PR body (#1640's first dry run)."""
+    run = find_step(_wf(), "plan", "Plan each repo")["run"]
+    gate = run.index('if [ "$build" = fail ] && grep -q "Cannot find module \'@jest/globals\'" build.log; then')
+    call = run.index('node scripts/fleet-overrides-sync.js add-dev "templates/${kind}/package.json" site/package.json @jest/globals')
+    guard = run.index("git -C site add -A")
+    assert gate < call < guard, "the fallback runs before the owned-paths guard sees the change"
+    assert """printf '%s' "$extra" | jq -r '.[]' >> "out/patches/${name}.changes.txt\"""" in run
+
+
+def test_pr_body_claims_template_types_only_when_types_were_added():
+    run = find_step(_wf(), "apply", "Open one PR")["run"]
+    assert 'if [[ "$build" == *types* ]]; then echo "- template' in run
+    assert 'if [ "$build" != pass ]; then echo "- template' not in run
 
 
 def test_apply_fetches_an_existing_sync_branch_before_the_lease_push():

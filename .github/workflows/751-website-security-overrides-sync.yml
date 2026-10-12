@@ -257,7 +257,7 @@ jobs:
               replaced=0
               for t in $TEMPLATE_TEST_FILES; do
                 src="templates/${kind}/tests/${t}"
-                [ -f "$src" ] && [ -f "site/${t}" ] || continue
+                if [ ! -f "$src" ] || [ ! -f "site/${t}" ]; then continue; fi
                 grep -qF "${t}(" build.log || continue
                 cmp -s "$src" "site/${t}" && continue
                 cp "$src" "site/${t}"

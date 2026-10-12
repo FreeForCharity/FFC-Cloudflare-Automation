@@ -585,7 +585,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 229 | WHMCS - Populate Client Fields from Product Answers [WHMCS] | `229-whmcs-client-field-populate.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 | 231 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `231-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
-| 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [FRAUDLABS+WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read + fraudlabspro-prod-read |
 | 233 | WHMCS - Charity-Lane Ticket Reply (classify, read-only) [WHMCS] | `233-whmcs-charity-lane-ticket-reply.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 

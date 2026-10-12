@@ -585,6 +585,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 229 | WHMCS - Populate Client Fields from Product Answers [WHMCS] | `229-whmcs-client-field-populate.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 | 231 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `231-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
+| 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -629,6 +630,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
 | 705 | Website - Capture WordPress Site (REST API + Scrape) [WP] | `705-website-wordpress-capture.yml` | workflow_dispatch | Reads | none (no credentials) |
 | 706 | Website - WordPress to Pages Conversion (end to end) [WP] | `706-website-wordpress-to-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod on the `deliver` job ONLY |
+| 707 | Website - Content Apply (FFC-EX PR) [GH] | `707-website-content-apply.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod on the `apply` job ONLY |
 | 720 | Repo - Create GitHub Repo [Repo] | `720-create-repo.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
 | 721 | Repo - Deploy GitHub Pages [Repo] | `721-deploy-pages.yml` | push, workflow_dispatch | (repo plumbing) | — |
 | 722 | Repo - CI Validate and Test [Repo] | `722-ci.yml` | merge_group, pull_request, push | (repo plumbing) | — |

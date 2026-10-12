@@ -1,0 +1,101 @@
+name: '232. WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [WHMCS]'
+run-name: 'WHMCS Charity-Lane Verdicts (Gate 1/2)'
+
+# Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md,
+# epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3))
+# and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE,
+# with machine-readable reason codes, from the machine-checkable subset of the ffcadmin
+# inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP
+# 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33:
+# a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain,
+# and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE.
+# FraudLabs Pro is readable only through 228's own environment, so every row reports
+# fraud_check: not_run. It accepts nothing and writes nothing to WHMCS.
+#
+# Output is PII-free (this repo is public): order id, client id, pid, gate, org name,
+# desired domain, verdict, reason codes, readiness score. Job summary table + the
+# charity-lane-verdicts.json artifact; optionally the same table as a comment on
+# `issue_number` (the 219 pattern).
+#
+# Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221:
+# `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      issue_number:
+        description: 'Optional: issue number to comment the verdict table back to'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+concurrency:
+  group: 232-whmcs-charity-lane-verdicts
+  cancel-in-progress: false
+
+jobs:
+  charity_lane_verdicts:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer.
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Compute charity-lane verdicts (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          # Validate the optional issue number before any work, so a typo fails fast
+          # instead of after the WHMCS sweep.
+          $issue = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            if (-not [int]::TryParse($env:ISSUE_NUMBER, [ref]$issue) -or $issue -lt 1) {
+              Write-Output "::error::issue_number must be a positive integer (got '$($env:ISSUE_NUMBER)')."
+              exit 1
+            }
+          }
+
+          $json = 'artifacts/whmcs/charity-lane-verdicts.json'
+          $md = 'artifacts/whmcs/charity-lane-verdicts.md'
+          # In-process call (`&`, not `pwsh -File`): PowerShell's own binder, so an
+          # empty value can never shift the arguments (ledger L214).
+          & .\scripts\whmcs-charity-lane-verdicts.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $json -MarkdownFile $md
+          if ($LASTEXITCODE -ne 0) { throw "Charity-lane verdicts failed (exit $LASTEXITCODE)." }
+
+          if ($issue -gt 0) {
+            gh issue comment $issue --repo $env:GITHUB_REPOSITORY --body-file $md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $issue (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload verdicts artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-verdicts
+          path: artifacts/whmcs/charity-lane-verdicts.json
+          if-no-files-found: warn

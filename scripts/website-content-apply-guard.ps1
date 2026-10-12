@@ -587,6 +587,67 @@ function Get-ContentApplyAutoMergePlan {
     return & $plan $true $methods[0] "auto-merge enabled ($($methods[0])); the PR merges once the required checks pass."
 }
 
+function Get-ContentApplyLandDecision {
+    <#
+    .SYNOPSIS
+        Decides whether 707 may merge the content PR it opened, from one poll of its checks.
+    .DESCRIPTION
+        FFC-EX repos have auto-merge off and require no status checks, so 707
+        cannot hand landing to GitHub (see Get-ContentApplyAutoMergePlan). Instead
+        it polls the PR head and merges itself, but only on positive evidence that
+        the site's own CI passed. Returns Action = 'merge', 'wait' or 'leave', with
+        a Reason:
+          * 'leave' when the head moved since 707 pushed it, the PR is closed or
+            already merged, a check run concluded anything but success / neutral /
+            skipped, or a commit status is failure / error;
+          * 'wait' while any check run is unfinished, any status is pending, no
+            check or status exists yet, or GitHub has not computed mergeability;
+          * 'merge' only when at least one check or status exists, all are
+            finished and passing, and the PR is open, mergeable, and still at the
+            sha 707 pushed.
+        The caller turns a 'wait' that outlasts its window into 'leave'.
+    .PARAMETER Pull
+        The REST pull request object (state, merged, mergeable, head.sha).
+    .PARAMETER ExpectedSha
+        The commit 707 pushed.
+    .PARAMETER CheckRuns
+        check_runs from GET /repos/{o}/{r}/commits/{sha}/check-runs.
+    .PARAMETER Statuses
+        statuses from GET /repos/{o}/{r}/commits/{sha}/status.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Pull,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha,
+        [AllowEmptyCollection()][object[]]$CheckRuns = @(),
+        [AllowEmptyCollection()][object[]]$Statuses = @()
+    )
+
+    $d = { param($action, $reason) [pscustomobject]@{ Action = $action; Reason = $reason } }
+
+    if ([string]$Pull.state -ne 'open' -or [bool]$Pull.merged) { return & $d 'leave' "the PR is no longer open (state=$($Pull.state), merged=$($Pull.merged))." }
+    if ([string]$Pull.head.sha -ne $ExpectedSha) { return & $d 'leave' "the PR head moved from $ExpectedSha to $($Pull.head.sha) after 707 pushed; not merging someone else's commit." }
+
+    $passing = @('success', 'neutral', 'skipped')
+    $failed = @($CheckRuns | Where-Object { $_.status -eq 'completed' -and $passing -notcontains [string]$_.conclusion })
+    if ($failed.Count -gt 0) {
+        $names = ($failed | ForEach-Object { "$($_.name)=$($_.conclusion)" }) -join ', '
+        return & $d 'leave' "site CI did not pass: $names."
+    }
+    $badStatus = @($Statuses | Where-Object { @('failure', 'error') -contains [string]$_.state })
+    if ($badStatus.Count -gt 0) {
+        $names = ($badStatus | ForEach-Object { "$($_.context)=$($_.state)" }) -join ', '
+        return & $d 'leave' "a commit status failed: $names."
+    }
+    if (@($CheckRuns).Count + @($Statuses).Count -eq 0) { return & $d 'wait' 'no check run or status has reported on the PR head yet.' }
+    $running = @($CheckRuns | Where-Object { $_.status -ne 'completed' })
+    $pending = @($Statuses | Where-Object { $_.state -eq 'pending' })
+    if ($running.Count + $pending.Count -gt 0) { return & $d 'wait' "$($running.Count + $pending.Count) check(s) still running." }
+    if ($null -eq $Pull.mergeable) { return & $d 'wait' 'GitHub has not computed mergeability yet.' }
+    if (-not [bool]$Pull.mergeable) { return & $d 'leave' "the PR is not mergeable (mergeable_state=$($Pull.mergeable_state))." }
+    return & $d 'merge' "all $(@($CheckRuns).Count + @($Statuses).Count) check(s) passed on $ExpectedSha."
+}
+
 if ($MyInvocation.InvocationName -eq '.') { return }
 
 Write-Error 'Dot-source this script to load the content-apply guard functions; it does nothing when run directly.'

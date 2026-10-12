@@ -66,6 +66,18 @@ on:
         required: false
         type: boolean
         default: true
+      land_when_green:
+        description: >-
+          When auto-merge is unavailable (FFC-EX repos today), wait for the site's own CI on the PR
+          head and merge only if every check passed. Otherwise the PR is left open with the reason.
+        required: false
+        type: boolean
+        default: true
+      land_wait_minutes:
+        description: 'How long to wait for the site CI before leaving the PR open (1-30).'
+        required: false
+        type: string
+        default: '25'
       dry_run:
         description: 'Validate and rehearse only (no PR). Set false to open the PR (gated).'
         required: false
@@ -280,7 +292,7 @@ jobs:
     if: inputs.dry_run == false && needs.validate.outputs.changed_count != '0'
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 50
     environment: github-prod
     permissions:
       contents: read
@@ -288,6 +300,7 @@ jobs:
     outputs:
       pr_url: ${{ steps.deliver.outputs.pr_url }}
       auto_merge: ${{ steps.deliver.outputs.auto_merge }}
+      land_result: ${{ steps.land.outputs.land_result }}
     steps:
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
@@ -553,5 +566,62 @@ jobs:
           ($summary -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "pr_url=$prUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "auto_merge=$autoMerge" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $headSha = "$(git -C $site rev-parse HEAD)".Trim()
+          "head_sha=$headSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           # A failed auto-merge call above is reported, not fatal (L303).
+          exit 0
+
+      # G3.3b (epic #1618): FFC-EX repos have auto-merge off and no required
+      # checks, so "auto-merge" cannot mean "after CI" there. This step waits for
+      # the site's own CI on the exact commit 707 pushed and merges only on
+      # positive evidence that it passed (Get-ContentApplyLandDecision). Anything
+      # else, including a merge GitHub refuses (rulesets: review threads, extra
+      # approval), leaves the PR open with the reason. It never retries another
+      # way and never bypasses a ruleset.
+      - name: Land the PR once the site CI is green
+        id: land
+        if: >-
+          inputs.land_when_green && steps.deliver.outputs.pr_url != '' &&
+          steps.deliver.outputs.auto_merge != 'enabled'
+        shell: pwsh
+        working-directory: automation
+        env:
+          PR_URL: ${{ steps.deliver.outputs.pr_url }}
+          HEAD_SHA: ${{ steps.deliver.outputs.head_sha }}
+          WAIT_MINUTES: ${{ inputs.land_wait_minutes }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/website-content-apply-guard.ps1
+          if ($env:PR_URL -notmatch '^https://github\.com/(FreeForCharity/[A-Za-z0-9._-]+)/pull/([0-9]+)$') { throw "unexpected PR URL '$($env:PR_URL)'." }
+          $full = $Matches[1]; $num = $Matches[2]
+          if ($env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw "unexpected head sha '$($env:HEAD_SHA)'." }
+          $wait = 25
+          if ($env:WAIT_MINUTES -match '^[0-9]{1,2}$' -and [int]$env:WAIT_MINUTES -ge 1 -and [int]$env:WAIT_MINUTES -le 30) { $wait = [int]$env:WAIT_MINUTES }
+          $deadline = (Get-Date).AddMinutes($wait)
+
+          $result = $null
+          while ($true) {
+            $pull = gh api "repos/$full/pulls/$num" | ConvertFrom-Json
+            $runs = @((gh api "repos/$full/commits/$($env:HEAD_SHA)/check-runs?per_page=100" | ConvertFrom-Json).check_runs)
+            $statuses = @((gh api "repos/$full/commits/$($env:HEAD_SHA)/status" | ConvertFrom-Json).statuses)
+            $d = Get-ContentApplyLandDecision -Pull $pull -ExpectedSha $env:HEAD_SHA -CheckRuns $runs -Statuses $statuses
+            if ($d.Action -eq 'leave') { $result = "left_open: $($d.Reason)"; break }
+            if ($d.Action -eq 'merge') {
+              $repoInfo = gh api "repos/$full" | ConvertFrom-Json
+              $method = if ($repoInfo.allow_merge_commit) { 'merge' } elseif ($repoInfo.allow_squash_merge) { 'squash' } else { 'rebase' }
+              $body = @{ sha = $env:HEAD_SHA; merge_method = $method } | ConvertTo-Json -Compress
+              $out = $body | gh api -X PUT "repos/$full/pulls/$num/merge" --input - 2>&1 | Out-String
+              if ($LASTEXITCODE -eq 0) { $result = "merged ($method): $($d.Reason)" }
+              else { $result = "left_open: GitHub refused the merge: $($out.Trim())" }
+              break
+            }
+            if ((Get-Date) -ge $deadline) { $result = "left_open: still waiting after $wait min ($($d.Reason))"; break }
+            Start-Sleep -Seconds 30
+          }
+
+          Write-Output "Land: $result"
+          "### Land`n`n$result" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $short = ($result -replace "[`r`n]+", ' ')
+          if ($short.Length -gt 300) { $short = $short.Substring(0, 300) }
+          "land_result=$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           exit 0

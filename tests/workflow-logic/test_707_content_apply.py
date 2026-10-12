@@ -158,6 +158,25 @@ def test_auto_merge_goes_through_the_planner():
     )
 
 
+def test_land_merges_only_on_the_decision_and_pinned_to_the_pushed_sha():
+    step = find_step(_wf(), "apply", "Land the PR once the site CI is green")
+    body = step["run"]
+    assert "Get-ContentApplyLandDecision" in body
+    # The only merge is the REST PUT, behind the 'merge' verdict, pinned to HEAD_SHA.
+    assert body.count('gh api -X PUT "repos/$full/pulls/$num/merge"') == 1
+    assert body.index("if ($d.Action -eq 'merge')") < body.index("gh api -X PUT")
+    assert "sha = $env:HEAD_SHA" in body
+    for forbidden in ("--admin", "bypass", "gh pr merge", "--force"):
+        assert forbidden not in body, forbidden
+    # Landing is skipped when GitHub auto-merge already took the PR, and never
+    # runs without a PR.
+    cond = " ".join(str(step["if"]).split())
+    assert "steps.deliver.outputs.pr_url != ''" in cond
+    assert "steps.deliver.outputs.auto_merge != 'enabled'" in cond
+    # Free-text never reaches the body: the PR URL and sha come in through env.
+    assert "${{" not in body
+
+
 # --------------------------------------------------------------------------
 # Behaviour (pwsh)
 # --------------------------------------------------------------------------

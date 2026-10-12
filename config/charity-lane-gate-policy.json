@@ -1,0 +1,137 @@
+{
+  "_comment": "Gate policy for the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). scripts/charity_lane_gate.py is the ONLY path by which the Onboarding Conductor clears an environment gate: it validates a dispatch against one rule below, dispatches it itself, and approves only that run, only for the rule's environments. Inputs are a closed set: an input not listed under a rule is refused. Changing this file changes what an unattended agent may approve, so it is a policy change for Clarke.",
+  "repo": "FreeForCharity/FFC-Cloudflare-Automation",
+  "ref": "main",
+  "ledger_issue": 1608,
+  "never": [
+    "211 cancel or fraud",
+    "226 reconcile or reconcile-report, or approve with more than one order id",
+    "113 domain register (spends money)",
+    "120 cutover of a live site",
+    "accepting a pid 39 / 41 domain order",
+    "any m365-prod write",
+    "any run this script did not dispatch"
+  ],
+  "rules": [
+    {
+      "id": "226-report",
+      "workflow": "226-whmcs-application-triage.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["mode"],
+      "inputs": {
+        "mode": { "enum": ["report"] }
+      }
+    },
+    {
+      "id": "226-approve-one",
+      "purpose": "Gate 1: accept one pid 16/33 onboarding order whose charity-lane verdict is ACCEPT",
+      "workflow": "226-whmcs-application-triage.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["mode", "orderids"],
+      "inputs": {
+        "mode": { "enum": ["approve"] },
+        "orderids": { "pattern": "^[0-9]{1,9}$" }
+      }
+    },
+    {
+      "id": "211-accept-one",
+      "purpose": "Gate 2: accept one pid 40 website order whose referenced onboarding service is Active",
+      "workflow": "211-whmcs-order-update.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["order_id", "action"],
+      "inputs": {
+        "order_id": { "pattern": "^[0-9]{1,9}$" },
+        "action": { "enum": ["accept"] },
+        "reason": { "maxlen": 200 },
+        "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
+      "id": "205-templated",
+      "purpose": "Charity tickets from an allowlisted template only (need_info, preview_ready)",
+      "workflow": "205-whmcs-ticket-open.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["template", "client_id"],
+      "inputs": {
+        "template": { "enum": ["need_info", "preview_ready"] },
+        "client_id": { "pattern": "^[0-9]{1,9}$" },
+        "deptid": { "pattern": "^[0-9]{1,3}$" },
+        "subject": { "maxlen": 150 },
+        "message": { "maxlen": 2000 },
+        "priority": { "enum": ["Low", "Medium"] },
+        "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
+      "id": "701-provision",
+      "purpose": "Gate 3: provision FFC-EX-<domain> and publish on the default Pages URL",
+      "workflow": "701-website-provision.yml",
+      "environments": ["github-prod", "cloudflare-prod-write"],
+      "live_site_check": ["cloudflare-prod-write"],
+      "required": ["domain"],
+      "inputs": {
+        "domain": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+        },
+        "dry_run": { "enum": ["true", "false"] },
+        "template_repo": {
+          "enum": [
+            "FreeForCharity/FFC-IN-Footer_Only_Template",
+            "FreeForCharity/FFC-IN-FFC_Single_Page_Template"
+          ]
+        },
+        "charity_name": { "maxlen": 200 },
+        "footer_email": { "maxlen": 200 },
+        "footer_phone": { "maxlen": 50 },
+        "footer_address": { "maxlen": 300 },
+        "footer_ein": { "pattern": "^([0-9]{2}-?[0-9]{7})?$" },
+        "irs_status": { "enum": ["501(c)(3) (approved)", "Not yet / pending (pre-501(c)(3))"] },
+        "guidestar_profile_url": { "maxlen": 300 },
+        "guidestar_direct_profile_url": { "maxlen": 300 },
+        "website_situation": {
+          "enum": [
+            "New charity domain name and new charity website",
+            "New charity domain name but existing charity site (Wix / Squarespace / etc)",
+            "Existing domain name and existing website (WordPress / formal hosting)"
+          ]
+        },
+        "current_website_url": { "maxlen": 300 },
+        "domain_registrar": {
+          "enum": [
+            "Unknown / not sure",
+            "Already with Free For Charity (eNom or Cloudflare)",
+            "Wix",
+            "Squarespace",
+            "GoDaddy",
+            "Other / another registrar",
+            "No domain yet"
+          ]
+        },
+        "requester_github_username": { "pattern": "^[A-Za-z0-9-]{0,39}$" },
+        "technical_poc_github_username": { "pattern": "^[A-Za-z0-9-]{0,39}$" },
+        "social_links": { "maxlen": 1000 },
+        "leadership_lines": { "maxlen": 1000 },
+        "mission": { "maxlen": 2000 },
+        "donation_url": { "maxlen": 300 },
+        "volunteer_url": { "maxlen": 300 }
+      }
+    },
+    {
+      "id": "103-pages-apex",
+      "purpose": "Gate 4: GitHub Pages apex + www records on a brand-new domain with no live site",
+      "workflow": "103-enforce-domain-standard.yml",
+      "environments": ["cloudflare-prod-write"],
+      "live_site_check": ["cloudflare-prod-write"],
+      "required": ["domain", "github_pages_only", "skip_m365"],
+      "inputs": {
+        "domain": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+        },
+        "dry_run": { "enum": ["true", "false"] },
+        "github_pages_only": { "enum": ["true"] },
+        "skip_m365": { "enum": ["true"] },
+        "issue_number": { "pattern": "^[0-9]{1,6}$" }
+      }
+    }
+  ]
+}

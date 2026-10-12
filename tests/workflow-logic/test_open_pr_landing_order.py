@@ -50,6 +50,7 @@ parse_open_prs = _mod.parse_open_prs
 pr_ref = _mod.pr_ref
 verify_fetched_head = _mod.verify_fetched_head
 base_merge_failures = _mod.base_merge_failures
+base_fetch_spec = _mod.base_fetch_spec
 
 # The run-243 queue, oldest first -- the order a Conductor would land them in.
 RUN_243_PRS = [1584, 1586, 1587, 1588, 1589]
@@ -423,6 +424,175 @@ def test_BOTH_checkout_sites_go_through_the_failing_closed_helper():
     assert src.count("checkout_base(") == 2, (
         f"expected both checkout sites to use the helper, found "
         f"{src.count('checkout_base(')}"
+    )
+
+
+def test_a_remote_tracking_base_is_split_into_remote_and_branch():
+    """`origin/main` is the default and the shape that can be refreshed."""
+    assert base_fetch_spec("origin/main") == ("origin", "main")
+    assert base_fetch_spec("upstream/release") == ("upstream", "release")
+
+
+def test_a_base_that_cannot_be_fetched_is_reported_as_such_not_guessed_at():
+    """A bare SHA, a tag or a local branch is a commit the caller pinned on
+    purpose. Returning `None` keeps `resolve_base` from inventing a remote and
+    fetching from somewhere the base did not come from -- it pins what it was
+    given and `main()` prints which commit that was."""
+    assert base_fetch_spec("a35e5a15") is None, "a bare SHA has no remote to refresh"
+    assert base_fetch_spec("main") is None, "a local branch has no remote to refresh"
+    assert base_fetch_spec("refs/heads/main") is None, "a full refname is not remote/branch"
+    assert base_fetch_spec("") is None
+    assert base_fetch_spec("origin/") is None, "an empty branch half is not a valid spec"
+    assert base_fetch_spec("/main") is None, "an empty remote half is not a valid spec"
+
+
+def test_the_base_is_FETCHED_before_it_is_measured_against():
+    """Copilot's finding on the third review pass of this PR, and the one leg of
+    `(base, headA, headB)` that had neither of the protections the heads got.
+    The heads are fetched and pinned; the base was whatever `origin/main` the
+    caller's worktree last happened to see. `checkout_base` catches a base that
+    fails to RESOLVE and is blind to one that resolves and is merely OLD."""
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True):
+        calls.append(cmd)
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, "a35e5a15" + "0" * 32 + "\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        sha = _mod.resolve_base("/tmp/wt", "origin/main")
+    finally:
+        _mod._run = original
+
+    fetches = [c for c in calls if c[:2] == ["git", "fetch"]]
+    assert fetches == [["git", "fetch", "origin", "main"]], (
+        f"the base must be fetched from its remote before being measured "
+        f"against; git calls were {calls}"
+    )
+    assert calls.index(["git", "fetch", "origin", "main"]) < next(
+        i for i, c in enumerate(calls) if c[:2] == ["git", "rev-parse"]
+    ), "the base was resolved before it was fetched, so the SHA is the stale one"
+    assert sha == "a35e5a15" + "0" * 32, f"resolve_base must return the pinned SHA, got {sha!r}"
+
+
+def test_a_base_fetch_that_FAILS_raises_rather_than_measuring_a_stale_base():
+    """Failing closed. Degrading to "measure anyway" would reinstate exactly the
+    defect the fetch was added to remove, and the resulting plan would be wrong
+    for every pair at once while still reading as coherent."""
+    import subprocess
+
+    def fake_run(cmd, cwd=None, check=True):
+        if cmd[:2] == ["git", "fetch"]:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: unable to access")
+        return subprocess.CompletedProcess(cmd, 0, "deadbeef" + "0" * 32 + "\n", "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        try:
+            _mod.resolve_base("/tmp/wt", "origin/main")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "stale" in msg, f"the raise must name the defect it prevents: {msg}"
+        else:
+            raise AssertionError(
+                "a failed base fetch returned a SHA; the whole landing plan would "
+                "be computed against whatever this worktree last saw"
+            )
+    finally:
+        _mod._run = original
+
+
+def test_an_unresolvable_base_raises_even_when_the_fetch_succeeded():
+    """The second half of `resolve_base`. A fetch can succeed and the name still
+    not resolve -- a branch that does not exist on the remote is the common
+    case -- and an unpinnable base must never reach the merges."""
+    import subprocess
+
+    def fake_run(cmd, cwd=None, check=True):
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: ambiguous argument")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        try:
+            _mod.resolve_base("/tmp/wt", "origin/nope")
+        except RuntimeError as e:
+            assert "origin/nope" in str(e), f"the raise must name the base: {e}"
+        else:
+            raise AssertionError("an unresolvable base was accepted")
+    finally:
+        _mod._run = original
+
+
+def test_a_non_remote_base_is_pinned_WITHOUT_a_fetch():
+    """The polarity check for `base_fetch_spec` returning `None`: a caller who
+    passes an explicit SHA gets it measured, not an error and not a fetch of
+    some invented remote."""
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "cafe" + "0" * 36 + "\n", "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        sha = _mod.resolve_base("/tmp/wt", "a35e5a15")
+    finally:
+        _mod._run = original
+    assert not [c for c in calls if c[:2] == ["git", "fetch"]], (
+        f"a bare SHA must not trigger a fetch; git calls were {calls}"
+    )
+    assert sha == "cafe" + "0" * 36
+
+
+def test_every_merge_measures_against_the_PINNED_base_not_the_symbolic_name():
+    """Source-level, because `measure_conflicts` shells out to git. Pinning once
+    is what makes all pairs comparable: handed `origin/main`, the later pairs in
+    a multi-minute sweep would silently use a different commit from the earlier
+    ones the moment `main` moved, and nothing in the output would say so."""
+    import inspect
+
+    src = inspect.getsource(_mod.measure_conflicts)
+    assert "resolve_base(" in src, "measure_conflicts no longer resolves the base"
+    bad = [
+        ln.strip()
+        for ln in src.splitlines()
+        if "checkout_base(" in ln and "base_sha" not in ln
+    ]
+    assert not bad, (
+        "a checkout_base call is still passing the symbolic base, so that pair is "
+        "measured against a name that can move mid-sweep:\n  " + "\n  ".join(bad)
+    )
+    assert src.count("checkout_base(worktree, base_sha)") == 2, (
+        f"expected both checkout sites to use the pinned SHA, found "
+        f"{src.count('checkout_base(worktree, base_sha)')}"
+    )
+    assert "resolve_base(" in src.split("fetch_pr_heads(")[0], (
+        "the base must be resolved before the heads are fetched, so a stale base "
+        "fails before minutes of merging are spent on it"
+    )
+
+
+def test_the_landing_plan_is_reported_NEXT_TO_the_base_it_was_computed_against():
+    """A plan without its base is the citation-without-provenance failure: true
+    when written, unfalsifiable later. `main()` prints the resolved SHA."""
+    import inspect
+
+    src = inspect.getsource(_mod.main)
+    assert "base_sha" in src, "main() no longer receives the base SHA"
+    assert "measured against" in src, (
+        "main() does not print which commit the plan was computed against"
     )
 
 

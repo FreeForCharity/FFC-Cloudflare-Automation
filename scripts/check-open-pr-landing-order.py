@@ -230,6 +230,75 @@ def fetch_pr_heads(worktree, prs):
         verify_fetched_head(number, sha, observed)
 
 
+def base_fetch_spec(base):
+    """Split a remote-tracking base like `origin/main` into `("origin", "main")`.
+
+    Returns `None` for any other shape -- a bare SHA, a tag, a local branch --
+    which the caller must then treat as a commit it was handed deliberately
+    rather than one this script is able to refresh.
+    """
+    if "/" not in base:
+        return None
+    remote, _, branch = base.partition("/")
+    if not remote or not branch or "/" in branch:
+        return None
+    return remote, branch
+
+
+def resolve_base(worktree, base):
+    """Refresh `base` from its remote, then pin it to a concrete SHA.
+
+    The heads of every PR in the set are fetched and then pinned by
+    `verify_fetched_head`, for a reason the module docstring spells out: the
+    measurement is only about the commits it says it is about. The base leg had
+    neither half of that protection. `checkout_base` guards the case where
+    `--base` fails to *resolve*; it cannot see the case where it resolves fine
+    and is simply **old**, because the worktree's `origin/main` is only as
+    current as the last `git fetch` somebody happened to run in it.
+
+    That is the same `(base, headA, headB)` invalidation this script was written
+    to expose, with two legs pinned and the third left to chance -- and it is
+    the worse leg to lose, because the base is common to every pair. A base an
+    hour behind real `main` yields a landing plan for a repository state that no
+    longer exists, and every pair in it is wrong in the same direction, so the
+    output stays internally consistent and reads as current. Found by Copilot on
+    the third review pass of #1596.
+
+    Two things happen here, and both matter:
+
+    1. **Fetch**, so the base is current rather than whatever the caller's
+       worktree last saw. Failing closed, because an unrefreshed base is exactly
+       the defect being fixed -- it must not degrade to "measure anyway".
+    2. **Pin to a SHA**, which is what gets returned and what every
+       `checkout_base` is then given. Resolving once means all pairs are
+       measured against one immutable commit even if `main` moves mid-run; with
+       the symbolic name the later pairs would silently use a different base
+       from the earlier ones.
+
+    A base this script cannot refresh (a SHA or a local ref) is accepted and
+    pinned, never silently fetched from somewhere it did not come from. The
+    caller said which commit it wanted; `main` reports which one was used.
+    """
+    spec = base_fetch_spec(base)
+    if spec is not None:
+        remote, branch = spec
+        r = _run(["git", "fetch", remote, branch], cwd=worktree, check=False)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"could not fetch {branch} from {remote} in {worktree} (git exited "
+                f"{r.returncode}): {(r.stderr or '').strip()[:300]} -- the base "
+                f"would have been measured at whatever this worktree last saw, "
+                f"which is the stale-base defect this fetch exists to prevent"
+            )
+    r = _run(["git", "rev-parse", base], cwd=worktree, check=False)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"could not resolve {base} to a commit in {worktree} (git exited "
+            f"{r.returncode}): {(r.stderr or '').strip()[:300]}"
+        )
+    return r.stdout.strip()
+
+
 def checkout_base(worktree, base):
     """`git checkout -f --detach <base>` in `worktree`, failing closed.
 
@@ -293,12 +362,21 @@ def measure_conflicts(worktree, base, prs):
 
     Fetches the heads first: the merges read local refs, and nothing else in the
     process creates them.
+
+    Resolves the base first too, and measures every pair against the returned
+    SHA rather than against `base` as written. `resolve_base` says why: the base
+    is the one leg common to every pair, so a stale one is wrong everywhere at
+    once and still reads as a coherent plan.
+
+    Returns `(base_sha, edges)` -- the plan is only meaningful next to the
+    commit it was computed against, so the caller is given both and prints both.
     """
+    base_sha = resolve_base(worktree, base)
     fetch_pr_heads(worktree, prs)
     numbers = [n for n, _ in prs]
 
     def merges_into_base(number):
-        checkout_base(worktree, base)
+        checkout_base(worktree, base_sha)
         r = _run(["git", "merge", "--no-edit", pr_ref(number)], cwd=worktree, check=False)
         if r.returncode != 0:
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
@@ -309,13 +387,13 @@ def measure_conflicts(worktree, base, prs):
     if unmergeable:
         listed = ", ".join(f"#{n}" for n in unmergeable)
         raise RuntimeError(
-            f"{listed} do not merge into {base} on their own, so no pair involving "
-            f"them can be measured -- rebase first"
+            f"{listed} do not merge into {base} ({base_sha[:8]}) on their own, so no "
+            f"pair involving them can be measured -- rebase first"
         )
 
     edges = []
     for a, b in itertools.combinations(numbers, 2):
-        checkout_base(worktree, base)
+        checkout_base(worktree, base_sha)
         first = _run(["git", "merge", "--no-edit", pr_ref(a)], cwd=worktree, check=False)
         if first.returncode != 0:
             # Unreachable after the up-front sweep unless a head moved under us,
@@ -323,14 +401,14 @@ def measure_conflicts(worktree, base, prs):
             # rather than recording a base conflict as a content edge.
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
             raise RuntimeError(
-                f"#{a} merged into {base} during the base sweep but not during the "
-                f"pairwise sweep -- the base or a head moved mid-measurement"
+                f"#{a} merged into {base} ({base_sha[:8]}) during the base sweep but "
+                f"not during the pairwise sweep -- a head moved mid-measurement"
             )
         second = _run(["git", "merge", "--no-edit", pr_ref(b)], cwd=worktree, check=False)
         if second.returncode != 0:
             edges.append((a, b))
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
-    return edges
+    return base_sha, edges
 
 
 def main(argv=None):
@@ -346,13 +424,14 @@ def main(argv=None):
         if not prs:
             print(f"no open PRs labelled {args.label} -- nothing to plan")
             return 0
-        edges = measure_conflicts(args.worktree, args.base, prs)
+        base_sha, edges = measure_conflicts(args.worktree, args.base, prs)
         lands_free, needs_rebase = landing_plan([n for n, _ in prs], edges)
     except RuntimeError as exc:
         print(f"::error::could not compute a landing order: {exc}")
         return 2
 
     print(f"open PRs labelled {args.label}: {len(prs)}")
+    print(f"measured against {args.base} = {base_sha}")
     print(f"conflict edges: {len(edges)}")
     for a, b in edges:
         print(f"  #{a} x #{b}: CONFLICT")

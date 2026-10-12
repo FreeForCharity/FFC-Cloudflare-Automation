@@ -1502,6 +1502,44 @@ RULES = [
         ("warned list read is still allowed", "gh api repos/o/r/issues/719/comments", ALLOW),
     ]),
 
+    Rule("gh-api-field-flips-method", 'makes this a POST, not a read', BLOCK_TIER,
+         label='guard_bash / `gh api -f` with no -X is a POST:', cases=[
+        # The command Conductor run 258 actually issued, to ENUMERATE open issues.
+        # It attempted to open an issue on the public hub repo and 422'd only
+        # because `title` is required and absent.
+        ("run 258's issue enumeration is blocked",
+         "gh api repos/O/R/issues --paginate -f state=open --jq '.[] | .number'", BLOCK),
+        ("-f with --paginate and no --jq is blocked",
+         "gh api repos/O/R/issues -f state=open --paginate", BLOCK),
+        ("-f with an iterating --jq and no --paginate is blocked",
+         "gh api repos/O/R/issues -f state=open --jq '.[] | .number'", BLOCK),
+        ("--raw-field long form is blocked",
+         "gh api repos/O/R/pulls --raw-field state=open --paginate", BLOCK),
+        ("-F typed form is blocked",
+         "gh api repos/O/R/issues -F state=open --paginate", BLOCK),
+        # Allows. A legitimate create also uses -f, so the rule must not touch it.
+        ("a genuine create reading back one field is silent",
+         "gh api repos/O/R/issues -f title=x -f body=y --jq .number", SILENT),
+        ("an explicit -X POST create is silent",
+         "gh api repos/O/R/issues -X POST -f title=x --jq .number", SILENT),
+        ("an explicit -X GET with -f is silent -- the method is stated",
+         "gh api repos/O/R/issues -X GET -f state=open --paginate --jq '.[] | .number'", SILENT),
+        # graphql is a POST by design and legitimately paginates. The query must
+        # declare $endCursor or the graphql-paginate-endcursor rule blocks it for
+        # its own, unrelated reason -- which is what the first draft of this case
+        # did, reporting rc=2 for a rule that had correctly stayed silent.
+        ("graphql with -f query= and --paginate is silent",
+         "gh api graphql --paginate -f query='query($endCursor:String){repository(owner:\"o\",name:\"r\")"
+         "{issues(first:100,after:$endCursor){nodes{number} pageInfo{hasNextPage endCursor}}}}' "
+         "--jq '.data.repository.issues.nodes[]'", SILENT),
+        ("graphql with -f query= and no --paginate is silent",
+         "gh api graphql -f query='{viewer{login}}' --jq '.data.viewer.login'", SILENT),
+        ("a query-string list read with no -f is silent -- this is the FIX",
+         "gh api 'repos/O/R/issues?state=open&per_page=100' --paginate --jq '.[] | .number'", SILENT),
+        ("non-gh text mentioning the flags is silent",
+         "echo 'gh api repos/O/R/issues -f state=open is a POST'", SILENT),
+    ]),
+
     Rule("gh-api-classic-branch-protection", '[#1518]', WARN_TIER,
          label='guard_bash / #1518 classic branch-protection read:', cases=[
         ("the canonical call warns",

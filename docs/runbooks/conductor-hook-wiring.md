@@ -56,6 +56,13 @@ python3 scripts/verify-conductor-hooks.py \
 `--render` refuses to clobber an existing `settings.json` without `--force`; the workspace's
 `settings.local.json` (its `permissions` allowlist) is untouched and still layers on top.
 
+**Re-render after the template changes.** Since 2026-10-11 the template also carries a `permissions`
+block: it allows `gh pr ready` and `gh pr merge` so the Conductor can mark PRs ready and enqueue
+them under `AGENTS.md`'s merge condition, and it denies `gh pr merge --admin`. Run 253 was refused
+both by auto mode without it. An already-wired workspace picks this up only when re-rendered, so add
+`--force` to the command above once the change is on the clone's `main`, and start the next run in a
+new session.
+
 For a **multi-repo cloud worker** the same command applies, with the session root — the _parent_ of
 the clones — as the workspace. Render at clone time, before the run does any work:
 

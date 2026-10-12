@@ -62,10 +62,24 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
    `dry_run=false` and the application fields the verdicts row and the work order provide. Comment
    the result on the hub item.
-5. **Check worker output.** For items labelled `lane:built`, confirm the delivery PR merged in the
-   `FFC-EX-*` repo and the site answers HTTP 200 at
-   `https://freeforcharity.github.io/FFC-EX-<domain>/`. If so, relabel `lane:validate`. Otherwise
-   relabel `lane:build-ready` with a comment saying why. If it fails twice, `DECISION NEEDED`.
+5. **Deliver and check worker output** [workflow 707; policy rule `707-content-apply`]. The Cloud
+   Worker builds content per `.claude/routines/site-builder.md` and labels the item `lane:built`.
+   For each `lane:built` item (one per run):
+   - read `site-content/<domain>/manifest.json` and the listed files from the hub branch
+     `claude/site-content/<domain>`; confirm `target_repo` is `FFC-EX-<domain>` for this item and
+     the repo exists (701 done);
+   - build `content_json` (a JSON object of path to file text) and run
+     `charity_lane_gate.py run --rule 707-content-apply --input target_repo=FFC-EX-<domain> --input content_json=<json> --input title="content: <org name>" --input issue_url=<hub item URL> --input dry_run=false`;
+   - comment the content PR link on the hub item. If 707 left the PR open (FFC-EX repos have no
+     auto-merge yet, epic item G3.3b), list it as `DECISION NEEDED: merge content PR <url>`.
+   - once the content PR has merged and the site answers HTTP 200 at
+     `https://freeforcharity.github.io/FFC-EX-<domain>/`, set the label to `lane:validate` (remove
+     `lane:built`). On a failure, comment the reason and set the label back to `lane:build-ready`
+     (remove `lane:built`); a second failure is `DECISION NEEDED`.
+
+   Items labelled `lane:needs-info` get the `need_info` ticket (step 2). After the charity's data
+   changes, set the label back to `lane:build-ready` (remove `lane:needs-info`).
+
 6. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
 7. **Report.** Post one comment on #1608:
    - header `<!-- ffc-routine:conductor -->` and

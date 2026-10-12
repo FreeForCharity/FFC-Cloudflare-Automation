@@ -54,10 +54,22 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `template=need_info` and the `client_id`. Note the reason codes on the ledger, not in the
      ticket.
    - **ESCALATE:** a `DECISION NEEDED` line with the order id, org name and reason codes.
-3. **Build queue.** For each accepted order whose ffcadmin work order exists, make sure there is
-   exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled `charity-lane` and
-   `lane:build-ready`, with a link to the work order and the order ids. The Cloud Worker picks these
-   up. Never build content yourself.
+3. **Find what already exists, then queue** [workflow 750]. Before opening any `[CHARITY-LANE]`
+   item, and before provisioning, establish whether this charity is already known and where it lives
+   today:
+   - Dispatch `750-charity-lane-lookup.yml` with `org_name`, the `domain` if the application has
+     one, and the `ein`, and read its summary. `ALREADY_KNOWN` means an `FFC-EX-*` repo, a live
+     portfolio row or a website-request issue already exists: link the hub item to it, do not
+     provision a second repo, and continue that charity's existing thread instead. `POSSIBLE_MATCH`
+     is a `DECISION NEEDED` with the matches listed.
+   - **No desired domain** (every pid 33 application): run a web search with the query 750 prints
+     (IRS name, city and state from the EIN). If the charity has its own site, record the domain on
+     the hub item and re-run 750 with it; that charity has an **existing live site**, so it follows
+     the ready-for-cutover path in step 6, never the brand-new-domain path. If nothing is found,
+     send the `need_info` ticket asking for the desired domain and label the item `lane:needs-info`.
+   - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
+     `charity-lane` and `lane:build-ready`, linking the work order, the order ids and the 750 run.
+     The Cloud Worker picks these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
    `dry_run=false` and the application fields the verdicts row and the work order provide. Comment
@@ -80,13 +92,40 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    Items labelled `lane:needs-info` get the `need_info` ticket (step 2) and go back to
    `lane:build-ready` after the charity's data changes.
 
-6. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
-7. **Report.** Post one comment on #1608:
+5b. **Validate and hand to the charity** (items labelled `lane:validate`, one per run). - Check the
+preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP 200 and carries
+the FFC footer (org name, EIN for a 501(c)(3), the freeforcharity.org link). Record the preview URL
+as the work order's `Live site:` value in your report; the full Gate 3 checklist lives on the
+ffcadmin work order and its `Gate 3 Auto-Validation` workflow. - All machine checks pass: run rule
+`205-templated` with `template=preview_ready`, the `client_id`, and the preview URL as
+`extra_message`; label the item `lane:charity-review` (remove `lane:validate`). A failure goes back
+to `lane:build-ready` with the reason. - For items in `lane:charity-review`: read the charity's
+ticket replies through `209` (ungated). Requested changes: comment them on the hub item and set it
+back to `lane:build-ready`. A clear approval: label `lane:gate3-done` (remove
+`lane:charity-review`); the charity may now order its domain. Anything unclear is a
+`DECISION NEEDED`. 6. **Gate 4: domain** (one per run). For an item labelled `lane:gate3-done`:
+
+- **Domain order** (pid 39 / 41): run `225` (ungated) to verify the order's Pages URL, then post
+  `DECISION NEEDED: accept domain order <id> for <domain>`. Accepting spends money, so it is always
+  Clarke's.
+- **Brand-new domain** (the zone exists in FFC Cloudflare and nothing serves the apex yet): run
+  `python3 scripts/charity_lane_gate.py live-site <domain>` first. If it reports not live, run rule
+  `103-pages-apex` (`domain`, `github_pages_only=true`, `skip_m365=true`, `dry_run=false`), then
+  rule `120-cname-new-domain` (`domains=<domain>`, `skip_dns=true`, `dry_run=false`). Confirm
+  `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the previous lane
+  label).
+- **Existing live site** (step 3 found one, or the live-site check says live): stop at **ready for
+  cutover**. Run `121` (ungated preflight) for the domain and post
+  `DECISION NEEDED: cutover <domain> (121 READY, preview approved <date>)`. Never run `103` or `120`
+  for it.
+
+7. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
+8. **Report.** Post one comment on #1608:
    - header `<!-- ffc-routine:conductor -->` and
      `**Onboarding Conductor - <UTC date> - PASS | FAIL | NOOP**`;
    - session URL, start and finish times;
    - one line per pipeline step above (done, skipped and why, refused);
    - numbered `DECISION NEEDED:` lines, then any `LESSON:` lines.
-8. **Tracker.** Update the rows you exercised in the epic #1618 tracker, between its
+9. **Tracker.** Update the rows you exercised in the epic #1618 tracker, between its
    `charity-lane-tracker` markers: status and evidence link. Change nothing else in that issue.
-9. **Release.** Set `lease` to null and `last_run` in the state block, re-read to confirm, end.
+10. **Release.** Set `lease` to null and `last_run` in the state block, re-read to confirm, end.

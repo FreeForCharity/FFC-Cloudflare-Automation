@@ -47,6 +47,8 @@ _spec.loader.exec_module(_mod)
 
 landing_plan = _mod.landing_plan
 parse_open_prs = _mod.parse_open_prs
+pr_ref = _mod.pr_ref
+verify_fetched_head = _mod.verify_fetched_head
 
 # The run-243 queue, oldest first -- the order a Conductor would land them in.
 RUN_243_PRS = [1584, 1586, 1587, 1588, 1589]
@@ -208,6 +210,62 @@ def test_a_duplicated_PR_in_the_open_PR_LIST_raises():
         assert "duplicate" in str(exc), f"wrong error text: {exc}"
     else:
         raise AssertionError("a duplicate PR number was accepted; it must raise")
+
+
+def test_the_merges_read_the_ref_namespace_the_fetch_writes():
+    """The defect that made this script exit 2 on every invocation: the merges
+    referenced `refs/remotes/pr/<n>`, which nothing created. One function now
+    owns the spelling, so the fetch and the merge cannot drift apart again."""
+    assert pr_ref(1584) == "refs/ffc/pr1584", f"unexpected ref spelling: {pr_ref(1584)}"
+    import inspect
+
+    # Scoped to the function that merges, not the whole module: a module-wide
+    # grep also matches any prose explaining the old spelling, which is how this
+    # assertion first failed against a correct tree.
+    measure_body = [
+        ln
+        for ln in inspect.getsource(_mod.measure_conflicts).splitlines()
+        if '"""' not in ln and not ln.strip().startswith("#")
+    ]
+    assert not any("refs/" in ln and "pr_ref" not in ln for ln in measure_body), (
+        "measure_conflicts hard-codes a ref path instead of calling pr_ref(); the "
+        "fetch and the merge can then name different refs, which is the bug that "
+        "made this script always exit 2:\n  "
+        + "\n  ".join(ln.strip() for ln in measure_body if "refs/" in ln)
+    )
+    assert measure_body, "could not read measure_conflicts' body"
+    fetch_src = inspect.getsource(_mod.fetch_pr_heads)
+    assert "fetch" in fetch_src, "fetch_pr_heads must actually fetch"
+    measure_src = inspect.getsource(_mod.measure_conflicts)
+    assert "fetch_pr_heads" in measure_src, (
+        "measure_conflicts must populate the refs it merges; without the fetch the "
+        "first `git merge` reports a missing ref as a base conflict"
+    )
+
+
+def test_a_head_that_moved_mid_measurement_RAISES_rather_than_being_reported():
+    """The pin. A push to any member during the (minutes-long) pairwise sweep
+    changes what was measured, and a plan printed from it would describe commits
+    nobody is asking about. Fail closed -- `main()` turns this into exit 2."""
+    try:
+        verify_fetched_head(1584, "84d4ba8e", "deadbeef")
+    except RuntimeError as exc:
+        text = str(exc)
+        assert "1584" in text, f"the error must name the PR that moved: {text}"
+        assert "84d4ba8e" in text and "deadbeef" in text, (
+            f"the error must name both SHAs so the drift is visible: {text}"
+        )
+    else:
+        raise AssertionError(
+            "a head that moved mid-measurement was accepted; the resulting plan "
+            "would be reported as current"
+        )
+
+
+def test_a_head_that_matches_the_recorded_sha_is_accepted():
+    """The polarity check: the pin must not refuse the ordinary case, or the
+    script trades always-exit-2 for always-exit-2 by another route."""
+    verify_fetched_head(1584, "84d4ba8e", "84d4ba8e")
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

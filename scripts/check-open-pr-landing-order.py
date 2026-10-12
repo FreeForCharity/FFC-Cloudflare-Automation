@@ -186,24 +186,72 @@ def read_open_prs(repo, label):
     return parse_open_prs(f"{p['number']} {p['headRefOid']}" for p in data)
 
 
+def pr_ref(number):
+    """The local ref `fetch_pr_heads` writes a PR head to, and the merges read.
+
+    Its own namespace rather than a remote-tracking one: nothing else in the
+    repo writes `refs/ffc/*`, so a stale ref here is this script's to overwrite
+    and cannot be confused with a branch some other tool maintains.
+    """
+    return f"refs/ffc/pr{number}"
+
+
+def verify_fetched_head(number, recorded, observed):
+    """Raise unless the ref we just fetched is the SHA the PR list reported.
+
+    This is the pin, and it is the whole reason the fetch records a SHA at all.
+    `measure_conflicts` takes minutes on a set this size; a push to any member
+    mid-run moves that PR's head, and without this check the plan would still be
+    printed as current -- a measurement of commits that are no longer the ones
+    anyone is asking about. Fail closed: the caller turns this into exit 2
+    ("could not measure"), never into a clean plan.
+    """
+    if observed != recorded:
+        raise RuntimeError(
+            f"#{number} moved while being measured: the open-PR list reported "
+            f"{recorded}, the fetched ref is {observed} -- re-run to measure the "
+            f"current heads"
+        )
+
+
+def fetch_pr_heads(worktree, prs):
+    """Populate `pr_ref(n)` for every PR in the set, pinned to its recorded SHA.
+
+    Without this the merges below reference refs that never existed, `git merge`
+    answers "not something we can merge", and the `first.returncode != 0` branch
+    reports that as "#<a> does not merge into main" -- a missing ref rendered as
+    a base conflict, for every PR, so the script always exits 2. That is how it
+    came to ship having never once produced a landing plan (#1596 review).
+    """
+    for number, sha in prs:
+        ref = pr_ref(number)
+        _run(["git", "fetch", "origin", f"pull/{number}/head:{ref}", "-f"], cwd=worktree)
+        observed = _run(["git", "rev-parse", ref], cwd=worktree).stdout.strip()
+        verify_fetched_head(number, sha, observed)
+
+
 def measure_conflicts(worktree, base, prs):
     """Real pairwise merges in `worktree`. Returns the conflict edge set.
 
     A real `git merge` in a worktree, never `git merge-tree` on a tree OID --
     that takes commits, and chaining its output reports CONFLICT for every pair
     convincingly enough to believe.
+
+    Fetches the heads first: the merges read local refs, and nothing else in the
+    process creates them.
     """
+    fetch_pr_heads(worktree, prs)
     edges = []
     for a, b in itertools.combinations([n for n, _ in prs], 2):
         _run(["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False)
-        first = _run(["git", "merge", "--no-edit", f"refs/remotes/pr/{a}"], cwd=worktree, check=False)
+        first = _run(["git", "merge", "--no-edit", pr_ref(a)], cwd=worktree, check=False)
         if first.returncode != 0:
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
             raise RuntimeError(
                 f"#{a} does not merge into {base} on its own, so no pair involving it "
                 f"can be measured -- rebase it first"
             )
-        second = _run(["git", "merge", "--no-edit", f"refs/remotes/pr/{b}"], cwd=worktree, check=False)
+        second = _run(["git", "merge", "--no-edit", pr_ref(b)], cwd=worktree, check=False)
         if second.returncode != 0:
             edges.append((a, b))
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)

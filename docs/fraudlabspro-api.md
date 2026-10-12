@@ -62,9 +62,9 @@ screens every Pending pid 16 / 33 / 40 order with the same lookup (epic
 `fraudlabspro-keys-from-kv` action and `Invoke-FraudLabsProApi`, and its `fraud_order_id_field`
 input mirrors 228's `order_id_field` (default `ordernum`), so the keying note above applies to it
 too. 232 is fail-closed where 228 only recommends: an order is `ACCEPT` only on a FraudLabs
-`APPROVE` with a score below 80; anything else, including a failed or missing lookup, is `ESCALATE`.
-If the keying turns out to be wrong, 232 escalates every order (`FRAUD_CHECK_FAILED`) rather than
-accepting any.
+`APPROVE` status (the score is reported, never decisive: #813); anything else, including a failed or
+missing lookup, is `ESCALATE`. If the keying turns out to be wrong, 232 escalates every order
+(`FRAUD_CHECK_FAILED`) rather than accepting any.
 
 ## One-time provisioning (KV secret + environment + federated credential)
 

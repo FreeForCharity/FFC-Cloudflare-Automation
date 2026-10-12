@@ -9,8 +9,8 @@
     FRAUD_CHECK_NOT_RUN) and the screening job's results. Each row goes through
     Merge-LaneFraudResultSet (scripts/whmcs-charity-lane-verdicts.ps1):
 
-      APPROVE, score below 80        -> fraud_check pass, verdict = the checks verdict
-      REJECT, or score 80 and above  -> ESCALATE FRAUD_FLAGGED
+      APPROVE (any score)            -> fraud_check pass, verdict = the checks verdict
+      REJECT                         -> ESCALATE FRAUD_FLAGGED
       REVIEW                         -> ESCALATE FRAUD_REVIEW
       anything else / no result      -> ESCALATE FRAUD_CHECK_FAILED
 

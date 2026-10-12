@@ -10,10 +10,11 @@ run-name: 'WHMCS Charity-Lane Verdicts (Gate 1/2)'
 # a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain,
 # and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE.
 # Every order is then screened with FraudLabs Pro exactly as 228 does it (G1.3b), on
-# 228's own fraudlabspro-prod-read environment and key, and only a FraudLabs APPROVE
-# below score 80 can leave an ACCEPT standing: REJECT / high score -> ESCALATE
+# 228's own fraudlabspro-prod-read environment and key, deciding on the FraudLabs
+# status alone: only an APPROVE can leave an ACCEPT standing; REJECT -> ESCALATE
 # FRAUD_FLAGGED, REVIEW -> ESCALATE FRAUD_REVIEW, a failed, missing or skipped lookup
-# -> ESCALATE FRAUD_CHECK_FAILED (fail closed). It accepts nothing and writes nothing
+# -> ESCALATE FRAUD_CHECK_FAILED (fail closed). The score is reported, never decisive
+# (a high score on a $0 onboarding order is the known false positive, #813). It accepts nothing and writes nothing
 # to WHMCS.
 #
 # Three jobs, because no one environment holds both credentials:

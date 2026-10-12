@@ -50,9 +50,11 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.
    - **ACCEPT, pid 40:**
      `charity_lane_gate.py run --rule 211-accept-one --input order_id=<id> --input action=accept --input dry_run=false`.
-   - **NEED_INFO** [205 `template` input]: once per order per 7 days, run `205-templated` with
-     `template=need_info` and the `client_id`. Note the reason codes on the ledger, not in the
-     ticket.
+   - **NEED_INFO** [`onboarding_need_info` template, #1632]: once per order per 7 days, run
+     `205-templated` with `template=onboarding_need_info`, the `client_id`, and `extra_message` =
+     the missing items in plain English, one per line (for example "Missing: your organization's
+     LinkedIn page (a personal profile was given)"). Translate reason codes; never paste codes or
+     anyone's personal details into the ticket. Record the codes on the ledger.
    - **ESCALATE:** a `DECISION NEEDED` line with the order id, org name and reason codes.
 3. **Find what already exists, then queue** [workflow 750]. Before opening any `[CHARITY-LANE]`
    item, and before provisioning, establish whether this charity is already known and where it lives
@@ -66,7 +68,8 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      (IRS name, city and state from the EIN). If the charity has its own site, record the domain on
      the hub item and re-run 750 with it; that charity has an **existing live site**, so it follows
      the ready-for-cutover path in step 6, never the brand-new-domain path. If nothing is found,
-     send the `need_info` ticket asking for the desired domain and label the item `lane:needs-info`.
+     send the `onboarding_need_info` ticket asking for the desired domain and label the item
+     `lane:needs-info`.
    - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
      `charity-lane` and `lane:build-ready`, linking the work order, the order ids and the 750 run.
      The Cloud Worker picks these up. Never build content yourself.
@@ -91,8 +94,8 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `lane:built`). On a failure, comment the reason and set the label back to `lane:build-ready`
      (remove `lane:built`); a second failure is `DECISION NEEDED`.
 
-   Items labelled `lane:needs-info` get the `need_info` ticket (step 2). After the charity's data
-   changes, set the label back to `lane:build-ready` (remove `lane:needs-info`).
+   Items labelled `lane:needs-info` get the `onboarding_need_info` ticket (step 2). After the
+   charity's data changes, set the label back to `lane:build-ready` (remove `lane:needs-info`).
 
 5b. **Validate and hand to the charity** (items labelled `lane:validate`, one per run). - Check the
 preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP 200 and carries

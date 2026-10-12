@@ -28,7 +28,7 @@ the charity's public contact.
 - The work order carries the **generated site.config partial** (ffcadmin's footer bridge) or its gap
   list, plus the structured intake fields. Prefer it over anything else. A gap list means the
   application is incomplete: comment the gaps on the hub item, relabel it `lane:needs-info` (remove
-  `lane:building`), and stop. The conductor sends the `need_info` ticket.
+  `lane:building`), and stop. The conductor sends the `onboarding_need_info` ticket.
 - If the partial is missing, dispatch `219` with the client id and `issue_number=<hub item>` through
   REST and read its comment. Never guess a value; an unknown field is listed as pending.
 

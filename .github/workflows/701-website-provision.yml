@@ -964,7 +964,7 @@ jobs:
           # dns and verify skip and the repo job builds on the default Pages URL
           # (no CNAME). The zone_exists_* flags still tell the truth.
           if ([string]$env:SKIP_DNS -eq 'true' -and $controlled) {
-            Write-Output "::notice::skip_dns=true: $domain is in FFC Cloudflare ($(if ($existsFfc) { 'FFC' } else { 'CM' })), but this run leaves DNS alone and builds on the default Pages URL."
+            Write-Host "::notice::skip_dns=true: $domain is in FFC Cloudflare ($(if ($existsFfc) { 'FFC' } else { 'CM' })), but this run leaves DNS alone and builds on the default Pages URL."
             $controlled = $false
           }
 

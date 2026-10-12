@@ -177,27 +177,55 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   merges go through the **merge queue**, which builds a merge group and re-runs those checks.
 - **Review threads must be resolved before the queue accepts a PR.** Fix real findings first, then
   resolve via GraphQL: `resolveReviewThread(input:{threadId:…})`.
-- **Who lands a PR (Clarke, 2026-10-11).** Unattended work is landed by the **Conductor**: a
-  scheduled cloud worker leaves its green PR as a draft for the Conductor to promote and enqueue
-  (see the landing sweep below). A **live session working with Clarke** lands its own PR: once the
-  PR is green on its current head, has no merge conflict, has every review thread resolved, and is
-  **not** in a reserved lane, promote it and enqueue it in the same turn. Do not end the turn with
-  "ready for you to queue". On 2026-10-10 a live session sat on green #1595 for 16 hours that way,
-  until Clarke asked why it had not merged. Hard security stays on `main` itself: the required
-  checks, Copilot review and the merge queue still all have to pass, and nothing here bypasses them.
+- **Every agent marks its own PR ready for review; do not leave work as a draft (Clarke,
+  2026-10-11).** Gemini and Codex skip drafts, so a draft collects little review and simply waits.
+  As soon as your PR's CI is green, mark it ready for review, whether you are a scheduled worker,
+  the Conductor or a live session. Then work the reviews it draws, from Gemini, Claude, Codex,
+  Copilot or a human: fix the real findings, answer the rest, resolve the threads, and re-check
+  after each push (reviewers re-review). Opening a PR as a draft while CI is still running is fine;
+  leaving it a draft after CI is green is not.
+- **Who merges (Clarke, 2026-10-11): the Conductor or a live session, after review, never by
+  auto-merge.** A live session working with Clarke counts as a human session: he is present and the
+  work is being discussed. So either the **Conductor** or a **live session** may review a PR and
+  enqueue it. A **scheduled worker** never enqueues its own PR. No agent turns on auto-merge
+  (`gh pr merge --auto` on a PR that is not yet ready, `ccr/auto_merge`,
+  `enablePullRequestAutoMerge`). With a merge queue, auto-merge means _enqueue the moment the
+  required checks pass_. The only things `main` requires are **Validate Repository**, **Phantom
+  Revert Guard** and resolved review threads, with **0 approving reviews**. AI reviews are requested
+  but never required, and a review thread blocks only once it exists. So auto-merge set when a PR is
+  opened or promoted lets it land before any reviewer has posted.
+  - **The merge condition: no open question, every test passing, and enough test coverage to trust
+    that.** Do not wait on a human whose review would only be a look-over with no question in it.
+    Enqueue when all of these hold on the **current head**:
+    1. **CI is green** and the PR is conflict-free.
+    2. **Copilot has reviewed the current head.** That means a review from
+       `copilot-pull-request-reviewer[bot]` whose `commit_id` is the head, or an earlier commit when
+       everything since is merges of `main`. Its body must open with `<!-- ccr-overview-v2 -->`;
+       Copilot's error bodies ("wasn't able to review", "encountered an error") are not reviews.
+       While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
+       has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
+       that has started (Gemini, Codex, Claude) must also have finished.
+    3. **No open question.** Every review thread is answered and resolved. Nothing in a review, a
+       comment or the PR body asks for a decision that has not been made.
+    4. **Coverage matches the change.** New or changed behaviour has a test that would fail without
+       it, and that test runs in CI. A documentation-only PR needs only the repository's existing
+       checks. A behaviour change with no covering test is not ready: add the test, or say why it
+       cannot have one and leave the PR for Clarke.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
     tenants); and any PR that decides policy rather than implements it (privacy or legal wording,
-    for example). Leave those green and say so; do not enqueue them.
-  - **From a cloud session** (the GitHub proxy has no GraphQL):
-    `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`, then
-    `gh api -X PUT repos/<owner>/<repo>/pulls/<n>/ccr/auto_merge` (answers `{"enabled":true,…}`).
-    `POST` on `auto_merge` is not a route. Confirm the queue took it with
-    `git ls-remote --heads origin 'gh-readonly-queue/main/pr-<n>-*'`, or later with
-    `pulls/<n> --jq .merged`.
-  - **From a local or Conductor session:** `gh pr ready <n>`, then `gh pr merge <n> --auto`, and
-    confirm with `mergeQueueEntry` as described below.
+    for example). Leave those green and say so; do not enqueue them unless Clarke, in a live
+    session, says to.
+  - **Marking ready from a cloud session** (the GitHub proxy has no GraphQL):
+    `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`. From a local session:
+    `gh pr ready <n>`. Neither turns on auto-merge, and neither should be followed by anything that
+    does.
+  - **Enqueueing once the condition holds:** from a local or Conductor session, `enqueuePullRequest`
+    (or `gh pr merge <n> --auto` on a PR that already meets it, which enqueues it at once),
+    confirmed with `mergeQueueEntry` as described below. From a cloud live session, which has no
+    GraphQL, `gh api -X PUT repos/<owner>/<repo>/pulls/<n>/ccr/auto_merge` at that moment and not
+    before, confirmed with `git ls-remote --heads origin 'gh-readonly-queue/main/pr-<n>-*'`.
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.
@@ -596,8 +624,9 @@ natural terminal state, and that is what this section supplies.
 **A PR is _complete_ — not landing work — when all four hold:** CI green · **0 behind `main`** · all
 review threads resolved · it already carries a landing-sweep comment. Check each open `agentic-os`
 PR against that test **before** starting a sweep. Every clause is measured **per PR against
-`main`**, which is what the test is for and also its limit — read "the cohort is not the sum of its
-PRs" below before publishing any punch list built from it.
+`main`**, which is what the test is for and also its limit. A PR that passes all four but is still a
+draft is not complete: marking it ready is the worker's job (see **Merging**) — read "the cohort is
+not the sum of its PRs" below before publishing any punch list built from it.
 
 **A fully-complete PR set is a reportable failure of the system, not a clean result.** It means no
 _worker_ action is available; it does not mean nothing is wrong. Five complete PRs aged 3–7 days is
@@ -613,14 +642,14 @@ different escalations:
 
 | reading                                                                        | cause                                                                                                   | what the note must say                                                            |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| no merges at all in the recent window                                          | **nobody with promotion rights is present**                                                             | escalate the absence                                                              |
+| no merges at all in the recent window                                          | **nobody with enqueue rights is present**                                                               | escalate the absence                                                              |
 | merges landing, none from the stalled cohort, **and the supervisor is silent** | **the landing actor itself is absent** — nothing is wrong with the PRs and no actor exists to move them | escalate the **supervisor's** absence, and say the cohort is merely waiting on it |
 | merges landing, none from the stalled cohort, **supervisor alive**             | **queue starvation** — a human is present, working another lane                                         | escalate _that_, by name, with the punch list                                     |
 
 **The middle row is the one this section was written without, and it is the one that actually
 happened** (Conductor run 175). The first sixteen escalations measured `main` correctly, found it
 frozen, and reported **starvation** — a human present and prioritising elsewhere. The true cause was
-that the Conductor, which is what promotes and enqueues, had not run for **fourteen days**: six
+that the Conductor, which then both promoted and enqueued, had not run for **fourteen days**: six
 complete PRs, nothing structurally wrong with any of them, and no actor to move them. Every fact
 quoted was right and the label was wrong, which is the same failure this section exists to prevent,
 one level in.
@@ -698,11 +727,15 @@ fifteen, which is exactly why they went unread. At minimum it must carry the old
 and the merge-activity reading above: both change even when the verdict does not, so a reader sees
 movement or its absence without diffing prose.
 
-**Why a complete PR is not worker-actionable: promotion is the Conductor's, not the worker's.** The
-only remaining action on a green, resolved, up-to-date draft is `gh pr ready` followed by an
-enqueue, and both are outside a sandbox worker's authority — so a worker cannot clear the cap
-itself, however many runs it spends trying. Run 153's finding put it exactly: _"The verification was
-never the bottleneck. Promotion was, and promotion is ours alone."_
+**Who does what on a complete PR: the worker promotes, the Conductor enqueues (changed
+2026-10-11).** Until then both steps were the Conductor's alone, and run 153 put the cost exactly:
+_"The verification was never the bottleneck. Promotion was, and promotion is ours alone."_ Drafts
+also drew no AI review while they waited. Now a worker marks its own PR ready for review as soon as
+CI is green, and works the reviews it draws (see **Every agent marks its own PR ready** under
+[Merging](#merging-validated-flow--do-not-bypass)). The only step left for the Conductor is the
+enqueue, under the merge condition in **Who merges** (a live session may enqueue under the same
+condition), so a sweep that finds green, resolved PRs still in draft has found worker work, not a
+Conductor wait.
 
 **A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
 reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even
@@ -717,12 +750,13 @@ delivery channel rather than inventing one here.
 
 **Before filing a sweep as a normal terminal state, check that the actor you are waiting on still
 exists (#1339).** A complete PR set means no landing work is available — and it reads exactly the
-same whether the Conductor is healthy with nothing to promote or has not run in five days. On
+same whether the Conductor is healthy with nothing to enqueue or has not run in five days. On
 2026-09-14 it stopped mid-run and **~39 consecutive worker runs** each computed "0 worker-actionable
 PRs" correctly, in increasing detail, and filed it as routine; the open pile grew 4 → 13 with all 17
 monitoring workflows green. The sentence _"the only remaining action is promotion, which is the
-Conductor's"_ is true on a healthy day and true during an outage, and the cohort's state cannot tell
-them apart. **A terminal state reached 39 times in a row is not a terminal state, it is an outage.**
+Conductor's"_ (pre-2026-10-11 wording; the remaining action is now the Conductor's enqueue) is true
+on a healthy day and true during an outage, and the cohort's state cannot tell them apart. **A
+terminal state reached 39 times in a row is not a terminal state, it is an outage.**
 
 So when the sweep terminates with 0 actionable PRs, spend one read on the supervisor before
 concluding anything:
@@ -822,7 +856,7 @@ cleanly. #1346 (which appends row `L302`) and #1347 (which appends `L303` **and*
 rows kept, block untouched — then fails that module. The correct end state is the same whichever
 merges second: **both rows present in id order, and the `reserved-ids` block empty.**
 
-Two mechanics for whoever does have promotion authority, both already paid for:
+Two mechanics for whoever promotes or enqueues, both already paid for:
 
 - **The first `enqueuePullRequest` after `gh pr ready` is expected to fail** with
   `Required status check "Phantom Revert Guard" is expected`, even when that exact SHA already

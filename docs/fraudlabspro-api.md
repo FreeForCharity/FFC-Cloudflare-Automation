@@ -53,6 +53,19 @@ A `clear-recommended` order is one a reviewer can clear with one tap via workflo
 > try `order_id_field=id`, or confirm how the module keys its stored results, and update the
 > default.
 
+## Second consumer: 232 charity-lane verdicts
+
+[`232. WHMCS - Charity-Lane Verdicts`](../.github/workflows/232-whmcs-charity-lane-verdicts.yml)
+screens every Pending pid 16 / 33 / 40 order with the same lookup (epic
+[#1618](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1618), item G1.3b). Its
+`fraud_screen` job runs on this same `fraudlabspro-prod-read` environment with the same
+`fraudlabspro-keys-from-kv` action and `Invoke-FraudLabsProApi`, and its `fraud_order_id_field`
+input mirrors 228's `order_id_field` (default `ordernum`), so the keying note above applies to it
+too. 232 is fail-closed where 228 only recommends: an order is `ACCEPT` only on a FraudLabs
+`APPROVE` with a score below 80; anything else, including a failed or missing lookup, is `ESCALATE`.
+If the keying turns out to be wrong, 232 escalates every order (`FRAUD_CHECK_FAILED`) rather than
+accepting any.
+
 ## One-time provisioning (KV secret + environment + federated credential)
 
 The sensitive value — the **FraudLabs Pro API key** — never lives in a GitHub secret; Key Vault is

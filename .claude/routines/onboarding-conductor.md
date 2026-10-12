@@ -43,8 +43,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `python3 scripts/charity_lane_gate.py check --rule 226-report --input mode=report`: ran, or
      blocked, and by what.
 1. **Verdicts** [workflow 232]. Dispatch `232-whmcs-charity-lane-verdicts.yml` (ungated), wait for
-   it, and read its job summary. You get one row per Pending pid 16/33/40 order: ACCEPT, NEED_INFO
-   or ESCALATE with reason codes.
+   it, and read the `finalize` job's summary (or the `charity-lane-verdicts` artifact). You get one
+   row per Pending pid 16/33/40 order: ACCEPT, NEED_INFO or ESCALATE with reason codes, already
+   screened with FraudLabs Pro. Never act on the `charity-lane-verdicts-unscreened` report, and if
+   `finalize` did not run, treat every order as ESCALATE.
 2. **Gate 1/2 decisions.** At most 3 accepts per run (testing period).
    - **ACCEPT, pid 16/33:**
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.

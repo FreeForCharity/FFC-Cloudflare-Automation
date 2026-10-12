@@ -121,10 +121,17 @@ BeforeAll {
 Describe 'Get-LaneVerdictFromCodes' {
     It 'is ACCEPT with no codes or only INFO codes' {
         Get-LaneVerdictFromCodes -Codes @() | Should -Be 'ACCEPT'
-        Get-LaneVerdictFromCodes -Codes @('FRAUD_CHECK_NOT_RUN', 'DESIRED_DOMAIN_MISSING') | Should -Be 'ACCEPT'
+        Get-LaneVerdictFromCodes -Codes @('ORG_NAME_WITHHELD', 'DESIRED_DOMAIN_MISSING') | Should -Be 'ACCEPT'
     }
     It 'is NEED_INFO when the worst code is NEED_INFO' {
-        Get-LaneVerdictFromCodes -Codes @('FRAUD_CHECK_NOT_RUN', 'TOS_NOT_ATTESTED') | Should -Be 'NEED_INFO'
+        Get-LaneVerdictFromCodes -Codes @('DESIRED_DOMAIN_MISSING', 'TOS_NOT_ATTESTED') | Should -Be 'NEED_INFO'
+    }
+    It 'treats every fraud code as ESCALATE: <Code>' -ForEach @(
+        @{ Code = 'FRAUD_CHECK_NOT_RUN' }, @{ Code = 'FRAUD_CHECK_FAILED' }, @{ Code = 'FRAUD_FLAGGED' }, @{ Code = 'FRAUD_REVIEW' }
+    ) {
+        $script:LaneReasonCodes[$Code].severity | Should -Be 'ESCALATE'
+        $script:LaneFraudCodes | Should -Contain $Code
+        Get-LaneVerdictFromCodes -Codes @($Code, 'DESIRED_DOMAIN_MISSING') | Should -Be 'ESCALATE'
     }
     It 'is ESCALATE when any code is ESCALATE' {
         Get-LaneVerdictFromCodes -Codes @('TOS_NOT_ATTESTED', 'EIN_NOT_501C3') | Should -Be 'ESCALATE'
@@ -198,12 +205,13 @@ Describe 'Get-CharityLaneVerdict - Gate 1 (pid 16 / 33)' {
     It 'ACCEPTs a complete pid 16 application' {
         $r = Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx
         $r.verdict | Should -Be 'ACCEPT'
-        $r.reason_codes | Should -Be @('FRAUD_CHECK_NOT_RUN')
+        @($r.reason_codes).Count | Should -Be 0
         $r.gate | Should -Be 1
         $r.org_name | Should -Be 'Bright Future Foundation'
         $r.desired_domain | Should -Be 'brightfuture.org'
         $r.readiness_score | Should -BeOfType [int]
-        $r.fraud_check | Should -Be 'not_run'
+        $r.fraud_check | Should -Be 'pending'
+        $r.fraud_score | Should -BeNullOrEmpty
     }
 
     It 'ACCEPTs a complete pid 33 application whose EIN ProPublica lists as a 501(c)(3)' {
@@ -498,20 +506,23 @@ Describe 'Get-CharityLaneVerdict - Gate 2 (pid 40)' {
 
 Describe 'PII-free output' {
     BeforeAll {
+        $pass = Get-LaneFraudOutcome -Result ([pscustomobject]@{ order_id = '0'; lookup_ok = $true; fraudlabs_status = 'APPROVE'; fraudlabs_score = '12'; error = '' })
         $script:Rows = @(
-            (Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx),
-            (Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ companyName = 'Jane Doe' }) -Context $script:Ctx),
-            (Get-CharityLaneVerdict -Application (New-Gate2App) -Context (New-Gate2Ctx))
+            (Merge-LaneFraudOutcome -Outcome $pass -Row (Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx)),
+            (Merge-LaneFraudOutcome -Outcome $pass -Row (Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ companyName = 'Jane Doe' }) -Context $script:Ctx)),
+            (Merge-LaneFraudOutcome -Outcome $pass -Row (Get-CharityLaneVerdict -Application (New-Gate2App) -Context (New-Gate2Ctx)))
         )
-        $script:Report = Get-LaneVerdictReport -Rows $script:Rows -RunUrl 'https://example.invalid/run/1' -GeneratedAt '2026-10-11T00:00:00Z'
+        $script:Report = Get-LaneVerdictReport -Rows $script:Rows -RunUrl 'https://example.invalid/run/1' -GeneratedAt '2026-10-11T00:00:00Z' -FraudCheck 'screened'
         $script:Json = $script:Report | ConvertTo-Json -Depth 8
         $script:Md = Format-LaneVerdictMarkdown -Report $script:Report
     }
 
     It 'emits exactly the allowed row fields' {
+        $allowed = @('order_id', 'client_id', 'pid', 'gate', 'org_name', 'desired_domain', 'verdict', 'reason_codes', 'readiness_score', 'fraud_check', 'fraud_score')
         foreach ($r in $script:Rows) {
-            @($r.PSObject.Properties.Name) | Should -Be @('order_id', 'client_id', 'pid', 'gate', 'org_name', 'desired_domain', 'verdict', 'reason_codes', 'readiness_score', 'fraud_check')
+            @($r.PSObject.Properties.Name) | Should -Be $allowed
         }
+        @((Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx).PSObject.Properties.Name) | Should -Be $allowed
     }
 
     It 'never writes applicant names, emails, phones, URLs or EINs: <Pattern>' -ForEach @(
@@ -527,15 +538,286 @@ Describe 'PII-free output' {
         $script:Report.counts.ACCEPT | Should -Be 2
         $script:Report.counts.NEED_INFO | Should -Be 1
         @($script:Report.verdicts)[0].verdict | Should -Be 'NEED_INFO'
-        $script:Report.schema | Should -Be 'charity-lane-verdicts/v1'
-        $script:Report.fraud_check | Should -Be 'not_run'
-        $script:Report.reason_code_catalog.Contains('FRAUD_CHECK_NOT_RUN') | Should -BeTrue
+        $script:Report.schema | Should -Be 'charity-lane-verdicts/v2'
+        $script:Report.fraud_check | Should -Be 'screened'
+        $script:Report.fraud_counts.pass | Should -Be 3
+        foreach ($c in $script:LaneFraudCodes) { $script:Report.reason_code_catalog.Contains($c) | Should -BeTrue }
     }
 
     It 'renders a summary table, and a plain line when nothing is pending' {
         $script:Md | Should -Match '\| Order \| Client \| pid \| Gate \|'
         $script:Md | Should -Match 'Bright Future Foundation'
+        $script:Md | Should -Match '\| Fraud \|'
+        $script:Md | Should -Match 'FraudLabs: pass 3'
+        $script:Md | Should -Match '\| pass \(12\) \|'
         $empty = Format-LaneVerdictMarkdown -Report (Get-LaneVerdictReport -Rows @())
         $empty | Should -Match 'No Pending pid 16 / 33 / 40 orders\.'
+    }
+}
+
+Describe 'Get-LaneFraudOutcome (fail closed)' {
+    BeforeAll {
+        function New-FraudResult {
+            param([object]$Ok = $true, [string]$Status = 'APPROVE', [string]$Score = '12', [string]$Err = '')
+            return [pscustomobject]@{ order_id = '9001'; lookup_ok = $Ok; fraudlabs_status = $Status; fraudlabs_score = $Score; error = $Err }
+        }
+    }
+
+    It '<Name> -> <Check> / <Code>' -ForEach @(
+        @{ Name = 'APPROVE, low score'; Ok = $true; Status = 'APPROVE'; Score = '12'; Check = 'pass'; Code = $null }
+        @{ Name = 'approve, lower case, decimal score'; Ok = $true; Status = ' approve '; Score = '79.4'; Check = 'pass'; Code = $null }
+        @{ Name = 'APPROVE at the flag score'; Ok = $true; Status = 'APPROVE'; Score = '80'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'APPROVE, high score'; Ok = $true; Status = 'APPROVE'; Score = '97'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'REJECT, low score'; Ok = $true; Status = 'REJECT'; Score = '5'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'REJECT, no score'; Ok = $true; Status = 'REJECT'; Score = ''; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'REVIEW, low score'; Ok = $true; Status = 'REVIEW'; Score = '40'; Check = 'review'; Code = 'FRAUD_REVIEW' }
+        @{ Name = 'REVIEW, high score'; Ok = $true; Status = 'REVIEW'; Score = '90'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'APPROVE without a score'; Ok = $true; Status = 'APPROVE'; Score = ''; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'APPROVE with a junk score'; Ok = $true; Status = 'APPROVE'; Score = 'n/a'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'APPROVE with an out-of-range score'; Ok = $true; Status = 'APPROVE'; Score = '150'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'no stored verdict'; Ok = $true; Status = ''; Score = ''; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'an unknown status'; Ok = $true; Status = 'PENDING'; Score = '10'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'a failed lookup that still carries APPROVE'; Ok = $false; Status = 'APPROVE'; Score = '1'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = "lookup_ok as the string 'true'"; Ok = 'true'; Status = 'APPROVE'; Score = '3'; Check = 'pass'; Code = $null }
+        @{ Name = "lookup_ok as the string 'yes'"; Ok = 'yes'; Status = 'APPROVE'; Score = '3'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'lookup_ok missing'; Ok = $null; Status = 'APPROVE'; Score = '3'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+    ) {
+        $o = Get-LaneFraudOutcome -Result (New-FraudResult -Ok $Ok -Status $Status -Score $Score)
+        $o.Check | Should -Be $Check
+        $o.Code | Should -Be $Code
+    }
+
+    It 'no result at all is FRAUD_CHECK_FAILED' {
+        $o = Get-LaneFraudOutcome -Result $null
+        $o.Check | Should -Be 'failed'
+        $o.Code | Should -Be 'FRAUD_CHECK_FAILED'
+    }
+
+    It '-NotRun is FRAUD_CHECK_NOT_RUN' {
+        $o = Get-LaneFraudOutcome -NotRun
+        $o.Check | Should -Be 'not_run'
+        $o.Code | Should -Be 'FRAUD_CHECK_NOT_RUN'
+    }
+
+    It 'carries the score as an integer' {
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '42.6')).Score | Should -Be 43
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '')).Score | Should -BeNullOrEmpty
+    }
+
+    It 'honours a different flag threshold' {
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '60') -FlagScoreAt 60).Check | Should -Be 'flagged'
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '59') -FlagScoreAt 60).Check | Should -Be 'pass'
+    }
+}
+
+Describe 'Merge-LaneFraudOutcome' {
+    BeforeAll {
+        function New-Outcome {
+            param([string]$Status = 'APPROVE', [string]$Score = '12', [object]$Ok = $true)
+            Get-LaneFraudOutcome -Result ([pscustomobject]@{ order_id = '9001'; lookup_ok = $Ok; fraudlabs_status = $Status; fraudlabs_score = $Score; error = '' })
+        }
+        $script:AcceptRow = Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx
+        $script:NeedInfoRow = Get-CharityLaneVerdict -Application (New-Gate1App -Override @{ 'I certify our organization agrees to the Free For Charity Terms of Service' = '' }) -Context $script:Ctx
+        $script:EscalateRow = Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ otherClientsSameOrg = 1 }) -Context $script:Ctx
+    }
+
+    It 'the checks fixtures are ACCEPT / NEED_INFO / ESCALATE before screening' {
+        $script:AcceptRow.verdict | Should -Be 'ACCEPT'
+        $script:NeedInfoRow.verdict | Should -Be 'NEED_INFO'
+        $script:EscalateRow.verdict | Should -Be 'ESCALATE'
+    }
+
+    It 'a FraudLabs pass keeps an ACCEPT, with fraud_check pass and the score' {
+        $r = Merge-LaneFraudOutcome -Row $script:AcceptRow -Outcome (New-Outcome)
+        $r.verdict | Should -Be 'ACCEPT'
+        $r.fraud_check | Should -Be 'pass'
+        $r.fraud_score | Should -Be 12
+        @($r.reason_codes).Count | Should -Be 0
+    }
+
+    It 'turns ACCEPT into ESCALATE <Code> on <Status> (score <Score>)' -ForEach @(
+        @{ Status = 'REJECT'; Score = '20'; Code = 'FRAUD_FLAGGED'; Check = 'flagged' }
+        @{ Status = 'APPROVE'; Score = '85'; Code = 'FRAUD_FLAGGED'; Check = 'flagged' }
+        @{ Status = 'REVIEW'; Score = '50'; Code = 'FRAUD_REVIEW'; Check = 'review' }
+        @{ Status = ''; Score = ''; Code = 'FRAUD_CHECK_FAILED'; Check = 'failed' }
+    ) {
+        $r = Merge-LaneFraudOutcome -Row $script:AcceptRow -Outcome (New-Outcome -Status $Status -Score $Score)
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.fraud_check | Should -Be $Check
+        $r.reason_codes | Should -Contain $Code
+    }
+
+    It 'a failed lookup turns ACCEPT into ESCALATE FRAUD_CHECK_FAILED' {
+        $r = Merge-LaneFraudOutcome -Row $script:AcceptRow -Outcome (New-Outcome -Ok $false)
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Be @('FRAUD_CHECK_FAILED')
+    }
+
+    It 'a pass never loosens a NEED_INFO or an ESCALATE' {
+        (Merge-LaneFraudOutcome -Row $script:NeedInfoRow -Outcome (New-Outcome)).verdict | Should -Be 'NEED_INFO'
+        (Merge-LaneFraudOutcome -Row $script:EscalateRow -Outcome (New-Outcome)).verdict | Should -Be 'ESCALATE'
+    }
+
+    It 'keeps every non-fraud code of a multi-code row (pass leaves the NEED_INFO as it was)' {
+        $two = Get-CharityLaneVerdict -Application (New-Gate1App -Override @{
+                'I certify our organization agrees to the Free For Charity Terms of Service'           = ''
+                'I certify our organization is legally established and operating in the United States' = ''
+            }) -Context $script:Ctx
+        $unscreened = Merge-LaneFraudOutcome -Row $two -Outcome (Get-LaneFraudOutcome -NotRun)
+        # Through the artifact JSON, as finalize reads it.
+        $parsed = $unscreened | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+        $r = Merge-LaneFraudOutcome -Row $parsed -Outcome (New-Outcome)
+        $r.verdict | Should -Be 'NEED_INFO'
+        @($r.reason_codes) | Should -Be @('TOS_NOT_ATTESTED', 'US_NOT_ATTESTED')
+    }
+
+    It 'a fraud flag or failure escalates a NEED_INFO too (no ticket to a flagged applicant)' {
+        $r = Merge-LaneFraudOutcome -Row $script:NeedInfoRow -Outcome (New-Outcome -Status 'REJECT')
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Contain 'FRAUD_FLAGGED'
+        $r.reason_codes | Should -Contain 'TOS_NOT_ATTESTED'
+    }
+
+    It 'replaces FRAUD_CHECK_NOT_RUN, and applying twice gives the same row' {
+        $unscreened = Merge-LaneFraudOutcome -Row $script:AcceptRow -Outcome (Get-LaneFraudOutcome -NotRun)
+        $unscreened.verdict | Should -Be 'ESCALATE'
+        $unscreened.reason_codes | Should -Be @('FRAUD_CHECK_NOT_RUN')
+        $unscreened.fraud_check | Should -Be 'not_run'
+
+        $once = Merge-LaneFraudOutcome -Row $unscreened -Outcome (New-Outcome -Status 'REVIEW' -Score '30')
+        $twice = Merge-LaneFraudOutcome -Row $once -Outcome (New-Outcome -Status 'REVIEW' -Score '30')
+        $once.reason_codes | Should -Be @('FRAUD_REVIEW')
+        ($twice | ConvertTo-Json -Depth 4) | Should -Be ($once | ConvertTo-Json -Depth 4)
+
+        $cleared = Merge-LaneFraudOutcome -Row $once -Outcome (New-Outcome)
+        $cleared.verdict | Should -Be 'ACCEPT'
+        @($cleared.reason_codes).Count | Should -Be 0
+    }
+
+    It 'keeps every non-fraud field and drops anything extra' {
+        $row = $script:AcceptRow.PSObject.Copy()
+        $row | Add-Member -NotePropertyName applicant_email -NotePropertyValue 'jane.doe@example.com'
+        $r = Merge-LaneFraudOutcome -Row $row -Outcome (New-Outcome)
+        $r.PSObject.Properties.Name | Should -Not -Contain 'applicant_email'
+        $r.order_id | Should -Be $script:AcceptRow.order_id
+        $r.org_name | Should -Be 'Bright Future Foundation'
+        $r.desired_domain | Should -Be 'brightfuture.org'
+        $r.readiness_score | Should -Be $script:AcceptRow.readiness_score
+    }
+}
+
+Describe 'Merge-LaneFraudResultSet (fixtures through a JSON round trip)' {
+    BeforeAll {
+        $notRun = Get-LaneFraudOutcome -NotRun
+        $a = (New-Gate1App); $a.orderid = '9001'
+        $b = (New-Gate1App -Set @{ companyName = 'Hope Harbor Inc' }); $b.orderid = '9002'; $b.clientid = '702'
+        $c = (New-Gate1App -Set @{ companyName = 'River Light Society' }); $c.orderid = '9003'; $c.clientid = '703'
+        $ctx = [pscustomobject]@{
+            OnboardingServices = @(
+                New-Svc -Id '5001' -OrderId '9001' -ClientId '701' -ProductPid 16 -Status 'Pending' -Domain 'brightfuture.org'
+                New-Svc -Id '5002' -OrderId '9002' -ClientId '702' -ProductPid 16 -Status 'Pending'
+                New-Svc -Id '5003' -OrderId '9003' -ClientId '703' -ProductPid 16 -Status 'Pending'
+            )
+            WebsiteServices    = @()
+        }
+        # Same domain answer on all three would be a duplicate; give each its own.
+        $b.fields = New-Gate1Fields -Override @{ 'What is your current/desired domain name?' = 'hopeharbor.org' }
+        $c.fields = New-Gate1Fields -Override @{ 'What is your current/desired domain name?' = 'riverlight.org' }
+        $rows = @($a, $b, $c | ForEach-Object { Merge-LaneFraudOutcome -Row (Get-CharityLaneVerdict -Application $_ -Context $ctx) -Outcome $notRun })
+        $unscreened = Get-LaneVerdictReport -Rows $rows -FraudCheck 'not_run'
+        # What finalize reads: the artifact JSON, parsed back.
+        $script:UnscreenedRows = @(($unscreened | ConvertTo-Json -Depth 8 | ConvertFrom-Json).verdicts)
+    }
+
+    It 'the unscreened report is all ESCALATE FRAUD_CHECK_NOT_RUN (never a decision input)' {
+        $script:UnscreenedRows.Count | Should -Be 3
+        foreach ($r in $script:UnscreenedRows) {
+            $r.verdict | Should -Be 'ESCALATE'
+            $r.reason_codes | Should -Be @('FRAUD_CHECK_NOT_RUN')
+            $r.fraud_check | Should -Be 'not_run'
+        }
+    }
+
+    It 'applies each result by order id' {
+        $results = '[{"order_id":"9001","lookup_ok":true,"fraudlabs_status":"APPROVE","fraudlabs_score":"8","error":""},
+                     {"order_id":"9002","lookup_ok":true,"fraudlabs_status":"REJECT","fraudlabs_score":"91","error":""},
+                     {"order_id":"9003","lookup_ok":true,"fraudlabs_status":"REVIEW","fraudlabs_score":"55","error":""}]' | ConvertFrom-Json
+        $out = Merge-LaneFraudResultSet -Rows $script:UnscreenedRows -Results $results
+        $by = @{}; foreach ($r in $out) { $by[[string]$r.order_id] = $r }
+        $by['9001'].verdict | Should -Be 'ACCEPT'
+        $by['9001'].fraud_check | Should -Be 'pass'
+        $by['9002'].verdict | Should -Be 'ESCALATE'
+        $by['9002'].reason_codes | Should -Contain 'FRAUD_FLAGGED'
+        $by['9002'].fraud_score | Should -Be 91
+        $by['9003'].reason_codes | Should -Contain 'FRAUD_REVIEW'
+        foreach ($r in $out) { $r.reason_codes | Should -Not -Contain 'FRAUD_CHECK_NOT_RUN' }
+    }
+
+    It 'no results at all (screen failed or skipped) -> every row FRAUD_CHECK_FAILED' {
+        foreach ($r in (Merge-LaneFraudResultSet -Rows $script:UnscreenedRows -Results $null)) {
+            $r.verdict | Should -Be 'ESCALATE'
+            $r.reason_codes | Should -Be @('FRAUD_CHECK_FAILED')
+            $r.fraud_check | Should -Be 'failed'
+        }
+    }
+
+    It 'an order with no result, or two results, is FRAUD_CHECK_FAILED' {
+        $results = @(
+            [pscustomobject]@{ order_id = '9001'; lookup_ok = $true; fraudlabs_status = 'APPROVE'; fraudlabs_score = '8'; error = '' }
+            [pscustomobject]@{ order_id = '9001'; lookup_ok = $true; fraudlabs_status = 'APPROVE'; fraudlabs_score = '9'; error = '' }
+            [pscustomobject]@{ order_id = '9002'; lookup_ok = $true; fraudlabs_status = 'APPROVE'; fraudlabs_score = '8'; error = '' }
+        )
+        $out = Merge-LaneFraudResultSet -Rows $script:UnscreenedRows -Results $results
+        $by = @{}; foreach ($r in $out) { $by[[string]$r.order_id] = $r }
+        $by['9001'].fraud_check | Should -Be 'failed'
+        $by['9002'].fraud_check | Should -Be 'pass'
+        $by['9002'].verdict | Should -Be 'ACCEPT'
+        $by['9003'].fraud_check | Should -Be 'failed'
+    }
+
+    It 'a lookup failure row is FRAUD_CHECK_FAILED' {
+        $results = @([pscustomobject]@{ order_id = 9001; lookup_ok = $false; fraudlabs_status = ''; fraudlabs_score = ''; error = 'REQUEST_FAILED_HTTP_503' })
+        $r = @(Merge-LaneFraudResultSet -Rows $script:UnscreenedRows -Results $results | Where-Object { [string]$_.order_id -eq '9001' })[0]
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Be @('FRAUD_CHECK_FAILED')
+    }
+}
+
+Describe 'Get-LaneVerdictReport refuses an unscreened ACCEPT' {
+    It 'throws on a row that never went through Merge-LaneFraudOutcome' {
+        $row = Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx
+        { Get-LaneVerdictReport -Rows @($row) } | Should -Throw '*pending*'
+    }
+
+    It 'throws on an ACCEPT whose fraud_check is not pass' {
+        $row = Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx
+        $row.fraud_check = 'failed'
+        { Get-LaneVerdictReport -Rows @($row) -FraudCheck 'screened' } | Should -Throw '*only a FraudLabs pass can ACCEPT*'
+    }
+
+    It 'renders the unscreened header line' {
+        $row = Merge-LaneFraudOutcome -Row (Get-CharityLaneVerdict -Application (New-Gate1App) -Context $script:Ctx) -Outcome (Get-LaneFraudOutcome -NotRun)
+        $report = Get-LaneVerdictReport -Rows @($row)
+        $report.fraud_check | Should -Be 'not_run'
+        $report.counts.ESCALATE | Should -Be 1
+        $report.fraud_counts.not_run | Should -Be 1
+        Format-LaneVerdictMarkdown -Report $report | Should -Match 'UNSCREENED'
+    }
+}
+
+Describe 'ConvertTo-LaneFraudLookupJson' {
+    It 'one entry per order, keyed by the order number by default' {
+        $json = ConvertTo-LaneFraudLookupJson -OrderIds @('9001', '9001', '9002') -OrderNumbers @{ '9001' = '4455667788'; '9002' = '1122334455' }
+        $json | Should -Be '[{"order_id":"9001","lookup_id":"4455667788"},{"order_id":"9002","lookup_id":"1122334455"}]'
+    }
+    It 'uses the order id itself when -OrderIdField id' {
+        ConvertTo-LaneFraudLookupJson -OrderIds @('9001') -OrderIdField 'id' | Should -Be '[{"order_id":"9001","lookup_id":"9001"}]'
+    }
+    It 'leaves a missing order number blank (a failed lookup downstream)' {
+        ConvertTo-LaneFraudLookupJson -OrderIds @('9001') -OrderNumbers @{} | Should -Be '[{"order_id":"9001","lookup_id":""}]'
+    }
+    It 'is a flat JSON array even when empty or of one' {
+        ConvertTo-LaneFraudLookupJson -OrderIds @() | Should -Be '[]'
+        (ConvertTo-LaneFraudLookupJson -OrderIds @('1') -OrderIdField 'id').StartsWith('[{') | Should -BeTrue
     }
 }

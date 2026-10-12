@@ -41,6 +41,15 @@ permissions:
   contents: read
   issues: write
 
+# Two lookups posting to the same hub issue run one after the other, so a retry
+# cannot race the first run into duplicate comments. The group is per issue, not
+# per workflow: GitHub keeps one pending run per group and cancels the older
+# one, so a single 750 group would drop lookups the conductor queues back to
+# back. A lookup with no issue posts nothing and gets a group of its own.
+concurrency:
+  group: 750-charity-lane-lookup-${{ inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   lookup:
     runs-on: ubuntu-latest

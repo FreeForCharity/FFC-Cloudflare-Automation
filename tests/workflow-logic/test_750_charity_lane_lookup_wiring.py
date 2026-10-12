@@ -90,6 +90,16 @@ def test_free_text_reaches_the_body_only_through_env():
         assert key in step["env"], key
 
 
+def test_runs_for_the_same_issue_queue_but_other_lookups_do_not():
+    """Same issue: serialized, so a retry cannot post a duplicate comment.
+    The group must not be workflow-wide: GitHub keeps one pending run per group
+    and cancels the older one, which would drop back-to-back lookups.
+    """
+    conc = load_workflow(WORKFLOW)["concurrency"]
+    assert conc["group"] == "750-charity-lane-lookup-${{ inputs.issue_number || github.run_id }}"
+    assert conc["cancel-in-progress"] is False
+
+
 # --- behaviour ---------------------------------------------------------------
 
 

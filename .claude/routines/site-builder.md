@@ -3,9 +3,10 @@
 Epic: #1618 · Design: `docs/charity-lane-pipeline.md` · Conductor brief:
 `.claude/routines/onboarding-conductor.md`
 
-The Agentic OS Cloud Worker runs this brief **before** its normal queue on every run. One charity
-per run. You write a new charity's website content; the Onboarding Conductor delivers it and checks
-it. You never deliver, approve or merge anything yourself.
+The Agentic OS Cloud Worker runs this brief **before** its normal queue on every run: first step 5
+(at most one Gate 3 validation), then steps 1-4 (at most one build). You write a new charity's
+website content; the Onboarding Conductor delivers it and checks it. You never deliver, approve or
+merge anything yourself.
 
 This repo is PUBLIC. Write only what will be public on the charity's own site anyway (org name,
 mission, programs, the charity's public contact details from its application). Never write an
@@ -32,13 +33,21 @@ the charity's public contact.
   list, plus the structured intake fields. Prefer it over anything else. A gap list means the
   application is incomplete: comment the gaps on the hub item, relabel it `lane:needs-info` (remove
   `lane:building`), and stop. The conductor sends the `onboarding_need_info` ticket.
-- If the partial is missing, dispatch `219` with the client id and `issue_number=<hub item>` through
-  REST and read its comment. Never guess a value; an unknown field is listed as pending.
+- Public website fields [workflow 234]: dispatch `234` with the client id and
+  `issue_number=<hub item>` and read the comment it posts. It carries only fields the applicant gave
+  for publication (public email, phone and city/state for the footer, tagline, descriptions,
+  programs, brand color, logo and social URLs, donation and volunteer URLs, founding year, template
+  choice) and lists the missing ones. Use them for everything the partial does not cover; where both
+  have a value, the partial's validated identity fields (name, EIN, Candid) win.
+- Never guess a value: an unknown footer field is listed in `pending`; an unknown page field is left
+  out.
 
 ## 3. Build
 
-1. Template: `FreeForCharity/FFC-IN-FFC_Single_Page_Template` for new builds (its
-   `src/lib/site.config.ts` is the canonical shape). Clone it anonymously into a scratch directory.
+1. Template: the application's template choice (234's `template choice`), else
+   `FreeForCharity/FFC-IN-FFC_Single_Page_Template` for a new build (its `src/lib/site.config.ts` is
+   the canonical shape). It must match the template 701 provisioned the repo from; if they differ,
+   comment it on the hub item and stop. Clone it anonymously into a scratch directory.
 2. Write `src/lib/site.config.ts` from the template's own file: fill values from the partial, keep
    every field the template defines, list unsupplied footer fields in `pending` with their values
    empty (the template's rule), and never change `supportedBy`. The `taxStatusLabel` follows the

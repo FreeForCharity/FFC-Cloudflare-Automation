@@ -39,9 +39,19 @@
         Active;
       - the "fully approved" attestation is ticked;
       - no other Pending pid 40 order and no Active pid 40 on the client.
-    Fraud: FraudLabs Pro results are only readable through 228's separate
-    `fraudlabspro-prod-read` environment and key, so every row reports
-    `fraud_check: not_run` (reason code FRAUD_CHECK_NOT_RUN, informational).
+    Fraud: FraudLabs Pro is readable only on 228's `fraudlabspro-prod-read`
+    environment, so this script (on `whmcs-prod-read`) cannot screen. It writes
+    every row UNSCREENED: fraud_check `not_run` with FRAUD_CHECK_NOT_RUN, an
+    ESCALATE code, so the intermediate report can never say ACCEPT. It also
+    writes the FraudLabs lookup keys (-FraudLookupFile: order id -> the
+    -OrderIdField value 228 sends). Workflow 232's `fraud_screen` job looks each
+    order up exactly as 228 does (scripts/whmcs-charity-lane-fraud-screen.ps1)
+    and its `finalize` job applies the results (Merge-LaneFraudOutcome, through
+    scripts/whmcs-charity-lane-fraud-merge.ps1). The FraudLabs result is the
+    only thing that can lift FRAUD_CHECK_NOT_RUN: APPROVE -> fraud_check
+    `pass`; REJECT -> FRAUD_FLAGGED; REVIEW ->
+    FRAUD_REVIEW; anything else, including a failed or missing lookup ->
+    FRAUD_CHECK_FAILED. All three are ESCALATE (fail closed).
 
     REUSE: every field reader, EIN resolver, ProPublica lookup and the readiness
     score come from scripts/whmcs-application-triage.ps1 (dot-sourced; its runner
@@ -49,7 +59,10 @@
 
     PII: the hub repo is PUBLIC. The ONLY values emitted (JSON artifact, job
     summary, issue comment) are order id, client id, pid, gate, org name,
-    desired domain, verdict, reason codes, readiness score and fraud_check. An
+    desired domain, verdict, reason codes, readiness score, fraud_check and
+    fraud_score. The lookup-key file carries only order id + the order field
+    228 sends to FraudLabs (WHMCS order number by default), no applicant data;
+    the workflow keeps it as a 1-day transport artifact for the screening job. An
     org name that looks like a person's name or carries contact data is
     withheld (ORG_NAME_WITHHELD); a desired domain is emitted only after it
     parses as a bare hostname. Applicant names, emails, phones, addresses, URLs
@@ -93,7 +106,17 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 250)]
-    [int]$PageSize = 250
+    [int]$PageSize = 250,
+
+    # The WHMCS order field sent to FraudLabs Pro as its order id: 228's
+    # `order_id_field`, with the same default.
+    [Parameter()]
+    [ValidateSet('ordernum', 'id')]
+    [string]$OrderIdField = 'ordernum',
+
+    # Where to write the FraudLabs lookup keys ([{order_id, lookup_id}]).
+    [Parameter()]
+    [string]$FraudLookupFile = 'artifacts/whmcs/charity-lane-fraud-lookups.json'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,6 +136,8 @@ $script:LaneRunConfig = @{
     EinApiBaseUrl     = $EinApiBaseUrl
     SkipNetworkChecks = [bool]$SkipNetworkChecks
     PageSize          = $PageSize
+    OrderIdField      = $OrderIdField
+    FraudLookupFile   = $FraudLookupFile
 }
 
 # Field readers, EIN resolution, ProPublica verification and readiness scoring.
@@ -169,8 +194,22 @@ $script:LaneReasonCodes = [ordered]@{
     # Order shape / tooling
     ORDER_HAS_MULTIPLE_LANE_ITEMS = @{ severity = 'ESCALATE'; description = 'One order carries more than one onboarding/website item; accepting it accepts all of them.' }
     UNSUPPORTED_PID               = @{ severity = 'ESCALATE'; description = 'Not a charity-lane product.' }
-    FRAUD_CHECK_NOT_RUN           = @{ severity = 'INFO'; description = 'FraudLabs Pro is readable only through 228 (fraudlabspro-prod-read); not run here.' }
+    # FraudLabs Pro screening (applied by Merge-LaneFraudOutcome). All ESCALATE:
+    # nothing is ACCEPTed without fraud_check = pass.
+    FRAUD_CHECK_NOT_RUN           = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro screening has not been applied to this row (the unscreened report the WHMCS job writes). Never ACCEPT without it.' }
+    FRAUD_CHECK_FAILED            = @{ severity = 'ESCALATE'; description = 'The FraudLabs Pro lookup failed or gave no usable verdict (request error, FraudLabs error code, no stored result, unknown status, or an APPROVE without a score). Fail closed.' }
+    FRAUD_FLAGGED                 = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REJECT.' }
+    FRAUD_REVIEW                  = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REVIEW.' }
 }
+
+# Every fraud code: Merge-LaneFraudOutcome replaces whichever of these a row
+# carries, so applying an outcome is idempotent.
+$script:LaneFraudCodes = @('FRAUD_CHECK_NOT_RUN', 'FRAUD_CHECK_FAILED', 'FRAUD_FLAGGED', 'FRAUD_REVIEW')
+
+# The verdict follows FraudLabs' STATUS only, as 228 does
+# (docs/fraudlabspro-api.md): every lane order is a $0 onboarding order, and a
+# high score on one is almost always a false positive (free email + residential
+# IP + brand-new domain; #813). The score is reported, never decisive.
 
 $script:LaneFieldPatterns = @{
     # Org social PAGE fields. The 'page' suffix mirrors ffcadmin's
@@ -307,9 +346,20 @@ function Get-LaneOrgName {
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return [pscustomobject]@{ Name = ''; Raw = ''; Status = 'missing' }
     }
-    if (-not [string]::IsNullOrWhiteSpace($ApplicantFullName) -and
-        $raw.ToLowerInvariant() -eq $ApplicantFullName.Trim().ToLowerInvariant()) {
-        return [pscustomobject]@{ Name = ''; Raw = $raw; Status = 'applicant' }
+    if (-not [string]::IsNullOrWhiteSpace($ApplicantFullName)) {
+        # Exact match, or every word of the "org name" is a word of the applicant's
+        # own name ("James" for James Smith, "Smith Jane" for Jane Smith): both are
+        # the applicant, and this report is public.
+        $tok = { param([string]$s) @(($s.ToLowerInvariant() -replace '[^a-z0-9\s]', ' ') -split '\s+' | Where-Object { $_.Length -ge 2 }) }
+        $orgWords = & $tok $raw
+        $personWords = & $tok $ApplicantFullName
+        $isApplicant = $raw.ToLowerInvariant() -eq $ApplicantFullName.Trim().ToLowerInvariant()
+        if (-not $isApplicant -and $orgWords.Count -gt 0 -and $personWords.Count -gt 0) {
+            $isApplicant = @($orgWords | Where-Object { $personWords -notcontains $_ }).Count -eq 0
+        }
+        if ($isApplicant) {
+            return [pscustomobject]@{ Name = ''; Raw = $raw; Status = 'applicant' }
+        }
     }
     $withheld = $false
     if ((Test-PersonNameCompany -Name $raw).IsPerson) { $withheld = $true }
@@ -487,7 +537,13 @@ function Get-CharityLaneVerdict {
 
         Returns the PII-free report row (and nothing else):
           order_id, client_id, pid, gate, org_name, desired_domain, verdict,
-          reason_codes, readiness_score, fraud_check.
+          reason_codes, readiness_score, fraud_check, fraud_score.
+
+        The verdict here is the CHECKS verdict, before FraudLabs screening:
+        fraud_check is 'pending' and no fraud code is set. Such a row is never
+        published. Merge-LaneFraudOutcome applies the FraudLabs result (or
+        FRAUD_CHECK_NOT_RUN), and Get-LaneVerdictReport refuses a 'pending'
+        row and any ACCEPT whose fraud_check is not 'pass'.
     #>
     [OutputType([pscustomobject])]
     param(
@@ -603,7 +659,6 @@ function Get-CharityLaneVerdict {
         foreach ($c in (Get-LaneDuplicateCodes -Application $Application -GateServices $website -DomainServices @() -OrgRaw '' -Domain '')) { $codes.Add($c) }
     }
 
-    $codes.Add('FRAUD_CHECK_NOT_RUN')
     $sorted = Get-SortedLaneCodes -Codes $codes.ToArray()
     $toInt = { param($v) $n = 0; if ([int]::TryParse([string]$v, [ref]$n)) { $n } else { [string]$v } }
     return [pscustomobject][ordered]@{
@@ -616,37 +671,213 @@ function Get-CharityLaneVerdict {
         verdict         = (Get-LaneVerdictFromCodes -Codes $sorted)
         reason_codes    = @($sorted)
         readiness_score = $readiness
-        fraud_check     = 'not_run'
+        fraud_check     = 'pending'
+        fraud_score     = $null
     }
+}
+
+function Get-LaneFraudOutcome {
+    <#
+    .SYNOPSIS
+        Map ONE FraudLabs Pro lookup result to a fraud outcome. Pure.
+    .DESCRIPTION
+        $Result is one row of the screening job's results
+        (scripts/whmcs-charity-lane-fraud-screen.ps1):
+          order_id, lookup_ok, fraudlabs_status, fraudlabs_score, error
+
+        Fail closed: only a successful lookup whose status is APPROVE is a pass;
+        the score is informational (see the note at $script:LaneFraudCodes). In order:
+          -NotRun                         -> not_run  FRAUD_CHECK_NOT_RUN
+          no result / lookup_ok not true  -> failed   FRAUD_CHECK_FAILED
+          REJECT                          -> flagged  FRAUD_FLAGGED
+          REVIEW                          -> review   FRAUD_REVIEW
+          APPROVE                         -> pass     (no code)
+          anything else                   -> failed   FRAUD_CHECK_FAILED
+        Returns @{ Check; Code; Score } (Code $null on pass, Score $null when
+        the score did not parse).
+    #>
+    [OutputType([pscustomobject])]
+    [CmdletBinding(DefaultParameterSetName = 'Result')]
+    param(
+        [Parameter(ParameterSetName = 'Result')]$Result,
+        [Parameter(ParameterSetName = 'NotRun', Mandatory = $true)][switch]$NotRun
+    )
+    if ($NotRun) { return [pscustomobject]@{ Check = 'not_run'; Code = 'FRAUD_CHECK_NOT_RUN'; Score = $null } }
+    $failed = [pscustomobject]@{ Check = 'failed'; Code = 'FRAUD_CHECK_FAILED'; Score = $null }
+    if ($null -eq $Result) { return $failed }
+    # Boolean true, or the string 'true' a serialization round trip may leave.
+    # A missing or odd lookup_ok is a failed lookup.
+    $ok = Get-LaneProp -Object $Result -Name 'lookup_ok'
+    if (-not (($ok -is [bool] -and $ok) -or ([string]$ok -eq 'true'))) { return $failed }
+
+    $status = ([string](Get-LaneProp -Object $Result -Name 'fraudlabs_status')).Trim().ToUpperInvariant()
+    $score = $null
+    $parsed = 0.0
+    $rawScore = ([string](Get-LaneProp -Object $Result -Name 'fraudlabs_score')).Trim()
+    if ([double]::TryParse($rawScore, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -and
+        $parsed -ge 0 -and $parsed -le 100) {
+        $score = [int][math]::Round($parsed)
+    }
+
+    if ($status -eq 'REJECT') { return [pscustomobject]@{ Check = 'flagged'; Code = 'FRAUD_FLAGGED'; Score = $score } }
+    if ($status -eq 'REVIEW') { return [pscustomobject]@{ Check = 'review'; Code = 'FRAUD_REVIEW'; Score = $score } }
+    if ($status -eq 'APPROVE') { return [pscustomobject]@{ Check = 'pass'; Code = $null; Score = $score } }
+    return [pscustomobject]@{ Check = 'failed'; Code = 'FRAUD_CHECK_FAILED'; Score = $score }
+}
+
+function Merge-LaneFraudOutcome {
+    <#
+    .SYNOPSIS
+        Apply a fraud outcome to ONE report row and re-derive its verdict. Pure.
+    .DESCRIPTION
+        Any fraud code the row already carries is dropped, the outcome's code is
+        added, and the verdict is recomputed from the codes by the same
+        Get-LaneVerdictFromCodes every other check uses. So the outcome can only
+        ever make a verdict stricter than the checks verdict, never looser, and
+        applying an outcome twice gives the same row. The returned row carries
+        exactly the report-row fields; anything else on the input is dropped.
+    #>
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]$Row,
+        [Parameter(Mandatory = $true)]$Outcome
+    )
+    # Assigned bare, then iterated: Get-LaneProp returns an array as ONE
+    # pipeline item, so @(Get-LaneProp ...) would nest it and join the codes.
+    $codes = Get-LaneProp -Object $Row -Name 'reason_codes'
+    $kept = @(foreach ($c in @($codes)) { if ($c -and $script:LaneFraudCodes -notcontains [string]$c) { [string]$c } })
+    if ($Outcome.Code) { $kept += [string]$Outcome.Code }
+    $sorted = Get-SortedLaneCodes -Codes $kept
+    return [pscustomobject][ordered]@{
+        order_id        = (Get-LaneProp -Object $Row -Name 'order_id')
+        client_id       = (Get-LaneProp -Object $Row -Name 'client_id')
+        pid             = (Get-LaneProp -Object $Row -Name 'pid')
+        gate            = (Get-LaneProp -Object $Row -Name 'gate')
+        org_name        = [string](Get-LaneProp -Object $Row -Name 'org_name')
+        desired_domain  = [string](Get-LaneProp -Object $Row -Name 'desired_domain')
+        verdict         = (Get-LaneVerdictFromCodes -Codes $sorted)
+        reason_codes    = @($sorted)
+        readiness_score = (Get-LaneProp -Object $Row -Name 'readiness_score')
+        fraud_check     = [string]$Outcome.Check
+        fraud_score     = $Outcome.Score
+    }
+}
+
+function Merge-LaneFraudResultSet {
+    <#
+    .SYNOPSIS
+        Apply the screening job's results to every row of an unscreened report. Pure.
+    .DESCRIPTION
+        $Rows: the unscreened report's verdict rows. $Results: the screening
+        job's result rows, or $null when there are none (the job failed, was
+        skipped, or its artifact is missing): then EVERY row is
+        FRAUD_CHECK_FAILED. A row with no result, or with more than one result
+        for its order id, is FRAUD_CHECK_FAILED too. Returns the screened rows.
+    #>
+    [OutputType([pscustomobject[]])]
+    param(
+        [Parameter()]$Rows,
+        [Parameter()]$Results
+    )
+    $byOrder = @{}
+    $dupes = [System.Collections.Generic.HashSet[string]]::new()
+    if ($null -ne $Results) {
+        foreach ($r in @($Results | Where-Object { $_ })) {
+            $id = [string](Get-LaneProp -Object $r -Name 'order_id')
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            if ($byOrder.ContainsKey($id)) { [void]$dupes.Add($id) }
+            $byOrder[$id] = $r
+        }
+    }
+    $out = foreach ($row in @($Rows | Where-Object { $_ })) {
+        $id = [string](Get-LaneProp -Object $row -Name 'order_id')
+        $result = $null
+        if ($byOrder.ContainsKey($id) -and -not $dupes.Contains($id)) { $result = $byOrder[$id] }
+        Merge-LaneFraudOutcome -Row $row -Outcome (Get-LaneFraudOutcome -Result $result)
+    }
+    return @($out)
+}
+
+function ConvertTo-LaneFraudLookupJson {
+    <#
+    .SYNOPSIS
+        The FraudLabs lookup-key file for the screening job, as JSON. Pure.
+    .DESCRIPTION
+        One entry per pending lane ORDER (an order with two lane items is looked
+        up once): [{order_id, lookup_id}], where lookup_id is the WHMCS field 228
+        sends to FraudLabs (-OrderIdField: 'ordernum', its default, or 'id'). A
+        missing order number stays '' and the screening job records a failed
+        lookup (FRAUD_CHECK_FAILED). No applicant data is ever in it.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter()][string[]]$OrderIds,
+        [Parameter()][hashtable]$OrderNumbers = @{},
+        [Parameter()][ValidateSet('ordernum', 'id')][string]$OrderIdField = 'ordernum'
+    )
+    $entries = @(@($OrderIds | Where-Object { $_ } | Select-Object -Unique) | ForEach-Object {
+            $lookupId = if ($OrderIdField -eq 'id') { $_ } else { [string]$OrderNumbers[$_] }
+            [pscustomobject][ordered]@{ order_id = [string]$_; lookup_id = $lookupId }
+        })
+    # -InputObject keeps an array an array (even empty or of one); -AsArray here
+    # would wrap it a second time.
+    return (ConvertTo-Json -InputObject @($entries) -Compress)
 }
 
 function Get-LaneVerdictReport {
     # Assemble the JSON document (rows + counts + the code catalog) from rows.
+    # -FraudCheck says whether the rows are the unscreened set ('not_run') or
+    # have had the FraudLabs results applied ('screened').
+    # Fail closed at the single point every report is written through: a row
+    # that never went through Merge-LaneFraudOutcome ('pending'), or an ACCEPT
+    # whose fraud_check is not 'pass', is a programming error and throws.
     [OutputType([pscustomobject])]
     param(
         [Parameter()]$Rows,
         [Parameter()][string]$RunUrl = '',
-        [Parameter()][string]$GeneratedAt = ''
+        [Parameter()][string]$GeneratedAt = '',
+        [Parameter()][ValidateSet('not_run', 'screened')][string]$FraudCheck = 'not_run'
     )
+    $all = @($Rows | Where-Object { $_ })
+    foreach ($r in $all) {
+        $fc = [string]$r.fraud_check
+        if (@('pass', 'flagged', 'review', 'failed', 'not_run') -notcontains $fc) {
+            throw "Row for order $($r.order_id) has fraud_check '$fc'; apply Merge-LaneFraudOutcome before reporting."
+        }
+        if ([string]$r.verdict -eq 'ACCEPT' -and $fc -ne 'pass') {
+            throw "Row for order $($r.order_id) is ACCEPT with fraud_check '$fc'; only a FraudLabs pass can ACCEPT."
+        }
+    }
     $order = @{ ESCALATE = 0; NEED_INFO = 1; ACCEPT = 2 }
-    $sorted = @($Rows | Where-Object { $_ } | Sort-Object -Property @{ Expression = { $order[[string]$_.verdict] } }, @{ Expression = { [int]$_.gate } }, @{ Expression = { if ($null -eq $_.readiness_score) { 0 } else { - [int]$_.readiness_score } } }, @{ Expression = { [string]$_.order_id } })
+    $sorted = @($all | Sort-Object -Property @{ Expression = { $order[[string]$_.verdict] } }, @{ Expression = { [int]$_.gate } }, @{ Expression = { if ($null -eq $_.readiness_score) { 0 } else { - [int]$_.readiness_score } } }, @{ Expression = { [string]$_.order_id } })
     $counts = [ordered]@{
         ACCEPT    = @($sorted | Where-Object { $_.verdict -eq 'ACCEPT' }).Count
         NEED_INFO = @($sorted | Where-Object { $_.verdict -eq 'NEED_INFO' }).Count
         ESCALATE  = @($sorted | Where-Object { $_.verdict -eq 'ESCALATE' }).Count
     }
+    $fraudCounts = [ordered]@{}
+    foreach ($k in @('pass', 'flagged', 'review', 'failed', 'not_run')) {
+        $fraudCounts[$k] = @($sorted | Where-Object { [string]$_.fraud_check -eq $k }).Count
+    }
     $catalog = [ordered]@{}
     foreach ($k in $script:LaneReasonCodes.Keys) {
         $catalog[$k] = [ordered]@{ severity = $script:LaneReasonCodes[$k].severity; description = $script:LaneReasonCodes[$k].description }
     }
+    $note = if ($FraudCheck -eq 'screened') {
+        "FraudLabs Pro results applied by workflow 232's fraud_screen job (fraudlabspro-prod-read), looked up as 228 does. Only fraud_check 'pass' can ACCEPT; a failed or missing lookup is FRAUD_CHECK_FAILED (ESCALATE)."
+    }
+    else {
+        'UNSCREENED: FraudLabs Pro has not been applied, so every row carries FRAUD_CHECK_NOT_RUN (ESCALATE). This is the intermediate report, not a decision input.'
+    }
     return [pscustomobject][ordered]@{
-        schema              = 'charity-lane-verdicts/v1'
+        schema              = 'charity-lane-verdicts/v2'
         generated_at        = $GeneratedAt
         run_url             = $RunUrl
         read_only           = $true
-        fraud_check         = 'not_run'
-        fraud_check_note    = "FraudLabs Pro is readable only through workflow 228's fraudlabspro-prod-read environment; this workflow runs on whmcs-prod-read alone."
+        fraud_check         = $FraudCheck
+        fraud_check_note    = $note
         counts              = $counts
+        fraud_counts        = $fraudCounts
         verdicts            = @($sorted)
         reason_code_catalog = $catalog
     }
@@ -663,25 +894,34 @@ function Format-LaneVerdictMarkdown {
     $lines.Add('')
     if ($Report.run_url) { $lines.Add("Run: $($Report.run_url)"); $lines.Add('') }
     $c = $Report.counts
-    $lines.Add("**ACCEPT** $($c.ACCEPT) | **NEED_INFO** $($c.NEED_INFO) | **ESCALATE** $($c.ESCALATE) | fraud_check: ``not_run`` (FraudLabs is read only by 228)")
+    $f = $Report.fraud_counts
+    $fraudLine = if ([string]$Report.fraud_check -eq 'screened') {
+        "FraudLabs: pass $($f.pass) | flagged $($f.flagged) | review $($f.review) | failed $($f.failed)"
+    }
+    else {
+        'FraudLabs: `not_run` (UNSCREENED, every row ESCALATE)'
+    }
+    $lines.Add("**ACCEPT** $($c.ACCEPT) | **NEED_INFO** $($c.NEED_INFO) | **ESCALATE** $($c.ESCALATE) | $fraudLine")
     $lines.Add('')
     $rows = @($Report.verdicts)
     if ($rows.Count -eq 0) {
         $lines.Add('No Pending pid 16 / 33 / 40 orders.')
     }
     else {
-        $lines.Add('| Order | Client | pid | Gate | Org | Desired domain | Verdict | Readiness | Reason codes |')
-        $lines.Add('| ----- | ------ | --- | ---- | --- | -------------- | ------- | --------- | ------------ |')
+        $lines.Add('| Order | Client | pid | Gate | Org | Desired domain | Verdict | Readiness | Fraud | Reason codes |')
+        $lines.Add('| ----- | ------ | --- | ---- | --- | -------------- | ------- | --------- | ----- | ------------ |')
         foreach ($r in $rows) {
             $orgCell = if ([string]::IsNullOrWhiteSpace([string]$r.org_name)) { '-' } else { [string]$r.org_name }
             $domCell = if ([string]::IsNullOrWhiteSpace([string]$r.desired_domain)) { '-' } else { '`' + [string]$r.desired_domain + '`' }
             $readCell = if ($null -eq $r.readiness_score) { '-' } else { [string]$r.readiness_score }
+            $fraudCell = [string]$r.fraud_check
+            if ($null -ne $r.fraud_score) { $fraudCell = "$fraudCell ($($r.fraud_score))" }
             $codeCell = (@($r.reason_codes) | ForEach-Object { '`' + $_ + '`' }) -join ' '
-            $lines.Add("| $($r.order_id) | $($r.client_id) | $($r.pid) | $($r.gate) | $orgCell | $domCell | **$($r.verdict)** | $readCell | $codeCell |")
+            $lines.Add("| $($r.order_id) | $($r.client_id) | $($r.pid) | $($r.gate) | $orgCell | $domCell | **$($r.verdict)** | $readCell | $fraudCell | $codeCell |")
         }
     }
     $lines.Add('')
-    $lines.Add('Reason codes and severities: `reason_code_catalog` in the `charity-lane-verdicts.json` artifact. INFO codes never block.')
+    $lines.Add('Reason codes and severities: `reason_code_catalog` in the `charity-lane-verdicts.json` artifact. INFO codes never block; only fraud `pass` can ACCEPT.')
     return ($lines -join "`n")
 }
 
@@ -785,8 +1025,14 @@ try {
     # 1) Pending orders.
     $ordersBody = $auth.Clone(); $ordersBody.action = 'GetOrders'; $ordersBody.status = 'Pending'
     $pendingOrderIds = [System.Collections.Generic.HashSet[string]]::new()
+    # order id -> WHMCS order number, for the FraudLabs lookup keys only (never
+    # written to the report).
+    $orderNumbers = @{}
     foreach ($o in (Get-LaneAllPages -Api $api -Body $ordersBody -ListProperty 'orders' -ItemProperty 'order' -Size $cfg.PageSize)) {
-        if ($o -and -not [string]::IsNullOrWhiteSpace([string]$o.id)) { [void]$pendingOrderIds.Add([string]$o.id) }
+        if ($o -and -not [string]::IsNullOrWhiteSpace([string]$o.id)) {
+            [void]$pendingOrderIds.Add([string]$o.id)
+            if ($o.PSObject.Properties['ordernum']) { $orderNumbers[[string]$o.id] = [string]$o.ordernum }
+        }
     }
     Write-Host "Pending orders (all products): $($pendingOrderIds.Count)"
 
@@ -882,22 +1128,32 @@ try {
             }
         }
 
-        Get-CharityLaneVerdict -Application $app -Context $context
+        # UNSCREENED: FraudLabs is not reachable from this environment, so every
+        # row leaves here as FRAUD_CHECK_NOT_RUN (ESCALATE). The finalize job
+        # applies the screening job's results.
+        Merge-LaneFraudOutcome -Row (Get-CharityLaneVerdict -Application $app -Context $context) -Outcome (Get-LaneFraudOutcome -NotRun)
     }
+
+    $lookupJson = ConvertTo-LaneFraudLookupJson -OrderIds @($pendingLane | ForEach-Object { [string]$_.orderid }) `
+        -OrderNumbers $orderNumbers -OrderIdField $cfg.OrderIdField
 
     $runUrl = ''
     if ($env:GITHUB_RUN_ID) { $runUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
-    $report = Get-LaneVerdictReport -Rows @($rows) -RunUrl $runUrl -GeneratedAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
+    $report = Get-LaneVerdictReport -Rows @($rows) -RunUrl $runUrl -GeneratedAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -FraudCheck 'not_run'
     $markdown = Format-LaneVerdictMarkdown -Report $report
 
-    foreach ($path in @($cfg.OutputFile, $cfg.MarkdownFile)) {
+    foreach ($path in @($cfg.OutputFile, $cfg.MarkdownFile, $cfg.FraudLookupFile)) {
         $dir = Split-Path -Parent $path
         if (-not [string]::IsNullOrWhiteSpace($dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     }
     $report | ConvertTo-Json -Depth 8 | Out-File -FilePath $cfg.OutputFile -Encoding utf8
     $markdown | Out-File -FilePath $cfg.MarkdownFile -Encoding utf8
-    Write-LaneSummary -Text $markdown
-    Write-Host "Wrote $($cfg.OutputFile) ($(@($report.verdicts).Count) verdict(s))."
+    $lookupJson | Out-File -FilePath $cfg.FraudLookupFile -Encoding utf8
+    # The step summary gets a pointer, not the unscreened table: every row in it
+    # is ESCALATE, and the decision table is the finalize job's.
+    Write-LaneSummary -Text "Unscreened verdicts for $(@($report.verdicts).Count) order item(s); FraudLabs Pro screening and the final table follow in the ``finalize`` job."
+    Write-Host $markdown
+    Write-Host "Wrote $($cfg.OutputFile) ($(@($report.verdicts).Count) unscreened verdict(s)) and the FraudLabs lookup keys."
     exit 0
 }
 catch {

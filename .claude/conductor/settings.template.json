@@ -10,8 +10,15 @@
     "a config no PR can review and no run can verify (#1042 AC1).",
     "The paths are absolute ON PURPOSE. $CLAUDE_PROJECT_DIR resolves to the",
     "SESSION's project root, which for the Conductor is the workspace, not the",
-    "clone -- that mismatch is the whole of L218."
+    "clone -- that mismatch is the whole of L218.",
+    "permissions: Clarke, 2026-10-11. The Conductor marks PRs ready and enqueues",
+    "them once AGENTS.md's merge condition holds; without these rules auto mode",
+    "refuses both (run 253). --admin stays denied: it would bypass the merge queue."
   ],
+  "permissions": {
+    "allow": ["Bash(gh pr ready:*)", "Bash(gh pr merge:*)"],
+    "deny": ["Bash(gh pr merge --admin:*)", "Bash(gh pr merge * --admin*)"]
+  },
   "hooks": {
     "SessionStart": [
       {

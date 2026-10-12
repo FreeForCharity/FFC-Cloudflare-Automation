@@ -28,6 +28,10 @@ file names — the two differ. Map display→file via
   — the first real run. **Read the "identify by domain, not masked name" lesson before Phase 0.**
 - [`docs/workflow-safety-and-approvals.md`](../../../docs/workflow-safety-and-approvals.md) — which
   runs are read-only vs which pause for an approval gate.
+- [`docs/charity-lane-pipeline.md`](../../../docs/charity-lane-pipeline.md) — the unattended version
+  of this chain (epic #1618, testing period): which steps the Onboarding Conductor runs on its own,
+  and where it stops for a human. If a charity is already in that pipeline, check its
+  `[CHARITY-LANE]` hub item before running anything by hand.
 - [`docs/azure-oidc-federated-credentials.md`](../../../docs/azure-oidc-federated-credentials.md) —
   identity/OIDC map; the `m365-prod` credential-typo repair; `az`-from-sandbox recipe.
 - Service deep-dives when you touch that service:
@@ -54,10 +58,9 @@ file names — the two differ. Map display→file via
 ## Phase 0 — Find the application (ALWAYS start here)
 
 1. **`221. WHMCS - Application Search`** with the **domain** (or org name) as the query. Returns the
-   **client id** + readable application (org name, mission, desired domain, legal status). Ungated
-   read? No — 221 currently runs on gated `whmcs-prod`. The read-only detail view
-   **`219. WHMCS - Application Detail`** runs on the ungated `whmcs-prod-read` env; use it once you
-   have the id.
+   **client id** + readable application (org name, mission, desired domain, legal status). Both 221
+   and the detail view **`219. WHMCS - Application Detail`** run on the ungated `whmcs-prod-read`
+   env, so neither pauses for approval; use 219 once you have the id.
 2. Confirm the client id before doing anything else.
 
 > **The #1 trap:** do **not** identify the application from the masked triage tables (`209`/`210`).
@@ -157,6 +160,9 @@ file names — the two differ. Map display→file via
 
 - **New workflows must be merged to `main` before `workflow_dispatch` by filename works** — a fresh
   file on a branch dispatches `404`. Merge the PR first.
+- **From a cloud session, dispatch through REST.** `gh workflow run` calls GraphQL, which the cloud
+  GitHub proxy blocks (`HTTP 403: GitHub GraphQL is not available`). Use
+  `gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/<file>/dispatches -f ref=main -f 'inputs[k]=v'`.
 - **All dispatch inputs must be strings.** `issue_number: "609"`, never `609` — a numeric value
   fails `422 Invalid value for input`.
 - **From the web sandbox:** MCP GitHub tools **can** dispatch `workflow_dispatch` workflows and

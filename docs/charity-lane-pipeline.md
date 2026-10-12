@@ -85,13 +85,8 @@ flowchart TD
    or ESCALATE, with reason codes. The checks are the machine-checkable part of the inventory §5
    set: organization Facebook and LinkedIn pages answer, the ToS and US attestations are ticked, the
    track matches the legal-status answer, the EIN is present (and a confirmed 501(c)(3) for pid 33),
-   and there is no duplicate client, org or domain. Every order is then screened with FraudLabs Pro
-   exactly as `228` does it, on 228's own `fraudlabspro-prod-read` environment and key, and the
-   result is fail-closed: only a FraudLabs `APPROVE` below score 80 leaves an ACCEPT standing.
-   `REJECT` or a high score is ESCALATE `FRAUD_FLAGGED`, `REVIEW` is ESCALATE `FRAUD_REVIEW`, and a
-   failed, missing or skipped lookup is ESCALATE `FRAUD_CHECK_FAILED`. The decision table is the
-   `finalize` job's summary and the `charity-lane-verdicts` artifact; the WHMCS job's own report is
-   unscreened (every row ESCALATE) and is transport only.
+   and there is no duplicate client, org or domain. Fraud screening is not wired yet
+   (`FRAUD_CHECK_NOT_RUN`).
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts
@@ -190,7 +185,6 @@ a policy change for Clarke. `.claude/settings.json` allows only the script's sub
 | ------------------------ | ---------------------------------------------------------------------- | ------- |
 | Design (this page)       | `docs/charity-lane-pipeline.md`                                        | #1617   |
 | Gate 1/2 verdicts        | `232-whmcs-charity-lane-verdicts.yml`                                  | #1620   |
-| Fraud screening in 232   | `232` `fraud_screen` + `finalize` jobs (G1.3b)                         | (build) |
 | Gate clearing            | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json` | #1621   |
 | Conductor brief          | `.claude/routines/onboarding-conductor.md`                             | #1622   |
 | Content delivery         | `707-website-content-apply.yml`; `205` templates                       | #1623   |

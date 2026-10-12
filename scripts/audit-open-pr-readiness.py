@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit open PRs for the two ways an all-green PR is not actually mergeable.
+"""Audit open PRs for the ways an all-green PR is not actually mergeable.
 
 Both were found the expensive way on 2026-08-04/05, one run apart, and both
 present as a PR that looks entirely healthy:
@@ -22,6 +22,16 @@ present as a PR that looks entirely healthy:
    promoted it. #1018's guard had last passed at 21:17:33Z; `main` took eight
    commits after that.
 
+3. **A stale pass with a *current* behind-count.** The guard has two
+   independent hard-fail causes, and only one of them is the behind-count. If
+   `main` changes a file matching the guard's `CRITICAL_PATH_RE` that the PR
+   does not touch, it exits 1 on `CRITICAL_PATHS_HIT` **at any behind-count**.
+   On 2026-10-10 (run 246) #1602 merged one `.github/workflows/` file, and all
+   14 open PRs -- every one of them 5 behind against a threshold of 5, so
+   passing the only cause this script used to model -- went red the moment they
+   were re-triggered. This script had cleared them. Modelling half of a guard
+   is the same falsely-clean report as modelling none of it.
+
 The general shape, which is why this is a script and not a checklist entry: a
 check over the branch's own **content** stays valid until the branch changes,
 but a check over the branch's **relationship to `main`** decays on its own. Only
@@ -42,6 +52,9 @@ and the candidates branch both hard-fail above it). All occurrences must agree;
 if they do not, or if none is found, that is an **incomplete** enumeration and
 the run exits non-zero. A guard whose threshold cannot be determined must never
 produce a clean report.
+
+`CRITICAL_PATH_RE` is read the same way and held to the same discipline: absent,
+ambiguous or uncompilable means INCOMPLETE, never clean.
 
 Usage
 -----
@@ -68,6 +81,11 @@ API = "https://api.github.com"
 OWNER = "FreeForCharity"
 REPO = "FFC-Cloudflare-Automation"
 GUARD_WORKFLOW = ".github/workflows/727-phantom-revert-guard.yml"
+
+# GitHub's compare API caps `files` at 300 entries. A truncated list makes
+# the critical-path set-difference quietly wrong in both directions, so it is
+# treated as "cannot say" rather than as a short answer.
+COMPARE_FILE_CAP = 300
 
 # The rollup states that mean "CI has nothing against this PR right now".
 # PENDING is deliberately excluded: a PR mid-run is not a stale green, it is an
@@ -116,6 +134,51 @@ def phantom_revert_threshold(workflow_text):
     return distinct[0]
 
 
+def critical_path_pattern(workflow_text):
+    """The critical-path regex `727` hard-fails on, parsed from its own YAML.
+
+    This is the guard's *other* hard-fail cause, and it is not a function of
+    the behind-count: a branch one commit behind fails just as hard as one
+    fifty behind if `main` touched a matching file the PR leaves alone. Parsed
+    rather than repeated here for the same reason as the threshold (#993) --
+    a copy would let this script and the guard disagree while both look right.
+    """
+    found = re.findall(r"CRITICAL_PATH_RE='([^']*)'", workflow_text)
+    if not found:
+        raise Incomplete(
+            "no `CRITICAL_PATH_RE='...'` assignment found in "
+            + GUARD_WORKFLOW
+            + " -- the guard's critical-path cause cannot be determined, so a "
+            "clean report would only mean this script stopped looking"
+        )
+    distinct = sorted(set(found))
+    if len(distinct) > 1:
+        raise Incomplete(
+            "%s states %d different critical-path patterns (%s); it is "
+            "ambiguous which one a given PR will be judged against"
+            % (GUARD_WORKFLOW, len(distinct), ", ".join(distinct))
+        )
+    try:
+        return re.compile(distinct[0])
+    except re.error as exc:
+        raise Incomplete(
+            "%s's CRITICAL_PATH_RE (%s) does not compile here: %s"
+            % (GUARD_WORKFLOW, distinct[0], exc)
+        )
+
+
+def critical_phantom_hits(base_touched, pr_touched, pattern):
+    """Files `main` changed that this PR does not touch, in a critical path.
+
+    Mirrors the guard's own two steps: the `comm -23` of base-touched against
+    PR-touched, then `grep -E` of the survivors against `CRITICAL_PATH_RE`.
+    `search`, not `match`, because `grep -E` matches anywhere and the pattern
+    carries its own `^`.
+    """
+    untouched = set(base_touched) - set(pr_touched)
+    return sorted(f for f in untouched if pattern.search(f))
+
+
 # --------------------------------------------------------------------------
 # Classification -- pure, so it can be tested without a network
 # --------------------------------------------------------------------------
@@ -125,8 +188,11 @@ def classify(prs, threshold):
     """Split open PRs into the two blocked sets plus everything else.
 
     `prs` is a list of dicts with keys: number, title, is_draft, rollup,
-    unresolved, behind. `behind` may be None, meaning the comparison could not
-    be read -- which is an `incomplete` finding, never a pass.
+    unresolved, behind, critical_hits. `behind` may be None, meaning the
+    comparison could not be read, and `critical_hits` may be None, meaning the
+    file lists behind the critical-path cause could not be read -- either is an
+    `incomplete` finding, never a pass. `critical_hits` is `[]` for "evaluated,
+    no hits"; the two are deliberately different values.
 
     Returns a dict of lists. `stale_green` and `unresolved_threads` are
     deliberately NOT mutually exclusive: a PR can be both, and suppressing one
@@ -142,25 +208,54 @@ def classify(prs, threshold):
         green = pr.get("rollup") in GREEN_ROLLUP
         flagged = False
 
+        hits = pr.get("critical_hits")
+
         if pr.get("behind") is None:
             out["incomplete"].append(
                 dict(pr, reason="branch comparison against main could not be read")
             )
             flagged = True
-        elif green and pr["behind"] > threshold:
-            out["stale_green"].append(
+        elif hits is None:
+            out["incomplete"].append(
                 dict(
                     pr,
                     reason=(
-                        "every check is green, but the branch is %d behind main "
-                        "against 727's hard threshold of %d -- the guard's pass "
-                        "was measured before main moved and will fail on the "
-                        "next run. Fix: PUT /pulls/%d/update-branch"
-                        % (pr["behind"], threshold, pr["number"])
+                        "the files main changed since this branch forked could "
+                        "not be read, so 727's critical-path cause could not be "
+                        "evaluated -- half a guard is not a pass"
                     ),
                 )
             )
             flagged = True
+        elif green:
+            # Both causes are reported on one row: a reviewer who fixes only the
+            # one named first would promote the PR straight back into red.
+            causes = []
+            if pr["behind"] > threshold:
+                causes.append(
+                    "the branch is %d behind main against 727's hard threshold "
+                    "of %d" % (pr["behind"], threshold)
+                )
+            if hits:
+                shown = ", ".join(hits[:3]) + (", ..." if len(hits) > 3 else "")
+                causes.append(
+                    "main changed %d critical-path file(s) this PR does not "
+                    "touch (%s), which 727 hard-fails on at any behind-count"
+                    % (len(hits), shown)
+                )
+            if causes:
+                out["stale_green"].append(
+                    dict(
+                        pr,
+                        reason=(
+                            "every check is green, but %s -- the guard's pass "
+                            "was measured before main moved and will fail on "
+                            "the next run. Fix: PUT /pulls/%d/update-branch"
+                            % ("; and ".join(causes), pr["number"])
+                        ),
+                    )
+                )
+                flagged = True
 
         if green and pr.get("unresolved", 0) > 0:
             out["unresolved_threads"].append(
@@ -327,10 +422,29 @@ def fetch_open_prs(token, owner=OWNER, repo=REPO, graphql=_graphql):
         cursor = page["endCursor"]
 
 
-def fetch_behind(pr, token, owner=OWNER, repo=REPO, request=_request):
-    """`behind_by` for one PR's head, or None if it could not be read.
+def _file_list(payload):
+    """Filenames from a compare payload, or None if the list is not complete.
 
-    None is a finding, not a pass -- see `classify`.
+    A truncated list is worse than no list: short on the PR side it invents
+    phantom candidates that are really touched, short on the base side it hides
+    real ones. Both read as a confident answer, so neither is returned.
+    """
+    files = payload.get("files")
+    if not isinstance(files, list):
+        return None
+    if len(files) >= COMPARE_FILE_CAP:
+        return None
+    names = [f.get("filename") for f in files if isinstance(f, dict)]
+    if len(names) != len(files) or any(not isinstance(n, str) for n in names):
+        return None
+    return names
+
+
+def fetch_relation(pr, token, owner=OWNER, repo=REPO, request=_request):
+    """What `main...head` says about one PR: behind, fork point, its files.
+
+    Every value may be None, meaning "could not be read". None is a finding,
+    not a pass -- see `classify`.
     """
     url = "%s/repos/%s/%s/compare/main...%s" % (
         API,
@@ -338,12 +452,49 @@ def fetch_behind(pr, token, owner=OWNER, repo=REPO, request=_request):
         repo,
         urllib.parse.quote(pr["head"], safe=""),
     )
+    blank = {"behind": None, "merge_base": None, "pr_files": None}
     try:
         payload = request(url, token)
     except (urllib.error.URLError, ValueError, KeyError):
+        return blank
+    if not isinstance(payload, dict):
+        return blank
+    behind = payload.get("behind_by")
+    base = payload.get("merge_base_commit")
+    sha = base.get("sha") if isinstance(base, dict) else None
+    return {
+        "behind": behind if isinstance(behind, int) else None,
+        "merge_base": sha if isinstance(sha, str) else None,
+        "pr_files": _file_list(payload),
+    }
+
+
+def fetch_base_touched(
+    merge_base, token, cache, owner=OWNER, repo=REPO, request=_request
+):
+    """Files `main` changed since `merge_base`, cached by fork point.
+
+    Open PRs overwhelmingly share a fork point, so this is one read per
+    distinct one rather than one per PR.
+    """
+    if not merge_base:
         return None
-    behind = payload.get("behind_by") if isinstance(payload, dict) else None
-    return behind if isinstance(behind, int) else None
+    if merge_base in cache:
+        return cache[merge_base]
+    url = "%s/repos/%s/%s/compare/%s...main" % (
+        API,
+        owner,
+        repo,
+        urllib.parse.quote(merge_base, safe=""),
+    )
+    try:
+        payload = request(url, token)
+    except (urllib.error.URLError, ValueError, KeyError):
+        cache[merge_base] = None
+        return None
+    out = _file_list(payload) if isinstance(payload, dict) else None
+    cache[merge_base] = out
+    return out
 
 
 def read_guard_workflow(repo_root):
@@ -415,7 +566,9 @@ def main(argv=None):
         return 1
 
     try:
-        threshold = phantom_revert_threshold(read_guard_workflow(args.repo_root))
+        guard_text = read_guard_workflow(args.repo_root)
+        threshold = phantom_revert_threshold(guard_text)
+        pattern = critical_path_pattern(guard_text)
         prs = fetch_open_prs(token)
     except Incomplete as exc:
         print("INCOMPLETE: %s" % exc, file=sys.stderr)
@@ -423,8 +576,22 @@ def main(argv=None):
 
     if args.label:
         prs = [p for p in prs if args.label in p["labels"]]
+    base_cache = {}
     for pr in prs:
-        pr["behind"] = fetch_behind(pr, token)
+        rel = fetch_relation(pr, token)
+        pr["behind"] = rel["behind"]
+        if rel["behind"] == 0:
+            # The guard exits clean before it ever builds a candidate list when
+            # the branch is already up to date, so there is nothing to evaluate.
+            pr["critical_hits"] = []
+            continue
+        base_touched = fetch_base_touched(rel["merge_base"], token, base_cache)
+        if base_touched is None or rel["pr_files"] is None:
+            pr["critical_hits"] = None
+        else:
+            pr["critical_hits"] = critical_phantom_hits(
+                base_touched, rel["pr_files"], pattern
+            )
 
     result = classify(prs, threshold)
     if args.json:

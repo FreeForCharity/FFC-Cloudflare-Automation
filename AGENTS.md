@@ -222,11 +222,11 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
 
       **The trap, and it cost run 259 a wrong conclusion in a public escalation:
       `requested_reviewers` is empty BOTH when the bot was never armed AND after it has delivered
-      its review.** Run 259 re-read that field 20 minutes after its own successful POST, saw `[]`,
-      and reported the re-request as a silent no-op — while the review was in fact ~20 seconds from
-      completing. The field does not model the question. **Confirm with the check run on the head
-      SHA instead**, which distinguishes all three states (`absent` = not armed,
-      `queued`/`in_progress` = wait, `completed` = read the review):
+      its review.** Run 259 re-read that field at **13:22:40Z**, about 9 minutes after its own
+      successful POST, saw `[]`, and reported the re-request as a silent no-op — while the review
+      was **21 seconds** from completing (13:23:01Z). The field does not model the question.
+      **Confirm with the check run on the head SHA instead**, which distinguishes all three states
+      (`absent` = not armed, `queued`/`in_progress` = wait, `completed` = read the review):
 
       ```bash
       gh api "repos/<o>/<r>/commits/<head-sha>/check-runs?per_page=100" \

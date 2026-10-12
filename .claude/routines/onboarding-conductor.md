@@ -80,7 +80,7 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - **No desired domain** (every pid 33 application): run a web search with the query 750 prints
      (IRS name, city and state from the EIN). If the charity has its own site, record the domain on
      the hub item and re-run 750 with it; that charity has an **existing live site**, so it follows
-     the ready-for-cutover path in step 6, never the brand-new-domain path. If nothing is found,
+     the ready-for-cutover path in step 7, never the brand-new-domain path. If nothing is found,
      send the `onboarding_need_info` ticket asking for the desired domain and label the item
      `lane:needs-info`.
    - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
@@ -90,7 +90,8 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
-   `dry_run=false` and the application fields the verdicts row and the work order provide. If step 3
+   `dry_run=false`, the org name, and the public footer fields from workflow `234` [site-content
+   fields] (`client_id`, `issue_number` = the hub item; public by design, allowlisted). If step 3
    found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports live, add
    `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL and DNS is
    never touched. Comment the result on the hub item.
@@ -102,8 +103,9 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      the repo exists (701 done);
    - build `content_json` (a JSON object of path to file text) and run
      `charity_lane_gate.py run --rule 707-content-apply --input target_repo=FFC-EX-<domain> --input content_json=<json> --input title="content: <org name>" --input issue_url=<hub item URL> --input dry_run=false`;
-   - comment the content PR link on the hub item. If 707 left the PR open (FFC-EX repos have no
-     auto-merge yet, epic item G3.3b), list it as `DECISION NEEDED: merge content PR <url>`.
+   - comment the content PR link on the hub item. 707 waits for the site's own CI and merges the PR
+     when every check passed (G3.3b); read its `land_result` from the log. `left_open: <reason>` is
+     a `DECISION NEEDED: content PR <url> left open (<reason>)`.
    - once the content PR has merged and the site answers HTTP 200 at
      `https://freeforcharity.github.io/FFC-EX-<domain>/`, set the label to `lane:validate` (remove
      `lane:built`). On a failure, comment the reason and set the label back to `lane:build-ready`
@@ -132,24 +134,22 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `DECISION NEEDED: relay the changes in WHMCS ticket <id>` until the change-text decision on
      #1618 is made. `UNCLEAR`, or `NO_REPLY` after 14 days: `DECISION NEEDED`.
 7. **Gate 4: domain** (one per run). For an item labelled `lane:gate3-done`:
-
-- **Domain order** (pid 39 / 41): run `225` (ungated) to verify the order's Pages URL, then post
-  `DECISION NEEDED: accept domain order <id> for <domain>`. Accepting spends money, so it is always
-  Clarke's.
-- **Brand-new domain** (the zone exists in FFC Cloudflare and nothing serves the apex yet): run
-  `python3 scripts/charity_lane_gate.py live-site <domain>` first. If it reports not live, run rule
-  `103-pages-apex` (`domain`, `github_pages_only=true`, `skip_m365=true`, `dry_run=false`), then
-  rule `120-cname-new-domain` (`domains=<domain>`, `skip_dns=true`, `dry_run=false`). Confirm
-  `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the previous lane
-  label).
-- **Existing live site** (step 3 found one, or the live-site check says live): stop at **ready for
-  cutover**. Run `121` (ungated preflight) for the domain. A site still on the default Pages URL
-  always shows one expected blocker, "Artifact apex-ready (no project-basePath refs)": the build
-  switches to the custom domain only when `120` flips the CNAME at cutover. So the charity is ready
-  for cutover when "Pages origin healthy" passes and that is the only blocker; post
-  `DECISION NEEDED: cutover <domain> (121 run <link>: origin healthy, only the expected basePath blocker; preview approved <date>)`.
-  Any other blocker is reported with the decision. Never run `103` or `120` for it.
-
+   - **Domain order** (pid 39 / 41): run `225` (ungated) to verify the order's Pages URL, then post
+     `DECISION NEEDED: accept domain order <id> for <domain>`. Accepting spends money, so it is
+     always Clarke's.
+   - **Brand-new domain** (the zone exists in FFC Cloudflare and nothing serves the apex yet): run
+     `python3 scripts/charity_lane_gate.py live-site <domain>` first. If it reports not live, run
+     rule `103-pages-apex` (`domain`, `github_pages_only=true`, `skip_m365=true`, `dry_run=false`),
+     then rule `120-cname-new-domain` (`domains=<domain>`, `skip_dns=true`, `dry_run=false`).
+     Confirm `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the
+     previous lane label).
+   - **Existing live site** (step 3 found one, or the live-site check says live): stop at **ready
+     for cutover**. Run `121` (ungated preflight) for the domain. A site still on the default Pages
+     URL always shows one expected blocker, "Artifact apex-ready (no project-basePath refs)": the
+     build switches to the custom domain only when `120` flips the CNAME at cutover. So the charity
+     is ready for cutover when "Pages origin healthy" passes and that is the only blocker; post
+     `DECISION NEEDED: cutover <domain> (121 run <link>: origin healthy, only the expected basePath blocker; preview approved <date>)`.
+     Any other blocker is reported with the decision. Never run `103` or `120` for it.
 8. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
 9. **Report.** Post one comment on #1608:
    - header `<!-- ffc-routine:conductor -->` and

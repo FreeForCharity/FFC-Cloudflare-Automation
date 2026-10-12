@@ -21,7 +21,11 @@ run-name:
 #   - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm;
 #   - `types/*.d.ts` copied from the template, only when the build fails without
 #     them (Next 16.3 type-checks the test files; the template's matcher types
-#     are what fixed that there).
+#     are what fixed that there);
+#   - in `package.json`, the template's `@jest/globals` devDependency, only when
+#     the build fails on TS2307 for it (allowlisted, scripts/fleet-overrides-sync.js add-dev);
+#   - an allowlisted test file (`TEMPLATE_TEST_FILES`) the site already has,
+#     replaced with the template's version, only when the build log names it.
 #
 # Two jobs, the 742 shape:
 #   - plan  — ungated, job token, read-only. Clones each repo anonymously, makes
@@ -272,7 +276,7 @@ jobs:
             if [ "$build" = pass ] && [ -n "$added_notes" ]; then build="pass (${added_notes} added)"; fi
             if [ "$build" = fail ]; then tail -40 build.log; fi
 
-            # This change owns three kinds of path. Anything else changed means
+            # This change owns four kinds of path. Anything else changed means
             # the edit went somewhere unintended.
             git -C site add -A
             unexpected="$(git -C site diff --cached --name-only \

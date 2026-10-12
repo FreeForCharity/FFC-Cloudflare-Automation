@@ -158,6 +158,34 @@ def classify_failure(output: str) -> tuple[str, str]:
     return ASSERTION, "no environmental signature recognised"
 
 
+def platform_tag() -> str:
+    """The host this suite ran on, tagged onto the two lines a reader quotes.
+
+    Exactly two lines carry the tag: the `::error::failure breakdown:` line
+    and the green `All N workflow-logic test modules passed.` line. The
+    canonical terminal `::error::workflow-logic tests failed:` line is left
+    untagged by design, for the ordering reason given below, and a test pins
+    it that way -- do not "fix" the asymmetry by tagging it too.
+
+    A pass/fail count from this suite is meaningless without its platform, and
+    neither summary line used to say which host produced it. On 2026-10-10 two
+    agents published figures for the SAME commit -- `a35e5a15` -- that read as a
+    flat contradiction: 2594 PASS / 196 FAIL / 28 failing modules from the
+    Conductor's Windows host, and 0 failed from a Linux runner. Both were
+    correct. Neither stated a platform, so a day went into reconciling numbers
+    that were never about the same thing, and the Linux figure was briefly taken
+    as evidence that the Windows one was a bad measurement.
+
+    The asymmetry is what makes this worth a tag rather than a convention:
+    `main` is green on `ubuntu-latest` and red here by ~28 modules for
+    documented host reasons (#1119), so "the suite fails" is a true sentence
+    about one host and a false one about the other. Appended rather than
+    inserted, because the canonical `::error::workflow-logic tests failed:` line
+    must stay last and several tests pin these lines by prefix.
+    """
+    return f"[platform={sys.platform}]"
+
+
 def summary_lines(failures: list[tuple[str, str, str]]) -> list[str]:
     """Render the classified breakdown that precedes the canonical summary line.
 
@@ -171,7 +199,7 @@ def summary_lines(failures: list[tuple[str, str, str]]) -> list[str]:
     assertions = [f for f in failures if f[1] == ASSERTION]
     lines = [
         f"::error::failure breakdown: {len(assertions)} assertion failure(s); "
-        f"{len(environmental)} environmental (see {ENVIRONMENTAL_ISSUE})"
+        f"{len(environmental)} environmental (see {ENVIRONMENTAL_ISSUE}) {platform_tag()}"
     ]
     # With an empty environmental bucket -- ubuntu, i.e. what CI runs -- the
     # canonical line below is already the assertion list, so itemising it again
@@ -479,7 +507,10 @@ def main(argv: list[str] | None = None) -> int:
         # asserts the module list follows it directly.
         print(f"::error::workflow-logic tests failed: {', '.join(failed)}")
         return 1
-    print(f"All {len(modules)} workflow-logic test modules passed.")
+    # The tag goes AFTER the full stop, so AGENTS.md's anchored grep for
+    # `^All [0-9]+ workflow-logic test modules passed\.` still matches and the
+    # existing substring assertions are untouched.
+    print(f"All {len(modules)} workflow-logic test modules passed. {platform_tag()}")
     return 0
 
 

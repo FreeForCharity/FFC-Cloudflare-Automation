@@ -19,6 +19,7 @@ Run: python3 tests/workflow-logic/test_751_security_overrides_sync.py
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -215,6 +216,66 @@ def test_only_the_apply_job_can_mint_an_oidc_token():
     assert "id-token" not in (wf.get("permissions") or {})
     assert "id-token" not in (wf["jobs"]["plan"].get("permissions") or {})
     assert wf["jobs"]["apply"]["permissions"]["id-token"] == "write"
+
+
+def _bash() -> str:
+    """Git Bash on Windows (a bare `bash` there can be WSL's), else `bash`.
+    Same resolver as test_749_org_invite_member.py."""
+    if sys.platform == "win32":
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            if pathlib.Path(candidate).exists():
+                return candidate
+    return "bash"
+
+
+def _shell_fn(run: str, name: str) -> str:
+    m = re.search(rf"^( *){name}\(\) \{{\n.*?^\1\}}\n", run, re.M | re.S)
+    assert m, f"{name}() not found"
+    return m.group(0)
+
+
+def _call(fn_src: str, call: str) -> tuple[str, str]:
+    """Run one helper from the workflow in bash; return (log, step summary).
+    jq is stubbed: these tests are about where the result line goes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = pathlib.Path(tmp) / "summary.md"
+        (pathlib.Path(tmp) / "out").mkdir()
+        script = f"jq() {{ echo '[]'; }}\n{fn_src}\n{call}\n"
+        proc = subprocess.run(
+            [_bash(), "-c", script],
+            capture_output=True, text=True, encoding="utf-8", cwd=tmp,
+            env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
+        )
+        assert proc.returncode == 0, proc.stderr
+        return proc.stdout, summary.read_text(encoding="utf-8")
+
+
+def test_plan_results_reach_the_log_not_only_the_summary():
+    """The conductor reads job logs; GitHub has no API for step summaries (#1644)."""
+    run = find_step(_wf(), "plan", "Plan each repo")["run"]
+    log, summary = _call(_shell_fn(run, "record"),
+                         "record FFC-EX-a.org - blocked - - 0 'drift guard matches neither template'")
+    assert "751-plan: FFC-EX-a.org blocked — drift guard matches neither template" in log
+    assert "| FFC-EX-a.org | - | blocked — drift guard matches neither template |" in summary
+
+
+def test_apply_results_reach_the_log_not_only_the_summary():
+    run = find_step(_wf(), "apply", "Open one PR")["run"]
+    log, summary = _call(_shell_fn(run, "row"),
+                         'row FFC-EX-a.org "🆕 PR opened" https://github.com/FreeForCharity/FFC-EX-a.org/pull/7')
+    assert "751-apply: FFC-EX-a.org 🆕 PR opened https://github.com/FreeForCharity/FFC-EX-a.org/pull/7" in log
+    assert "| FFC-EX-a.org | 🆕 PR opened | https://github.com/FreeForCharity/FFC-EX-a.org/pull/7 |" in summary
+
+
+def test_every_apply_result_goes_through_row():
+    """A result written straight to the summary would be invisible to the conductor."""
+    run = find_step(_wf(), "apply", "Open one PR")["run"]
+    body = run.replace(_shell_fn(run, "row"), "")
+    assert '| $name |' not in body
+    assert body.count('row "$name"') == 8
 
 
 def test_apply_fetches_an_existing_sync_branch_before_the_lease_push():

@@ -246,6 +246,28 @@ def test_live_site_subcommand_rejects_non_hostnames():
     assert gate.main(["live-site", "https://a.org"]) == 2
 
 
+def test_751_rule_syncs_exactly_one_ffc_ex_repo():
+    """The conductor acts per hub item, so one repo per dispatch; 751 itself
+    accepts up to ten, which is a human's batch, not the lane's (#1644)."""
+    ok = {"target_repos": "FFC-EX-hope-house.org", "dry_run": "false"}
+    assert not refused("751-overrides-sync", ok)
+    assert refused("751-overrides-sync", {"dry_run": "false"})
+    assert refused("751-overrides-sync", {**ok, "target_repos": "FFC-EX-a.org,FFC-EX-b.org"})
+    assert refused("751-overrides-sync", {**ok, "target_repos": "FFC-EX-a.org FFC-EX-b.org"})
+    assert refused("751-overrides-sync", {**ok, "target_repos": "FFC-IN-ffcadmin.org"})
+    assert refused("751-overrides-sync", {**ok, "target_repos": "FFC-Cloudflare-Automation"})
+    assert refused("751-overrides-sync", {**ok, "dry_run": "maybe"})
+    assert refused("751-overrides-sync", {**ok, "merge": "true"})
+
+
+def test_751_rule_clears_only_github_prod_without_a_live_site_check():
+    rule = gate.find_rule(POLICY, "751-overrides-sync")
+    assert rule["environments"] == ["github-prod"]
+    assert "live_site_check" not in rule
+    todo, _ = gate.decide(rule, [dep("github-prod"), dep("cloudflare-prod-write", env_id=2)], None)
+    assert [d["environment"]["name"] for d in todo] == ["github-prod"]
+
+
 def test_every_rule_matches_its_workflow_dispatch_inputs():
     """The policy is the closed set the conductor dispatches verbatim; an input the
     workflow does not define makes GitHub refuse the dispatch (HTTP 422), and an

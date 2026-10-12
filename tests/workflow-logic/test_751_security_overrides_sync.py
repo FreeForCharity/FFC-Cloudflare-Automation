@@ -340,6 +340,69 @@ def test_test_dependency_fallback_is_gated_on_the_exact_error():
     assert """printf '%s' "$extra" | jq -r '.[]' >> "out/patches/${name}.changes.txt\"""" in run
 
 
+def _test_file_fallback(log: str, site_has_file: bool = True, same: bool = False) -> tuple[str, str, str]:
+    """Run the plan step's template-test-file fallback in bash. corepack and jq
+    are stubbed: the build "passes" on retry, and jq echoes a marker, so this
+    tests which file is replaced and how the result is labelled."""
+    run = find_step(_wf(), "plan", "Plan each repo")["run"]
+    marker = run.index("# A site test older than the template's fix")
+    start = run.rindex("\n", 0, marker) + 1
+    end = run.index('build="pass (${added_notes} added)"; fi\n') + len('build="pass (${added_notes} added)"; fi\n')
+    block = run[start:end]
+    t = "__tests__/data/team.test.ts"
+    with tempfile.TemporaryDirectory() as d:
+        root = pathlib.Path(d)
+        (root / "templates/footer/tests/__tests__/data").mkdir(parents=True)
+        (root / "templates/footer/tests" / t).write_text("TEMPLATE\n", encoding="utf-8")
+        (root / "site/__tests__/data").mkdir(parents=True)
+        if site_has_file:
+            (root / "site" / t).write_text("TEMPLATE\n" if same else "OLD\n", encoding="utf-8")
+        (root / "build.log").write_text(log, encoding="utf-8")
+        script = (
+            "corepack() { return 0; }\njq() { echo '[\"replaced\"]'; }\n"
+            f"kind=footer\nbuild=fail\nadded_notes=''\nextra='[]'\nTEMPLATE_TEST_FILES='{t}'\n"
+            + block
+            + 'echo "BUILD=$build"\necho "EXTRA=$extra"\n'
+        )
+        proc = subprocess.run([_bash(), "-c", script], capture_output=True, text=True, encoding="utf-8", cwd=d)
+        assert proc.returncode == 0, proc.stderr
+        site = (root / "site" / t).read_text(encoding="utf-8") if site_has_file else ""
+        return proc.stdout, site, proc.stderr
+
+
+TEAM_TS_ERROR = "__tests__/data/team.test.ts(35,16): error TS2339: Property 'linkedinUrl' does not exist\n"
+
+
+def test_template_test_file_replaces_only_the_file_the_build_log_names():
+    out, site, _ = _test_file_fallback(TEAM_TS_ERROR)
+    assert site == "TEMPLATE\n"
+    assert "BUILD=pass (template test file added)" in out and 'EXTRA=["replaced"]' in out
+
+
+def test_template_test_file_is_left_alone_when_the_log_does_not_name_it():
+    out, site, _ = _test_file_fallback("src/app/page.tsx(1,1): error TS2307: something else\n")
+    assert site == "OLD\n" and "BUILD=fail" in out
+
+
+def test_template_test_file_is_never_added_to_a_site_that_lacks_it():
+    out, _, _ = _test_file_fallback(TEAM_TS_ERROR, site_has_file=False)
+    assert "BUILD=fail" in out
+
+
+def test_template_test_file_already_current_is_not_counted_as_a_fix():
+    out, site, _ = _test_file_fallback(TEAM_TS_ERROR, same=True)
+    assert site == "TEMPLATE\n" and "BUILD=fail" in out
+
+
+def test_every_template_test_file_is_in_both_path_guards():
+    wf = _wf()
+    files = wf["env"]["TEMPLATE_TEST_FILES"].split()
+    text = _wf_text()
+    for f in files:
+        escaped = f.replace(".", "\\.")
+        assert text.count(escaped) == 2, f"{f} must be allowed by the plan and apply guards"
+
+
 def test_pr_body_claims_template_types_only_when_types_were_added():
     run = find_step(_wf(), "apply", "Open one PR")["run"]
     assert 'if [[ "$build" == *types* ]]; then echo "- template' in run
@@ -361,7 +424,7 @@ def test_nothing_in_the_workflow_merges_or_approves():
 
 def test_only_the_owned_paths_are_allowed_in_both_jobs():
     text = _wf_text()
-    guard = r"'^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts)$'"
+    guard = r"'^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts|__tests__/data/team\.test\.ts)$'"
     assert text.count(guard) == 2, "plan and apply must both check the staged paths"
 
 

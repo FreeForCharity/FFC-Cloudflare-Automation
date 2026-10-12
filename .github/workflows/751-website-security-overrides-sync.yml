@@ -21,7 +21,11 @@ run-name:
 #   - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm;
 #   - `types/*.d.ts` copied from the template, only when the build fails without
 #     them (Next 16.3 type-checks the test files; the template's matcher types
-#     are what fixed that there).
+#     are what fixed that there);
+#   - in `package.json`, the template's `@jest/globals` devDependency, only when
+#     the build fails on TS2307 for it (allowlisted, scripts/fleet-overrides-sync.js add-dev);
+#   - an allowlisted test file (`TEMPLATE_TEST_FILES`) the site already has,
+#     replaced with the template's version, only when the build log names it.
 #
 # Two jobs, the 742 shape:
 #   - plan  — ungated, job token, read-only. Clones each repo anonymously, makes
@@ -60,6 +64,9 @@ concurrency:
 env:
   ORG: FreeForCharity
   BRANCH: fix/security-overrides-sync
+  # Template test files the build fallback may bring over (space-separated).
+  # Each must also be in the owned-paths guard below, in both jobs.
+  TEMPLATE_TEST_FILES: '__tests__/data/team.test.ts'
 
 jobs:
   plan:
@@ -135,6 +142,14 @@ jobs:
                   ;;
               esac
             done
+            for f in $TEMPLATE_TEST_FILES; do
+              mkdir -p "templates/${kind}/tests/$(dirname "$f")"
+              if ! gh api "repos/${repo}/contents/${f}" -H "Accept: application/vnd.github.raw" \
+                > "templates/${kind}/tests/${f}"; then
+                echo "::notice::${repo} has no readable ${f}; that test fallback is off for it"
+                rm -f "templates/${kind}/tests/${f}"
+              fi
+            done
           done
 
       - name: Plan each repo (change, install, audit, build)
@@ -205,7 +220,14 @@ jobs:
             audit=pass
             if ! (cd site && corepack pnpm audit --prod --audit-level high); then audit=fail; fi
 
+            # Next 16.3 type-checks tests during `next build`, so older sites fail
+            # on test typing the templates have since fixed. Each fallback below
+            # takes only the template's own file or version, and each is tried
+            # only when the build log shows the failure it fixes. Whatever was
+            # added is named in the build result and in the PR's change list.
             build=pass
+            added_notes=''
+            extra='[]'
             if ! (cd site && corepack pnpm run build > ../build.log 2>&1); then
               build=fail
               copied=0
@@ -217,29 +239,48 @@ jobs:
                   copied=1
                 fi
               done
-              if [ "$copied" -eq 1 ] && (cd site && corepack pnpm run build > ../build.log 2>&1); then
-                build='pass (template types added)'
+              if [ "$copied" -eq 1 ]; then
+                added_notes='template types'
+                if (cd site && corepack pnpm run build > ../build.log 2>&1); then build=pass; fi
               fi
             fi
             # A template test synced in without its devDependency (the first dry
             # run, #1640). Only this exact TS2307, and only allowlisted packages.
-            extra='[]'
             if [ "$build" = fail ] && grep -q "Cannot find module '@jest/globals'" build.log; then
               if added="$(node scripts/fleet-overrides-sync.js add-dev "templates/${kind}/package.json" site/package.json @jest/globals)" &&
                 (cd site && corepack pnpm install --no-frozen-lockfile > ../install.log 2>&1); then
                 extra="$(printf '%s' "$added" | jq -c '.changes')"
-                if (cd site && corepack pnpm run build > ../build.log 2>&1); then
-                  if [ "$copied" -eq 1 ]; then build='pass (template types and test dependency added)'; else build='pass (template test dependency added)'; fi
-                fi
+                added_notes="${added_notes:+$added_notes, }test dependency"
+                if (cd site && corepack pnpm run build > ../build.log 2>&1); then build=pass; fi
               fi
             fi
+            # A site test older than the template's fix for it (team.test.ts
+            # before the template typed its table, #1640). Only allowlisted
+            # files the site already has, and only one the build log names.
+            if [ "$build" = fail ]; then
+              replaced=0
+              for t in $TEMPLATE_TEST_FILES; do
+                src="templates/${kind}/tests/${t}"
+                if [ ! -f "$src" ] || [ ! -f "site/${t}" ]; then continue; fi
+                grep -qF "${t}(" build.log || continue
+                cmp -s "$src" "site/${t}" && continue
+                cp "$src" "site/${t}"
+                extra="$(jq -c --arg t "$t" '. + ["test file \($t): replaced with the template version (it failed to type-check)"]' <<< "$extra")"
+                replaced=1
+              done
+              if [ "$replaced" -eq 1 ]; then
+                added_notes="${added_notes:+$added_notes, }template test file"
+                if (cd site && corepack pnpm run build > ../build.log 2>&1); then build=pass; fi
+              fi
+            fi
+            if [ "$build" = pass ] && [ -n "$added_notes" ]; then build="pass (${added_notes} added)"; fi
             if [ "$build" = fail ]; then tail -40 build.log; fi
 
-            # This change owns three kinds of path. Anything else changed means
+            # This change owns four kinds of path. Anything else changed means
             # the edit went somewhere unintended.
             git -C site add -A
             unexpected="$(git -C site diff --cached --name-only \
-              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts)$' || true)"
+              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts|__tests__/data/team\.test\.ts)$' || true)"
             if [ -n "$unexpected" ]; then
               record "$name" "$kind" blocked "$audit" "$build" "$nchanges" "unexpected paths changed: $(echo "$unexpected" | tr '\n' ' ')"
               echo "::endgroup::"; continue
@@ -409,7 +450,7 @@ jobs:
               cd ..; echo "::endgroup::"; continue
             fi
             unexpected="$(git diff --cached --name-only \
-              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts)$' || true)"
+              | grep -vE '^(package\.json|pnpm-lock\.yaml|types/[A-Za-z0-9._-]+\.d\.ts|__tests__/data/team\.test\.ts)$' || true)"
             if [ -n "$unexpected" ]; then
               row "$name" "❌ unexpected paths in patch" "—"
               failures=$((failures + 1)); cd ..; echo "::endgroup::"; continue

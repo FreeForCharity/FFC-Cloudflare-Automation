@@ -151,6 +151,22 @@ marker orders from `224` need no gate.
 - **Domain already serving a live site:** the conductor stops at **ready for cutover**: `121`
   preflight READY, preview approved by the charity. The cutover itself (`120`) is Tier 2.
 
+## Queue labels
+
+Each charity has one hub issue, `[CHARITY-LANE] <domain or org>`, labelled `charity-lane` plus
+exactly one lane label. Every transition removes the previous lane label.
+
+| Label                 | Meaning                                                      | Set by    | Next                                         |
+| --------------------- | ------------------------------------------------------------ | --------- | -------------------------------------------- |
+| `lane:build-ready`    | Accepted; waiting for the Cloud Worker                       | conductor | `lane:building`                              |
+| `lane:building`       | A worker has claimed it (lease in a claim comment)           | worker    | `lane:built`, `lane:needs-info`              |
+| `lane:needs-info`     | The application is missing data; `onboarding_need_info` sent | worker    | `lane:build-ready` once the data changes     |
+| `lane:built`          | Content is on `claude/site-content/<domain>`                 | worker    | `lane:validate` after 707 delivers and lands |
+| `lane:validate`       | Preview is live; Gate 3 checks running                       | conductor | `lane:charity-review`, or back to build      |
+| `lane:charity-review` | `preview_ready` ticket sent; waiting for the charity         | conductor | `lane:gate3-done`, or back to build          |
+| `lane:gate3-done`     | The charity approved its preview                             | conductor | Gate 4                                       |
+| `lane:live`           | Brand-new domain serving the site on its apex                | conductor | (done)                                       |
+
 ## Gate clearing
 
 Clarke authorized the conductor (2026-10-11) to clear environment gates for these steps on the

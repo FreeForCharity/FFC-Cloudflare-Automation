@@ -456,3 +456,57 @@ Describe 'Get-ContentApplyAutoMergePlan' {
         $p.Reason | Should -Match 'no merge method'
     }
 }
+
+Describe 'Get-ContentApplyLandDecision' {
+    BeforeAll {
+        $script:Sha = 'abc123'
+        function New-Pull([string]$State = 'open', [bool]$Merged = $false, $Mergeable = $true, [string]$Head = 'abc123') {
+            [pscustomobject]@{ state = $State; merged = $Merged; mergeable = $Mergeable; mergeable_state = 'clean'; head = [pscustomobject]@{ sha = $Head } }
+        }
+        function New-Run([string]$Name, [string]$Status = 'completed', [string]$Conclusion = 'success') {
+            [pscustomobject]@{ name = $Name; status = $Status; conclusion = $Conclusion }
+        }
+    }
+
+    It 'merges when every check passed and the PR is open, mergeable and unchanged' {
+        $d = Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -CheckRuns @((New-Run 'build'), (New-Run 'lint' -Conclusion 'skipped'))
+        $d.Action | Should -Be 'merge'
+    }
+    It 'waits while no check has reported yet (never merges on zero evidence)' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha).Action | Should -Be 'wait'
+    }
+    It 'waits while a check is still running' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -CheckRuns @((New-Run 'build' -Status 'in_progress' -Conclusion $null))).Action | Should -Be 'wait'
+    }
+    It 'waits while a commit status is pending' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -Statuses @([pscustomobject]@{ context = 'ci'; state = 'pending' })).Action | Should -Be 'wait'
+    }
+    It 'waits while mergeability is not computed' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull -Mergeable $null) -ExpectedSha $Sha -CheckRuns @((New-Run 'build'))).Action | Should -Be 'wait'
+    }
+    It 'leaves the PR when a check failed' {
+        $d = Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -CheckRuns @((New-Run 'build' -Conclusion 'failure'), (New-Run 'lint'))
+        $d.Action | Should -Be 'leave'
+        $d.Reason | Should -Match 'build=failure'
+    }
+    It 'leaves the PR when a check timed out or was cancelled' {
+        foreach ($c in 'timed_out', 'cancelled', 'action_required') {
+            (Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -CheckRuns @((New-Run 'build' -Conclusion $c))).Action | Should -Be 'leave'
+        }
+    }
+    It 'leaves the PR when a commit status failed' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull) -ExpectedSha $Sha -Statuses @([pscustomobject]@{ context = 'ci'; state = 'error' })).Action | Should -Be 'leave'
+    }
+    It 'leaves the PR when its head moved after 707 pushed' {
+        $d = Get-ContentApplyLandDecision -Pull (New-Pull -Head 'def456') -ExpectedSha $Sha -CheckRuns @((New-Run 'build'))
+        $d.Action | Should -Be 'leave'
+        $d.Reason | Should -Match 'head moved'
+    }
+    It 'leaves a closed or already merged PR' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull -State 'closed') -ExpectedSha $Sha -CheckRuns @((New-Run 'build'))).Action | Should -Be 'leave'
+        (Get-ContentApplyLandDecision -Pull (New-Pull -Merged $true) -ExpectedSha $Sha -CheckRuns @((New-Run 'build'))).Action | Should -Be 'leave'
+    }
+    It 'leaves a PR GitHub reports as not mergeable' {
+        (Get-ContentApplyLandDecision -Pull (New-Pull -Mergeable $false) -ExpectedSha $Sha -CheckRuns @((New-Run 'build'))).Action | Should -Be 'leave'
+    }
+}

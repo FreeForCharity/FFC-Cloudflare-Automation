@@ -37,6 +37,17 @@ stdout. Log **break/fix remediation steps** as internal notes:
 Manual/ad-hoc use: **"205. WHMCS - Open Ticket"** (dry-run by default) and **"208. WHMCS - Export
 Tickets"**.
 
+**Opening a ticket from a template (205 `template` input).** Set `template` to a key in
+`config/whmcs-ticket-templates.json` and leave `subject` / `message` blank: the template supplies
+both, and `extra_message` is appended to its body. Only a client-visible template that carries a
+`subject` can open a ticket; the others are reply-only (use 207). Today that is **`preview_ready`**
+(charity-lane Gate 3, epic #1618): it tells the charity a preview of its new website is ready, asks
+them to check it on a phone and a computer, and to reply with changes or "approved". Its
+`extra_message` is required and carries the preview URL (the GitHub Pages default URL, e.g.
+`https://freeforcharity.github.io/FFC-EX-<domain>/`). The template is resolved before the WHMCS
+credential is minted, so a refused template costs no Key Vault read; the resolver is
+`scripts/whmcs-ticket-template.ps1`.
+
 ## Triage and templated responses (workflows 38/39)
 
 - **209. WHMCS - Tickets Triage** (`209-whmcs-tickets-triage.yml`) — **read-only**.
@@ -47,10 +58,10 @@ Tickets"**.
   writes — so the integration remains **one-way** (GitHub→WHMCS); replies are not synced back.
 - **207. WHMCS - Ticket Respond** (`207-whmcs-ticket-respond.yml`) — posts a templated reply or
   internal note to one ticket using `scripts/whmcs-ticket-reply.ps1`. Template bodies live in
-  `config/whmcs-ticket-templates.json` (`ack_new_request`, `ack_break_fix`, `need_info`,
-  `internal_note`); `internal: true` templates become staff-only `AddTicketNote`s. Dry-run by
-  default. A live (`dry_run=false`) client-visible reply is **human-gated** and requires a real
-  WHMCS admin username (`admin_username`).
+  `config/whmcs-ticket-templates.json` (its dispatch choice lists `ack_new_request`,
+  `ack_break_fix`, `need_info`, `internal_note`); `internal: true` templates become staff-only
+  `AddTicketNote`s. Dry-run by default. A live (`dry_run=false`) client-visible reply is
+  **human-gated** and requires a real WHMCS admin username (`admin_username`).
 
 ## Eligibility policy: US nonprofits only (international → TechSoup)
 

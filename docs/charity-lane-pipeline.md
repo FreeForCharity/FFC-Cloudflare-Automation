@@ -85,8 +85,13 @@ flowchart TD
    or ESCALATE, with reason codes. The checks are the machine-checkable part of the inventory §5
    set: organization Facebook and LinkedIn pages answer, the ToS and US attestations are ticked, the
    track matches the legal-status answer, the EIN is present (and a confirmed 501(c)(3) for pid 33),
-   and there is no duplicate client, org or domain. Fraud screening is not wired yet
-   (`FRAUD_CHECK_NOT_RUN`).
+   and there is no duplicate client, org or domain. Every order is then screened with FraudLabs Pro
+   exactly as `228` does it (228's `fraudlabspro-prod-read` environment and key), deciding on the
+   FraudLabs status alone: `APPROVE` passes, `REJECT` is ESCALATE `FRAUD_FLAGGED`, `REVIEW` is
+   ESCALATE `FRAUD_REVIEW`, and a failed or missing lookup is ESCALATE `FRAUD_CHECK_FAILED`. The
+   score is reported but never decisive: a high score on a $0 onboarding order is the documented
+   false-positive pattern (#813). The decision table is the `finalize` job's; the WHMCS job's own
+   report is unscreened and is transport only.
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts

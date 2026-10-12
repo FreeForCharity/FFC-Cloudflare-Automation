@@ -97,11 +97,20 @@ EXIT CODES
     1  not wired, the probe did not land both verdicts, or the workspace was
        inferred and could only certify itself (#1237)
     2  usage error (missing template, unreadable workspace)
+    3  permissions drifted -- the hooks ARE wired and the guard demonstrably
+       fires, but a grant the template expects has not reached the workspace.
+       Remedy: @clarkemoyer applies the missing grant; re-run to confirm.
 
-    Non-zero is deliberately the same for "no config", "config present but the
-    guard does not work" and "cannot tell". All three mean the same thing to the
-    run about to start: you are not known to be guarded. Distinguishing them is
-    the report's job, not the exit code's.
+    0, 1 and 2 keep their original contract: non-zero among them is deliberately
+    the same for "no config", "config present but the guard does not work" and
+    "cannot tell", because all three mean one thing to the run about to start --
+    you are not known to be guarded. Distinguishing those is the report's job,
+    not the exit code's.
+
+    3 is outside that group on purpose, and a caller testing `rc != 0` as
+    "unguarded" will misread it. The run IS guarded; what is missing is a grant
+    only Clarke can apply. Collapsing it into 1 would send the next run hunting a
+    hook defect that is not there.
 """
 
 from __future__ import annotations

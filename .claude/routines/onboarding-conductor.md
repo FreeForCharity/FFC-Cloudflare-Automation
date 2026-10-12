@@ -25,6 +25,12 @@ addresses anywhere in GitHub. Org name, domain, WHMCS order id and client id are
 - **Dispatch:** for ungated workflows, use
   `gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/<file>/dispatches -f ref=main -f 'inputs[k]=v'`.
   `gh workflow run` does not work in cloud sessions.
+- **REST only:** the session's GitHub proxy refuses GraphQL, and most `gh issue` / `gh pr`
+  subcommands use it (`gh issue edit`, `gh issue comment`, `gh pr view` all fail). Use `gh api`:
+  `gh api repos/<owner>/<repo>/issues/<n>/labels -f 'labels[]=<label>'` to add,
+  `gh api -X DELETE repos/<owner>/<repo>/issues/<n>/labels/<label>` to remove,
+  `gh api repos/<owner>/<repo>/issues/<n>/comments -F body=@<file>` to comment, and
+  `GET …/issues?labels=<a>,<b>&state=open` to list.
 - **Reading results:** GitHub has no API for job summaries, so never wait on one. Find the run
   (`GET …/actions/workflows/<file>/runs?event=workflow_dispatch&per_page=5`, newest created after
   your dispatch), its jobs (`GET …/actions/runs/<id>/jobs`), and read the job log

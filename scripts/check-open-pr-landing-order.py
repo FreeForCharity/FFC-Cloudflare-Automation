@@ -230,6 +230,33 @@ def fetch_pr_heads(worktree, prs):
         verify_fetched_head(number, sha, observed)
 
 
+def base_merge_failures(numbers, merges_into_base):
+    """Which PRs in the SET do not merge into `base` on their own.
+
+    Split out of `measure_conflicts` and driven by `numbers` rather than by
+    `itertools.combinations`, because combinations is **asymmetric** over its
+    input: it never places the last element in the first position. The base
+    check used to live on the `first` leg of each pair, so for
+    `[a, b, c]` it ran on `a` twice and `b` once and on `c` **never**.
+
+    The cost of that gap is not a missing warning, it is a *wrong answer*. A
+    last-element PR that conflicts with `base` fails on the `second` leg of
+    every pair it appears in, so it is recorded as a conflict edge against
+    every other member of the SET -- a base conflict reported as N-1 content
+    conflicts, which is exactly the misattribution this script exists to
+    prevent. `read_open_prs` does not filter on `mergeableState`, so such a PR
+    really does reach here.
+
+    Checking every member once up front is also cheaper than the old placement:
+    N base merges instead of one per pair.
+
+    `merges_into_base(number) -> bool` is the seam, so the ordering logic is
+    testable without git.
+    """
+    failures = [n for n in numbers if not merges_into_base(n)]
+    return failures
+
+
 def measure_conflicts(worktree, base, prs):
     """Real pairwise merges in `worktree`. Returns the conflict edge set.
 
@@ -241,15 +268,36 @@ def measure_conflicts(worktree, base, prs):
     process creates them.
     """
     fetch_pr_heads(worktree, prs)
+    numbers = [n for n, _ in prs]
+
+    def merges_into_base(number):
+        _run(["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False)
+        r = _run(["git", "merge", "--no-edit", pr_ref(number)], cwd=worktree, check=False)
+        if r.returncode != 0:
+            _run(["git", "merge", "--abort"], cwd=worktree, check=False)
+            return False
+        return True
+
+    unmergeable = base_merge_failures(numbers, merges_into_base)
+    if unmergeable:
+        listed = ", ".join(f"#{n}" for n in unmergeable)
+        raise RuntimeError(
+            f"{listed} do not merge into {base} on their own, so no pair involving "
+            f"them can be measured -- rebase first"
+        )
+
     edges = []
-    for a, b in itertools.combinations([n for n, _ in prs], 2):
+    for a, b in itertools.combinations(numbers, 2):
         _run(["git", "checkout", "-f", "--detach", base, "-q"], cwd=worktree, check=False)
         first = _run(["git", "merge", "--no-edit", pr_ref(a)], cwd=worktree, check=False)
         if first.returncode != 0:
+            # Unreachable after the up-front sweep unless a head moved under us,
+            # which verify_fetched_head is there to catch. Fail closed anyway
+            # rather than recording a base conflict as a content edge.
             _run(["git", "merge", "--abort"], cwd=worktree, check=False)
             raise RuntimeError(
-                f"#{a} does not merge into {base} on its own, so no pair involving it "
-                f"can be measured -- rebase it first"
+                f"#{a} merged into {base} during the base sweep but not during the "
+                f"pairwise sweep -- the base or a head moved mid-measurement"
             )
         second = _run(["git", "merge", "--no-edit", pr_ref(b)], cwd=worktree, check=False)
         if second.returncode != 0:

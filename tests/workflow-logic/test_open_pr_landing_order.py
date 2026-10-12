@@ -49,6 +49,7 @@ landing_plan = _mod.landing_plan
 parse_open_prs = _mod.parse_open_prs
 pr_ref = _mod.pr_ref
 verify_fetched_head = _mod.verify_fetched_head
+base_merge_failures = _mod.base_merge_failures
 
 # The run-243 queue, oldest first -- the order a Conductor would land them in.
 RUN_243_PRS = [1584, 1586, 1587, 1588, 1589]
@@ -266,6 +267,84 @@ def test_a_head_that_matches_the_recorded_sha_is_accepted():
     """The polarity check: the pin must not refuse the ordinary case, or the
     script trades always-exit-2 for always-exit-2 by another route."""
     verify_fetched_head(1584, "84d4ba8e", "84d4ba8e")
+
+
+def test_itertools_combinations_never_places_the_LAST_element_first():
+    """The defect's mechanism, pinned against the stdlib rather than described.
+
+    This is why a base check carried on the `first` leg of each pair cannot be
+    complete: for an N-member SET, the last member is never the first element of
+    any pair, so it is never the one merged into `base` alone."""
+    import itertools
+
+    prs = [1584, 1586, 1587, 1588, 1589]
+    firsts = {a for a, _ in itertools.combinations(prs, 2)}
+    assert prs[-1] not in firsts, (
+        "itertools.combinations placed the last element first -- the premise of "
+        "base_merge_failures no longer holds and the base check could go back on "
+        "the pair loop"
+    )
+    # And every other member IS covered, so the gap is exactly one PR: the newest.
+    assert firsts == set(prs[:-1]), f"unexpected first-position coverage: {firsts}"
+
+
+def test_the_base_check_covers_the_LAST_PR_in_the_SET():
+    """The fix. `read_open_prs` sorts oldest-first and does not filter on
+    `mergeableState`, so the newest open PR can genuinely conflict with `main`
+    and still reach the measurement. Before the up-front sweep this returned
+    nothing for that case and the pairwise loop recorded #1589 as conflicting
+    with all four others -- one base conflict reported as four content
+    conflicts."""
+    prs = [1584, 1586, 1587, 1588, 1589]
+    failures = base_merge_failures(prs, lambda n: n != 1589)
+    assert failures == [1589], (
+        "the last PR in the SET was not base-checked; a PR that conflicts with "
+        f"base is about to be reported as conflicting with every other member: {failures}"
+    )
+
+
+def test_the_base_check_covers_the_FIRST_PR_too():
+    """The old placement did catch this one, so it must keep catching it."""
+    prs = [1584, 1586, 1587]
+    assert base_merge_failures(prs, lambda n: n != 1584) == [1584]
+
+
+def test_the_base_check_reports_EVERY_unmergeable_PR_not_just_the_first():
+    """The old code raised on the first bad `first` leg, so a second bad PR was
+    invisible until someone rebased the first one and re-ran. One sweep names
+    them all, which is one rebase round instead of N."""
+    prs = [1584, 1586, 1587, 1588]
+    failures = base_merge_failures(prs, lambda n: n in (1586, 1588))
+    assert failures == [1584, 1587], f"expected both unmergeable PRs: {failures}"
+
+
+def test_a_SET_that_all_merges_into_base_reports_no_failures():
+    assert base_merge_failures([1584, 1586, 1587], lambda n: True) == []
+
+
+def test_the_base_check_preserves_the_callers_order():
+    """Reported in landing order so the message reads as a rebase worklist."""
+    prs = [1589, 1584, 1587]
+    assert base_merge_failures(prs, lambda n: False) == [1589, 1584, 1587]
+
+
+def test_measure_conflicts_runs_the_base_sweep_BEFORE_the_pair_loop():
+    """Source-level, because `measure_conflicts` itself shells out to git and is
+    not reachable on this host. The ordering is the whole correctness claim: a
+    base sweep placed after the pair loop would be dead code."""
+    import inspect
+
+    src = inspect.getsource(_mod.measure_conflicts)
+    assert "base_merge_failures" in src, (
+        "measure_conflicts no longer calls base_merge_failures; the base check is "
+        "back on the asymmetric pair loop"
+    )
+    sweep_at = src.index("base_merge_failures")
+    loop_at = src.index("itertools.combinations")
+    assert sweep_at < loop_at, (
+        "the base sweep runs after the pairwise loop, so every pair involving an "
+        "unmergeable PR is measured (and misattributed) before the sweep can raise"
+    )
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

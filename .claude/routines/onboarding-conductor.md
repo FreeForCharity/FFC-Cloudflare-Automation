@@ -72,8 +72,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      The Cloud Worker picks these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
-   `dry_run=false` and the application fields the verdicts row and the work order provide. Comment
-   the result on the hub item.
+   `dry_run=false` and the application fields the verdicts row and the work order provide. If step 3
+   found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports live, add
+   `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL and DNS is
+   never touched. Comment the result on the hub item.
 5. **Deliver and check worker output** [workflow 707; policy rule `707-content-apply`]. The Cloud
    Worker builds content per `.claude/routines/site-builder.md` and labels the item `lane:built`.
    For each `lane:built` item (one per run):

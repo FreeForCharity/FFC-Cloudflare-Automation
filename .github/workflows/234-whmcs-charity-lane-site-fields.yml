@@ -1,0 +1,135 @@
+name: '234. WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS]'
+run-name: 'WHMCS Charity-Lane Site Fields: client ${{ inputs.client_id }}'
+
+# Read-only. Step G3.3c of the charity-lane pipeline (docs/charity-lane-pipeline.md,
+# epic #1618). Emits ONE charity's public website fields for the Cloud Worker that
+# builds its site (.claude/routines/site-builder.md): the footer email / phone /
+# city & state, mission, tagline, descriptions, programs, brand color, logo, social,
+# donation and volunteer URLs, founding year, alternate names, EIN, Candid URL and
+# template choice. The applicant gave these FOR PUBLICATION on the website, so they
+# are printed in full; 219 masks contact data and is the wrong source for them.
+#
+# The allowlist is config/charity-lane-site-fields.json: only its fields can appear,
+# each cleaned (HTML, control characters) and validated by type. Never emitted: the
+# mailing address, the client record's own name / email / phone, board / officer /
+# team / contact fields, or anything else not listed. A value that fails validation
+# is reported by reason code only, never printed. Source per field: the Custom Client
+# Field, then the matching product answer on the client's pid 16/33/40 services.
+#
+# Output: charity-lane-site-fields.json artifact, the same JSON in the job log and
+# job summary, and the list of missing fields (the worker marks them `pending`);
+# optionally a comment on `issue_number` carrying `<!-- charity-lane:site-fields -->`.
+#
+# Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/232:
+# `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. WHMCS
+# actions: GetClientsDetails and GetClientsProducts only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_id:
+        description: 'WHMCS client id (digits) - from the [CHARITY-LANE] hub item'
+        required: true
+        type: string
+      issue_number:
+        description: 'Optional: issue number (digits) to comment the fields back to'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+concurrency:
+  group: 234-whmcs-charity-lane-site-fields-${{ inputs.client_id }}
+  cancel-in-progress: false
+
+jobs:
+  charity_lane_site_fields:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Fail on a malformed input BEFORE the credential is fetched.
+      - name: Validate inputs
+        shell: pwsh
+        env:
+          CLIENT_ID: ${{ inputs.client_id }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CLIENT_ID) -or $env:CLIENT_ID -notmatch '^[1-9][0-9]{0,9}$') {
+            Write-Output "::error::client_id must be digits (got '$($env:CLIENT_ID)')."
+            exit 1
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER) -and $env:ISSUE_NUMBER -notmatch '^[1-9][0-9]{0,9}$') {
+            Write-Output "::error::issue_number must be digits (got '$($env:ISSUE_NUMBER)')."
+            exit 1
+          }
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer.
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Emit public site fields (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          GH_TOKEN: ${{ github.token }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Re-checked here: this step must be safe on its own, not only after the
+          # validation step above.
+          if ([string]::IsNullOrWhiteSpace($env:CLIENT_ID) -or $env:CLIENT_ID -notmatch '^[1-9][0-9]{0,9}$') {
+            Write-Output "::error::client_id must be digits (got '$($env:CLIENT_ID)')."
+            exit 1
+          }
+          $clientId = $env:CLIENT_ID
+          $issue = ''
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            if ($env:ISSUE_NUMBER -notmatch '^[1-9][0-9]{0,9}$') {
+              Write-Output "::error::issue_number must be digits (got '$($env:ISSUE_NUMBER)')."
+              exit 1
+            }
+            $issue = $env:ISSUE_NUMBER
+          }
+
+          $json = 'artifacts/whmcs/charity-lane-site-fields.json'
+          $md = 'artifacts/whmcs/charity-lane-site-fields.md'
+          $runUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)"
+          # In-process call (`&`, not `pwsh -File`): PowerShell's own binder, so an
+          # empty value can never shift the arguments (ledger L214).
+          & .\scripts\whmcs-charity-lane-site-fields.ps1 -ClientId $clientId -ApiUrl $env:WHMCS_API_URL -OutputFile $json -MarkdownFile $md -RunUrl $runUrl
+          if ($LASTEXITCODE -ne 0) { throw "Site-fields read failed (exit $LASTEXITCODE)." }
+
+          # Public by design (the applicant gave these for the website), so the
+          # allowlisted JSON goes to the job log too: a result that lives only in
+          # the summary and artifact is unreadable to a caller working from logs.
+          Write-Host "## Charity-lane site fields - client $clientId"
+          Write-Host ((Get-Content -Raw -LiteralPath $json).TrimEnd())
+          if ($env:GITHUB_STEP_SUMMARY) {
+            Get-Content -Raw -LiteralPath $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+          if ($issue) {
+            gh issue comment $issue --repo $env:GITHUB_REPOSITORY --body-file $md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $issue (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload site-fields artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-site-fields
+          path: artifacts/whmcs/charity-lane-site-fields.json
+          if-no-files-found: warn

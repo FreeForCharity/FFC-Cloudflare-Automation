@@ -132,7 +132,9 @@ def test_plan_states_what_the_rewrite_does_and_does_not_do():
     proc, summary = run_preflight({})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     lowered = summary.lower()
-    # In-place PUT, preserving name/TTL/proxy: bounds the blast radius.
+    # In-place PATCH, preserving name/TTL/proxy: bounds the blast radius. (Said "PUT"
+    # until review caught it — the sibling verb test below asserts PATCH and asserts
+    # "PUT" is absent from the summary, so this comment contradicted its own module.)
     assert "updated in place" in lowered, summary
     assert "never creates or deletes a record" in lowered, summary
     assert "never touches a non-a record" in lowered, summary

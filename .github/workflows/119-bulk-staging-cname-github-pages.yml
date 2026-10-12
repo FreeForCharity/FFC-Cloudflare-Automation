@@ -101,10 +101,23 @@ jobs:
             exit 1
           fi
 
-          # `target` blank is the common path and the gated job must keep resolving it:
-          # the callee resolves the canonical FFC Pages host itself (Get-GhPagesWwwTarget,
-          # #778), so spelling a default here would be a second copy free to drift — the
-          # drift the gated step's own comment warns about. Describe it instead.
+          # A blank `target` is the UNCOMMON path, not the common one: the input declares
+          # `default: 'freeforcharity.github.io'` (`:17`), so an ordinary dispatch arrives
+          # non-blank and the plan prints that value verbatim. The blank branch fires only
+          # when the dispatcher clears the field by hand.
+          #
+          # It still has to be handled, and still must not guess: the gated job omits the
+          # parameter when blank and lets the callee resolve the canonical FFC Pages host
+          # (`Get-GhPagesWwwTarget`, #778), so spelling that host out HERE would add yet
+          # another copy of it, free to drift from the callee — the drift the gated step's
+          # own `Target`-is-omitted comment warns about, further down this file. Describe
+          # who resolves it instead. (Named, not cited by line: a line number here would
+          # drift the moment anything above it moves, which is exactly what happened to
+          # the first draft of this comment.)
+          #
+          # (The input's `default:` above is already a hard-coded copy of that host. It is
+          # pre-existing and out of scope here, but it is why the plan's usual rendering is
+          # the explicit-target line rather than the resolved-by-the-callee one.)
           target="${IN_TARGET:-}"
           if [ -z "${target// /}" ]; then
             target_line="resolved by the gated job itself (\`Get-GhPagesWwwTarget\`, #778) — \`target\` was left blank, and this preflight deliberately does not guess it"

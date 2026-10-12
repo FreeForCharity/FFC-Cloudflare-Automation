@@ -82,8 +82,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      send the `onboarding_need_info` ticket asking for the desired domain and label the item
      `lane:needs-info`.
    - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
-     `charity-lane` and `lane:build-ready`, linking the work order, the order ids and the 750 run.
-     The Cloud Worker picks these up. Never build content yourself.
+     `charity-lane` and `lane:build-ready`, carrying the WHMCS client id, the order ids and the 750
+     run. Queue right after the accept: you cannot read ffcadmin (this routine is attached to the
+     hub only), so the Cloud Worker, which is, finds the ffcadmin work order. The Cloud Worker picks
+     these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
    `dry_run=false` and the application fields the verdicts row and the work order provide. If step 3
@@ -108,18 +110,22 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    Items labelled `lane:needs-info` get the `onboarding_need_info` ticket (step 2). After the
    charity's data changes, set the label back to `lane:build-ready` (remove `lane:needs-info`).
 
-5b. **Validate and hand to the charity** (items labelled `lane:validate`, one per run). - Check the
-preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP 200 and carries
-the FFC footer (org name, EIN for a 501(c)(3), the freeforcharity.org link). Record the preview URL
-as the work order's `Live site:` value in your report; the full Gate 3 checklist lives on the
-ffcadmin work order and its `Gate 3 Auto-Validation` workflow. - All machine checks pass: run rule
-`205-templated` with `template=preview_ready`, the `client_id`, and the preview URL as
-`extra_message`; label the item `lane:charity-review` (remove `lane:validate`). A failure goes back
-to `lane:build-ready` with the reason. - For items in `lane:charity-review`: read the charity's
-ticket replies through `209` (ungated). Requested changes: comment them on the hub item and set it
-back to `lane:build-ready`. A clear approval: label `lane:gate3-done` (remove
-`lane:charity-review`); the charity may now order its domain. Anything unclear is a
-`DECISION NEEDED`. 6. **Gate 4: domain** (one per run). For an item labelled `lane:gate3-done`:
+6. **Validate and hand to the charity** (items labelled `lane:validate`, one per run).
+   - Check the preview yourself: `https://freeforcharity.github.io/FFC-EX-<domain>/` answers HTTP
+     200 and carries the FFC footer (org name, EIN for a 501(c)(3), the freeforcharity.org link).
+     Put the preview URL in your report; the full Gate 3 checklist lives on the ffcadmin work order
+     and its `Gate 3 Auto-Validation` workflow.
+   - All machine checks pass: run rule `205-templated` with `template=preview_ready`, the
+     `client_id`, and the preview URL as `extra_message`; set the label to `lane:charity-review`
+     (remove `lane:validate`). A failure sets it back to `lane:build-ready` (remove `lane:validate`)
+     with the reason.
+   - Items in `lane:charity-review`: classify the charity's reply with workflow `233` [ticket-reply
+     classifier] (`client_id`, `subject_prefix=[Website Preview]`, `issue_number` = the hub item).
+     `APPROVED`: set `lane:gate3-done` (remove `lane:charity-review`); the charity may now order its
+     domain. `CHANGES`: set `lane:build-ready` (remove `lane:charity-review`) and post
+     `DECISION NEEDED: relay the changes in WHMCS ticket <id>` until the change-text decision on
+     #1618 is made. `UNCLEAR`, or `NO_REPLY` after 14 days: `DECISION NEEDED`.
+7. **Gate 4: domain** (one per run). For an item labelled `lane:gate3-done`:
 
 - **Domain order** (pid 39 / 41): run `225` (ungated) to verify the order's Pages URL, then post
   `DECISION NEEDED: accept domain order <id> for <domain>`. Accepting spends money, so it is always
@@ -135,13 +141,13 @@ back to `lane:build-ready`. A clear approval: label `lane:gate3-done` (remove
   `DECISION NEEDED: cutover <domain> (121 READY, preview approved <date>)`. Never run `103` or `120`
   for it.
 
-7. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
-8. **Report.** Post one comment on #1608:
+8. **Gates waiting that you did not dispatch:** list them on the ledger. Do nothing to them.
+9. **Report.** Post one comment on #1608:
    - header `<!-- ffc-routine:conductor -->` and
      `**Onboarding Conductor - <UTC date> - PASS | FAIL | NOOP**`;
    - session URL, start and finish times;
    - one line per pipeline step above (done, skipped and why, refused);
    - numbered `DECISION NEEDED:` lines, then any `LESSON:` lines.
-9. **Tracker.** Update the rows you exercised in the epic #1618 tracker, between its
-   `charity-lane-tracker` markers: status and evidence link. Change nothing else in that issue.
-10. **Release.** Set `lease` to null and `last_run` in the state block, re-read to confirm, end.
+10. **Tracker.** Update the rows you exercised in the epic #1618 tracker, between its
+    `charity-lane-tracker` markers: status and evidence link. Change nothing else in that issue.
+11. **Release.** Set `lease` to null and `last_run` in the state block, re-read to confirm, end.

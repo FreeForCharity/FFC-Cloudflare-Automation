@@ -23,8 +23,11 @@ the charity's public contact.
 
 ## 2. Gather
 
-- The hub item gives the domain, the WHMCS client id and order ids, and the ffcadmin work-order
-  link.
+- The hub item gives the WHMCS client id, the order ids and (when known) the domain. Find the
+  ffcadmin work order yourself: the open `kind:intake` issue in FFC-IN-ffcadmin.org whose
+  `ffc-application-id` marker is `ffc-<client id>`, and link it on the hub item. If it does not
+  exist yet (ffcadmin's WHMCS Intake sync runs daily at 08:00 UTC), release your claim, set the
+  label back to `lane:build-ready` (remove `lane:building`), and stop this brief.
 - The work order carries the **generated site.config partial** (ffcadmin's footer bridge) or its gap
   list, plus the structured intake fields. Prefer it over anything else. A gap list means the
   application is incomplete: comment the gaps on the hub item, relabel it `lane:needs-info` (remove

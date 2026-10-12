@@ -112,7 +112,7 @@ def _inputs() -> dict:
 
 
 def _run(**env_overrides: str):
-    """Run the shipped body in a temp cwd holding the stub. Returns (output, gh_log, rc)."""
+    """Run the shipped body in a temp cwd holding the stub. Returns (output, gh_log, rc, tmp_dir)."""
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         (tmp / "scripts").mkdir()

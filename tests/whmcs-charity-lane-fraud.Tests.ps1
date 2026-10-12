@@ -164,7 +164,7 @@ Describe 'whmcs-charity-lane-fraud-merge.ps1 end to end' {
         }
         $script:UnscreenedJson = [ordered]@{
             schema = 'charity-lane-verdicts/v2'; generated_at = '2026-10-11T00:00:00Z'; run_url = 'https://example.invalid/run/1'
-            read_only = $true; fraud_check = 'not_run'; fraud_check_note = ''; fraud_score_flag_at = 80
+            read_only = $true; fraud_check = 'not_run'; fraud_check_note = ''
             counts   = [ordered]@{ ACCEPT = 0; NEED_INFO = 0; ESCALATE = 4 }
             verdicts = @(
                 (& $row 9001 @()),

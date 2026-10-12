@@ -566,15 +566,13 @@ Describe 'Get-LaneFraudOutcome (fail closed)' {
     It '<Name> -> <Check> / <Code>' -ForEach @(
         @{ Name = 'APPROVE, low score'; Ok = $true; Status = 'APPROVE'; Score = '12'; Check = 'pass'; Code = $null }
         @{ Name = 'approve, lower case, decimal score'; Ok = $true; Status = ' approve '; Score = '79.4'; Check = 'pass'; Code = $null }
-        @{ Name = 'APPROVE at the flag score'; Ok = $true; Status = 'APPROVE'; Score = '80'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
-        @{ Name = 'APPROVE, high score'; Ok = $true; Status = 'APPROVE'; Score = '97'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
+        @{ Name = 'APPROVE, high score (the $0-order false-positive pattern, #813)'; Ok = $true; Status = 'APPROVE'; Score = '97'; Check = 'pass'; Code = $null }
         @{ Name = 'REJECT, low score'; Ok = $true; Status = 'REJECT'; Score = '5'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
         @{ Name = 'REJECT, no score'; Ok = $true; Status = 'REJECT'; Score = ''; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
         @{ Name = 'REVIEW, low score'; Ok = $true; Status = 'REVIEW'; Score = '40'; Check = 'review'; Code = 'FRAUD_REVIEW' }
-        @{ Name = 'REVIEW, high score'; Ok = $true; Status = 'REVIEW'; Score = '90'; Check = 'flagged'; Code = 'FRAUD_FLAGGED' }
-        @{ Name = 'APPROVE without a score'; Ok = $true; Status = 'APPROVE'; Score = ''; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
-        @{ Name = 'APPROVE with a junk score'; Ok = $true; Status = 'APPROVE'; Score = 'n/a'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
-        @{ Name = 'APPROVE with an out-of-range score'; Ok = $true; Status = 'APPROVE'; Score = '150'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
+        @{ Name = 'REVIEW, high score'; Ok = $true; Status = 'REVIEW'; Score = '90'; Check = 'review'; Code = 'FRAUD_REVIEW' }
+        @{ Name = 'APPROVE without a score'; Ok = $true; Status = 'APPROVE'; Score = ''; Check = 'pass'; Code = $null }
+        @{ Name = 'APPROVE with a junk score'; Ok = $true; Status = 'APPROVE'; Score = 'n/a'; Check = 'pass'; Code = $null }
         @{ Name = 'no stored verdict'; Ok = $true; Status = ''; Score = ''; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
         @{ Name = 'an unknown status'; Ok = $true; Status = 'PENDING'; Score = '10'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
         @{ Name = 'a failed lookup that still carries APPROVE'; Ok = $false; Status = 'APPROVE'; Score = '1'; Check = 'failed'; Code = 'FRAUD_CHECK_FAILED' }
@@ -604,9 +602,10 @@ Describe 'Get-LaneFraudOutcome (fail closed)' {
         (Get-LaneFraudOutcome -Result (New-FraudResult -Score '')).Score | Should -BeNullOrEmpty
     }
 
-    It 'honours a different flag threshold' {
-        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '60') -FlagScoreAt 60).Check | Should -Be 'flagged'
-        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '59') -FlagScoreAt 60).Check | Should -Be 'pass'
+    It 'decides on status alone, as 228 does: the score never flags' {
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Status 'APPROVE' -Score '100')).Check | Should -Be 'pass'
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Status 'REJECT' -Score '1')).Check | Should -Be 'flagged'
+        (Get-LaneFraudOutcome -Result (New-FraudResult -Score '150')).Score | Should -BeNullOrEmpty
     }
 }
 
@@ -637,7 +636,6 @@ Describe 'Merge-LaneFraudOutcome' {
 
     It 'turns ACCEPT into ESCALATE <Code> on <Status> (score <Score>)' -ForEach @(
         @{ Status = 'REJECT'; Score = '20'; Code = 'FRAUD_FLAGGED'; Check = 'flagged' }
-        @{ Status = 'APPROVE'; Score = '85'; Code = 'FRAUD_FLAGGED'; Check = 'flagged' }
         @{ Status = 'REVIEW'; Score = '50'; Code = 'FRAUD_REVIEW'; Check = 'review' }
         @{ Status = ''; Score = ''; Code = 'FRAUD_CHECK_FAILED'; Check = 'failed' }
     ) {

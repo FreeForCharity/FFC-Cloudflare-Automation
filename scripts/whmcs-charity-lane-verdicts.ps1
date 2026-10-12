@@ -48,8 +48,8 @@
     order up exactly as 228 does (scripts/whmcs-charity-lane-fraud-screen.ps1)
     and its `finalize` job applies the results (Merge-LaneFraudOutcome, through
     scripts/whmcs-charity-lane-fraud-merge.ps1). The FraudLabs result is the
-    only thing that can lift FRAUD_CHECK_NOT_RUN: APPROVE below the flag score
-    -> fraud_check `pass`; REJECT or a high score -> FRAUD_FLAGGED; REVIEW ->
+    only thing that can lift FRAUD_CHECK_NOT_RUN: APPROVE -> fraud_check
+    `pass`; REJECT -> FRAUD_FLAGGED; REVIEW ->
     FRAUD_REVIEW; anything else, including a failed or missing lookup ->
     FRAUD_CHECK_FAILED. All three are ESCALATE (fail closed).
 
@@ -198,7 +198,7 @@ $script:LaneReasonCodes = [ordered]@{
     # nothing is ACCEPTed without fraud_check = pass.
     FRAUD_CHECK_NOT_RUN           = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro screening has not been applied to this row (the unscreened report the WHMCS job writes). Never ACCEPT without it.' }
     FRAUD_CHECK_FAILED            = @{ severity = 'ESCALATE'; description = 'The FraudLabs Pro lookup failed or gave no usable verdict (request error, FraudLabs error code, no stored result, unknown status, or an APPROVE without a score). Fail closed.' }
-    FRAUD_FLAGGED                 = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REJECT, or a FraudLabs score at or above the flag threshold (80).' }
+    FRAUD_FLAGGED                 = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REJECT.' }
     FRAUD_REVIEW                  = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REVIEW.' }
 }
 
@@ -206,9 +206,10 @@ $script:LaneReasonCodes = [ordered]@{
 # carries, so applying an outcome is idempotent.
 $script:LaneFraudCodes = @('FRAUD_CHECK_NOT_RUN', 'FRAUD_CHECK_FAILED', 'FRAUD_FLAGGED', 'FRAUD_REVIEW')
 
-# FraudLabs scores run 1-100 (100 = highest risk). An APPROVE at or above this
-# score is still FRAUD_FLAGGED.
-$script:LaneFraudScoreFlagAt = 80
+# The verdict follows FraudLabs' STATUS only, as 228 does
+# (docs/fraudlabspro-api.md): every lane order is a $0 onboarding order, and a
+# high score on one is almost always a false positive (free email + residential
+# IP + brand-new domain; #813). The score is reported, never decisive.
 
 $script:LaneFieldPatterns = @{
     # Org social PAGE fields. The 'page' suffix mirrors ffcadmin's
@@ -673,14 +674,13 @@ function Get-LaneFraudOutcome {
         (scripts/whmcs-charity-lane-fraud-screen.ps1):
           order_id, lookup_ok, fraudlabs_status, fraudlabs_score, error
 
-        Fail closed: only a successful lookup whose status is APPROVE and whose
-        score parses below the flag threshold is a pass. In order:
+        Fail closed: only a successful lookup whose status is APPROVE is a pass;
+        the score is informational (see the note at $script:LaneFraudCodes). In order:
           -NotRun                         -> not_run  FRAUD_CHECK_NOT_RUN
           no result / lookup_ok not true  -> failed   FRAUD_CHECK_FAILED
           REJECT                          -> flagged  FRAUD_FLAGGED
-          score >= FlagScoreAt            -> flagged  FRAUD_FLAGGED
           REVIEW                          -> review   FRAUD_REVIEW
-          APPROVE with a score            -> pass     (no code)
+          APPROVE                         -> pass     (no code)
           anything else                   -> failed   FRAUD_CHECK_FAILED
         Returns @{ Check; Code; Score } (Code $null on pass, Score $null when
         the score did not parse).
@@ -689,8 +689,7 @@ function Get-LaneFraudOutcome {
     [CmdletBinding(DefaultParameterSetName = 'Result')]
     param(
         [Parameter(ParameterSetName = 'Result')]$Result,
-        [Parameter(ParameterSetName = 'NotRun', Mandatory = $true)][switch]$NotRun,
-        [Parameter(ParameterSetName = 'Result')][int]$FlagScoreAt = $script:LaneFraudScoreFlagAt
+        [Parameter(ParameterSetName = 'NotRun', Mandatory = $true)][switch]$NotRun
     )
     if ($NotRun) { return [pscustomobject]@{ Check = 'not_run'; Code = 'FRAUD_CHECK_NOT_RUN'; Score = $null } }
     $failed = [pscustomobject]@{ Check = 'failed'; Code = 'FRAUD_CHECK_FAILED'; Score = $null }
@@ -710,9 +709,8 @@ function Get-LaneFraudOutcome {
     }
 
     if ($status -eq 'REJECT') { return [pscustomobject]@{ Check = 'flagged'; Code = 'FRAUD_FLAGGED'; Score = $score } }
-    if ($null -ne $score -and $score -ge $FlagScoreAt) { return [pscustomobject]@{ Check = 'flagged'; Code = 'FRAUD_FLAGGED'; Score = $score } }
     if ($status -eq 'REVIEW') { return [pscustomobject]@{ Check = 'review'; Code = 'FRAUD_REVIEW'; Score = $score } }
-    if ($status -eq 'APPROVE' -and $null -ne $score) { return [pscustomobject]@{ Check = 'pass'; Code = $null; Score = $score } }
+    if ($status -eq 'APPROVE') { return [pscustomobject]@{ Check = 'pass'; Code = $null; Score = $score } }
     return [pscustomobject]@{ Check = 'failed'; Code = 'FRAUD_CHECK_FAILED'; Score = $score }
 }
 
@@ -768,8 +766,7 @@ function Merge-LaneFraudResultSet {
     [OutputType([pscustomobject[]])]
     param(
         [Parameter()]$Rows,
-        [Parameter()]$Results,
-        [Parameter()][int]$FlagScoreAt = $script:LaneFraudScoreFlagAt
+        [Parameter()]$Results
     )
     $byOrder = @{}
     $dupes = [System.Collections.Generic.HashSet[string]]::new()
@@ -785,7 +782,7 @@ function Merge-LaneFraudResultSet {
         $id = [string](Get-LaneProp -Object $row -Name 'order_id')
         $result = $null
         if ($byOrder.ContainsKey($id) -and -not $dupes.Contains($id)) { $result = $byOrder[$id] }
-        Merge-LaneFraudOutcome -Row $row -Outcome (Get-LaneFraudOutcome -Result $result -FlagScoreAt $FlagScoreAt)
+        Merge-LaneFraudOutcome -Row $row -Outcome (Get-LaneFraudOutcome -Result $result)
     }
     return @($out)
 }
@@ -868,7 +865,6 @@ function Get-LaneVerdictReport {
         read_only           = $true
         fraud_check         = $FraudCheck
         fraud_check_note    = $note
-        fraud_score_flag_at = $script:LaneFraudScoreFlagAt
         counts              = $counts
         fraud_counts        = $fraudCounts
         verdicts            = @($sorted)

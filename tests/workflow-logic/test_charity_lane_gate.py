@@ -241,6 +241,28 @@ def test_live_site_subcommand_rejects_non_hostnames():
     assert gate.main(["live-site", "https://a.org"]) == 2
 
 
+def test_every_rule_matches_its_workflow_dispatch_inputs():
+    """The policy is the closed set the conductor dispatches verbatim; an input the
+    workflow does not define makes GitHub refuse the dispatch (HTTP 422), and an
+    environment the workflow never uses is dead policy. Pin both against the YAML."""
+    import yaml
+
+    for rule in POLICY["rules"]:
+        wf_path = REPO_ROOT / ".github" / "workflows" / rule["workflow"]
+        assert wf_path.exists(), f"{rule['id']}: {rule['workflow']} does not exist"
+        wf = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+        on = wf.get(True) or wf.get("on")
+        defined = set(((on.get("workflow_dispatch") or {}).get("inputs") or {}).keys())
+        extra = set(rule["inputs"]) - defined
+        assert not extra, f"{rule['id']}: inputs not defined by {rule['workflow']}: {sorted(extra)}"
+        envs = set()
+        for job in wf["jobs"].values():
+            env = job.get("environment")
+            envs.add(env["name"] if isinstance(env, dict) else env)
+        missing = set(rule["environments"]) - envs
+        assert not missing, f"{rule['id']}: {rule['workflow']} never uses {sorted(missing)}"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

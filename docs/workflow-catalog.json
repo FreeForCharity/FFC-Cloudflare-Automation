@@ -2311,6 +2311,24 @@
       "categoryCode": "GH"
     },
     {
+      "number": 750,
+      "title": "Repo - Charity-Lane Duplicate Lookup (read-only)",
+      "apis": [
+        "GH"
+      ],
+      "file": "750-charity-lane-lookup.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Where does this charity already exist? Run by the Onboarding Conductor before it queues a [CHARITY-LANE] item or provisions a repo (epic #1618), so the pipeline never builds a second site for a charity already in flight or live. A cloud session cannot search the whole org (its GitHub proxy serves only attached repos), so the search runs here.  SAFETY. No environment and no credential beyond the job token: it reads public data only (FreeForCharity repo names, org-wide issue/PR search, ffcadmin's docs/sites_list.csv, ProPublica for an EIN). The only write is the optional comment on a hub issue. Free-text inputs reach the script through env, never through ${{ }} in a run body.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "no environment, no credential beyond the job token; public data only (FreeForCharity repo names, org-wide issue/PR search with a whole-phrase filter, ffcadmin `docs/sites_list.csv`, ProPublica by EIN); the only write is the optional result comment on a hub issue; free-text inputs reach scripts/charity_lane_lookup.py through env",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

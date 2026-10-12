@@ -89,9 +89,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      per run.
    - Then make sure there is exactly one hub issue titled `[CHARITY-LANE] <domain or org>` labelled
      `charity-lane` and `lane:build-ready`, carrying the WHMCS client id, the order ids and the 750
-     run. Queue right after the accept: you cannot read ffcadmin (this routine is attached to the
-     hub only), so the Cloud Worker, which is, finds the ffcadmin work order. The Cloud Worker picks
-     these up. Never build content yourself.
+     run. Queue right after the accept. You cannot read ffcadmin directly (this routine is attached
+     to the hub only), but 750's issue matches include its work orders (`[Intake] <org>` titles in
+     FFC-IN-ffcadmin.org): put any such link on the item. The Cloud Worker confirms it by the
+     `ffc-<client id>` marker. The Cloud Worker picks these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
    `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
    `dry_run=false`, the org name, and the public footer fields from workflow `234` [site-content

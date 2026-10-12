@@ -626,7 +626,7 @@ jobs:
                   $live = ($LASTEXITCODE -eq 0 -and $q -match '^(MERGED|OPEN (QUEUED|AWAITING_CHECKS|MERGEABLE|LOCKED))')
                 }
                 if ($live) { $result = "enqueued ($($q.Trim())): $($d.Reason)" }
-                else { $result = "left_open: enqueue was accepted but no queue entry appeared within a minute ($($q.Trim()))" }
+                else { $result = "left_open: enqueue was accepted but the PR did not reach a live queue state within a minute ($($q.Trim()))" }
                 break
               }
               $repoInfo = gh api "repos/$full" | ConvertFrom-Json

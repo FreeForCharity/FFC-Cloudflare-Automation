@@ -607,6 +607,21 @@ jobs:
             $d = Get-ContentApplyLandDecision -Pull $pull -ExpectedSha $env:HEAD_SHA -CheckRuns $runs -Statuses $statuses
             if ($d.Action -eq 'leave') { $result = "left_open: $($d.Reason)"; break }
             if ($d.Action -eq 'merge') {
+              # A branch that requires the merge queue refuses a direct merge
+              # (#1654): enqueue there, and never guess when the rules are unreadable.
+              $rulesKnown = $true
+              $rulesJson = gh api "repos/$full/rules/branches/$($pull.base.ref)" 2>$null
+              if ($LASTEXITCODE -ne 0) { $rulesKnown = $false; $rules = @() } else { $rules = @($rulesJson | ConvertFrom-Json) }
+              $route = Get-ContentApplyMergeRoute -Rules $rules -RulesKnown $rulesKnown
+              if ($route.Route -eq 'unknown') { $result = "left_open: $($route.Reason)"; break }
+              if ($route.Route -eq 'queue') {
+                $out = gh pr merge $num --repo $full --auto 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0) { $result = "left_open: GitHub refused to enqueue: $($out.Trim())"; break }
+                $q = gh api graphql -f query="query{repository(owner:`"FreeForCharity`",name:`"$($full.Split('/')[1])`"){pullRequest(number:$num){state mergeQueueEntry{state}}}}" --jq '.data.repository.pullRequest | "\(.state) \(.mergeQueueEntry.state // "none")"' 2>&1 | Out-String
+                if ($LASTEXITCODE -eq 0 -and $q -match '^(MERGED|OPEN (QUEUED|AWAITING_CHECKS|MERGEABLE|LOCKED))') { $result = "enqueued ($($q.Trim())): $($d.Reason)" }
+                else { $result = "left_open: enqueue was accepted but no queue entry was found ($($q.Trim()))" }
+                break
+              }
               $repoInfo = gh api "repos/$full" | ConvertFrom-Json
               $method = if ($repoInfo.allow_merge_commit) { 'merge' } elseif ($repoInfo.allow_squash_merge) { 'squash' } else { 'rebase' }
               $body = @{ sha = $env:HEAD_SHA; merge_method = $method } | ConvertTo-Json -Compress

@@ -162,12 +162,15 @@ def test_land_merges_only_on_the_decision_and_pinned_to_the_pushed_sha():
     step = find_step(_wf(), "apply", "Land the PR once the site CI is green")
     body = step["run"]
     assert "Get-ContentApplyLandDecision" in body
-    # The only merge is the REST PUT, behind the 'merge' verdict, pinned to HEAD_SHA.
+    # The only direct merge is the REST PUT, behind the 'merge' verdict, pinned to HEAD_SHA.
     assert body.count('gh api -X PUT "repos/$full/pulls/$num/merge"') == 1
     assert body.index("if ($d.Action -eq 'merge')") < body.index("gh api -X PUT")
     assert "sha = $env:HEAD_SHA" in body
-    for forbidden in ("--admin", "bypass", "gh pr merge", "--force"):
+    for forbidden in ("--admin", "bypass", "--force", "--squash", "--rebase", "--merge "):
         assert forbidden not in body, forbidden
+    # The only `gh pr merge` is a bare --auto enqueue on the queue route (#1654).
+    assert body.count("gh pr merge") == 1
+    assert "gh pr merge $num --repo $full --auto 2>&1" in body
     # Landing is skipped when GitHub auto-merge already took the PR, and never
     # runs without a PR.
     cond = " ".join(str(step["if"]).split())
@@ -175,6 +178,22 @@ def test_land_merges_only_on_the_decision_and_pinned_to_the_pushed_sha():
     assert "steps.deliver.outputs.auto_merge != 'enabled'" in cond
     # Free-text never reaches the body: the PR URL and sha come in through env.
     assert "${{" not in body
+
+
+def test_land_routes_through_the_merge_queue_when_the_branch_requires_it():
+    """A branch with a `merge_queue` rule refuses a direct merge, so 707 enqueues
+    there, confirms a live queue entry, and leaves the PR open when the branch
+    rules cannot be read (#1654)."""
+    body = find_step(_wf(), "apply", "Land the PR once the site CI is green")["run"]
+    verdict = body.index("if ($d.Action -eq 'merge')")
+    route = body.index("Get-ContentApplyMergeRoute -Rules $rules -RulesKnown $rulesKnown")
+    unknown = body.index("if ($route.Route -eq 'unknown') { $result = \"left_open:")
+    queue = body.index("if ($route.Route -eq 'queue')")
+    enqueue = body.index("gh pr merge $num --repo $full --auto")
+    direct = body.index('gh api -X PUT "repos/$full/pulls/$num/merge"')
+    assert verdict < route < unknown < queue < enqueue < direct
+    assert "mergeQueueEntry" in body, "an accepted enqueue is confirmed by a queue entry"
+    assert "UNMERGEABLE" not in body, "a failed queue entry is not counted as enqueued"
 
 
 # --------------------------------------------------------------------------

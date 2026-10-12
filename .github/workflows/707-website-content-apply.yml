@@ -1,0 +1,627 @@
+name: '707. Website - Content Apply (FFC-EX PR) [GH]'
+# The target repo and both switches reach the approval screen: the `apply` job
+# waits at the github-prod gate, a waiting job has no logs, and the REST run
+# object carries no dispatch inputs (#1107).
+run-name:
+  '707: content -> ${{ inputs.target_repo }} (dry_run=${{ inputs.dry_run }}, auto_merge=${{
+  inputs.auto_merge }})'
+
+# Delivers a charity's site content, written by a cloud worker agent, into its
+# FFC-EX-<domain> repo as a pull request (charity-lane epic #1618, step G3.3).
+#
+# WHY A HUB WORKFLOW. A cloud session can only reach the repos attached when it
+# started, and a charity's FFC-EX repo is usually created (by 701) after the
+# worker's session began. So the worker cannot push there; it hands the content
+# to this workflow as data, and the hub is the only writer.
+#
+# WHAT BOUNDS THE WRITE. scripts/website-content-apply-guard.ps1 with the path
+# allowlist in config/website-content-apply-paths.json: lowercase FFC-EX-* repos
+# only, site.config.ts and the templates' src/data/ files only, never .github/,
+# workflows, CNAME, package manifests, lockfiles, binaries, `..` or absolute
+# paths, and at most 60 KB. Both jobs run the same validation function, so the
+# files `apply` writes are the files `validate` printed.
+#
+# SAFETY. `validate` holds no credential and no environment: it parses and
+# checks everything, then rehearses the write against an anonymous clone of the
+# (public) target and prints the plan. `apply` is the only job that writes, the
+# only one behind the github-prod gate, and it is skipped on a dry run. It opens
+# a PR and never pushes the default branch. Auto-merge is enabled only when the
+# target repo allows it AND its default branch requires a status check, because
+# on a branch with no required check auto-merge means "merge now", before the
+# site's CI has reported (Get-ContentApplyAutoMergePlan).
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: >-
+          Target repository, bare name: FFC-EX-<domain> in lowercase (e.g. FFC-EX-example.org). Must
+          exist in FreeForCharity and not be archived.
+        required: true
+        type: string
+      content_json:
+        description: >-
+          JSON object mapping repo-relative file paths to their full UTF-8 contents, e.g.
+          {"src/lib/site.config.ts":"..."}. Paths must be on the allowlist in
+          config/website-content-apply-paths.json; 60 KB maximum.
+        required: true
+        type: string
+      title:
+        description: 'Pull request title (one line; blank = "Update site content")'
+        required: false
+        type: string
+        default: ''
+      issue_url:
+        description: >-
+          Optional work-order issue URL (https://github.com/FreeForCharity/<repo>/issues/<n>),
+          linked from the PR body.
+        required: false
+        type: string
+        default: ''
+      auto_merge:
+        description: >-
+          Enable auto-merge on the PR so it lands once the site's required checks pass. Falls back
+          to an open PR, reported in the summary, when the repo does not allow auto-merge or
+          requires no checks.
+        required: false
+        type: boolean
+        default: true
+      land_when_green:
+        description: >-
+          When auto-merge is unavailable (FFC-EX repos today), wait for the site's own CI on the PR
+          head and merge only if every check passed. Otherwise the PR is left open with the reason.
+        required: false
+        type: boolean
+        default: true
+      land_wait_minutes:
+        description: 'How long to wait for the site CI before leaving the PR open (1-30).'
+        required: false
+        type: string
+        default: '25'
+      dry_run:
+        description: 'Validate and rehearse only (no PR). Set false to open the PR (gated).'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One delivery per site at a time; a second dispatch for the same repo queues.
+concurrency:
+  group: 707-website-content-apply-${{ inputs.target_repo }}
+  cancel-in-progress: false
+
+jobs:
+  # Read-only and ungated: no environment, no Key Vault, no write token. The
+  # only network reads are the public repo metadata and an anonymous clone.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target_repo: ${{ steps.check.outputs.target_repo }}
+      default_branch: ${{ steps.repo.outputs.default_branch }}
+      file_count: ${{ steps.check.outputs.file_count }}
+      changed_count: ${{ steps.rehearse.outputs.changed_count }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Every input reaches pwsh through env:, never through `${{ }}` in the
+      # body (#1080): content_json is attacker-shaped by definition.
+      - name: Validate inputs and payload (offline)
+        id: check
+        shell: pwsh
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+          CONTENT_JSON: ${{ inputs.content_json }}
+          PR_TITLE: ${{ inputs.title }}
+          ISSUE_URL: ${{ inputs.issue_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/website-content-apply-guard.ps1
+          $policy = Get-ContentApplyPolicy -Path ./config/website-content-apply-paths.json
+          $v = Invoke-ContentApplyValidation -TargetRepo $env:TARGET_REPO -ContentJson $env:CONTENT_JSON `
+            -Title $env:PR_TITLE -IssueUrl $env:ISSUE_URL -Policy $policy
+
+          # Refusal reasons quote the caller's paths verbatim. Printed with
+          # workflow commands suspended, so a "path" that is itself a
+          # `::command::` line is shown, not executed.
+          $stop = [guid]::NewGuid().ToString('N')
+          if (-not $v.Ok) {
+            Write-Output "::stop-commands::$stop"
+            Write-Output "Refused ($(@($v.Errors).Count) problem(s)):"
+            foreach ($e in $v.Errors) { Write-Output "  - $e" }
+            Write-Output "::$stop::"
+            Write-Output "::error::content-apply refused the dispatch: $(@($v.Errors).Count) problem(s), listed above. Nothing was written."
+            "## 707 refused`n`n$(@($v.Errors).Count) problem(s); see the 'Validate inputs and payload' step log. Nothing was written." |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit 1
+          }
+
+          Write-Output "Target:  FreeForCharity/$($v.TargetRepo)"
+          Write-Output "PR title: $($v.Title)"
+          Write-Output "Payload: $($v.PayloadBytes) bytes, $(@($v.Files).Count) file(s), $($v.TotalBytes) bytes of content"
+          foreach ($f in $v.Files) { Write-Output ("  {0,7} B  {1}" -f $f.Bytes, $f.Path) }
+          # The content itself, for the reviewer who approves `apply`. Inside
+          # stop-commands for the same reason as above.
+          Write-Output "::stop-commands::$stop"
+          foreach ($f in $v.Files) {
+            Write-Output "----- $($f.Path) -----"
+            Write-Output $f.Content
+          }
+          Write-Output "::$stop::"
+
+          # The repo name matched ^FFC-EX-[a-z0-9.-]+$ above, so it is safe to
+          # hand to later steps as data.
+          "target_repo=$($v.TargetRepo)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "file_count=$(@($v.Files).Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # GITHUB_TOKEN reads public repo metadata anywhere; every FFC-EX repo is
+      # public. A 404 (missing, renamed, or private) refuses, as does archived.
+      - name: Confirm the target repo exists and is not archived
+        id: repo
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPO: ${{ steps.check.outputs.target_repo }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = [string]$env:TARGET_REPO
+          $raw = gh api "repos/FreeForCharity/$repo" 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            $why = ($raw -replace '\s+', ' ').Trim()
+            Write-Output "::error::FreeForCharity/$repo could not be read (gh exit $LASTEXITCODE): $why. It must exist in FreeForCharity; nothing was written."
+            exit 1
+          }
+          $info = $raw | ConvertFrom-Json
+          # A renamed repo answers through a redirect under its NEW name. Refuse
+          # rather than write somewhere the dispatcher did not name.
+          if ([string]$info.name -cne $repo -or [string]$info.owner.login -ne 'FreeForCharity') {
+            Write-Output "::error::target_repo '$repo' resolves to '$($info.full_name)'. Dispatch with the repository's current name."
+            exit 1
+          }
+          if ([bool]$info.archived) {
+            Write-Output "::error::FreeForCharity/$repo is archived; refusing to open a PR on it."
+            exit 1
+          }
+          $branch = [string]$info.default_branch
+          if ($branch -notmatch '^[A-Za-z0-9._/-]+$') {
+            Write-Output "::error::FreeForCharity/$repo reports an unexpected default branch name."
+            exit 1
+          }
+          Write-Output "FreeForCharity/$repo exists, not archived, default branch '$branch', allow_auto_merge=$($info.allow_auto_merge)."
+          "default_branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # The rehearsal: everything `apply` does except the commit, push and PR,
+      # against an anonymous sparse clone (only the files in play are fetched,
+      # so a large converted site costs no more than a template one).
+      - name: Rehearse the write against the target
+        id: rehearse
+        shell: pwsh
+        env:
+          TARGET_REPO: ${{ steps.check.outputs.target_repo }}
+          DEFAULT_BRANCH: ${{ steps.repo.outputs.default_branch }}
+          CONTENT_JSON: ${{ inputs.content_json }}
+          PR_TITLE: ${{ inputs.title }}
+          ISSUE_URL: ${{ inputs.issue_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/website-content-apply-guard.ps1
+          $policy = Get-ContentApplyPolicy -Path ./config/website-content-apply-paths.json
+          $v = Invoke-ContentApplyValidation -TargetRepo $env:TARGET_REPO -ContentJson $env:CONTENT_JSON `
+            -Title $env:PR_TITLE -IssueUrl $env:ISSUE_URL -Policy $policy
+          if (-not $v.Ok) { throw 'Validation disagreed with the previous step; refusing.' }
+
+          $repo = [string]$env:TARGET_REPO
+          $branch = [string]$env:DEFAULT_BRANCH
+          $site = Join-Path $env:RUNNER_TEMP 'content-apply-site'
+          $patterns = @('/package.json', '/.prettierrc*', '/.prettierignore', '/src/lib/site.config.ts') +
+            @($v.Files | ForEach-Object { '/' + $_.Path })
+          $env:GIT_LFS_SKIP_SMUDGE = '1'
+          git clone --quiet --depth 1 --filter=blob:none --no-checkout --branch $branch "https://github.com/FreeForCharity/$repo.git" $site
+          if ($LASTEXITCODE -ne 0) { throw "git clone of FreeForCharity/$repo failed (exit $LASTEXITCODE)." }
+          git -C $site sparse-checkout set --no-cone @patterns
+          if ($LASTEXITCODE -ne 0) { throw "git sparse-checkout failed (exit $LASTEXITCODE)." }
+          git -C $site checkout --quiet $branch
+          if ($LASTEXITCODE -ne 0) { throw "git checkout of $branch failed (exit $LASTEXITCODE)." }
+
+          # A repo without the canonical config was not built from an FFC
+          # template (or 701 has not provisioned it yet): there is nothing for
+          # this content to plug into.
+          if (-not (Test-Path -LiteralPath (Join-Path $site 'src/lib/site.config.ts') -PathType Leaf)) {
+            Write-Output "::error::FreeForCharity/$repo has no src/lib/site.config.ts on '$branch', so it was not built from an FFC template (or is not provisioned yet). Refusing."
+            exit 1
+          }
+
+          $report = Write-ContentApplyFileSet -RepoPath $site -Files $v.Files
+          $changed = @($report | Where-Object { $_.Status -ne 'unchanged' })
+
+          # Formatting is checked, not fixed, here: the site CI runs
+          # `prettier --check .`, and `apply` formats with the version the site
+          # pins. Best-effort: a failure to run prettier is a warning.
+          $pinned = ''
+          try {
+            $pinned = [string]((Get-Content -Raw (Join-Path $site 'package.json') | ConvertFrom-Json).devDependencies.prettier) -replace '^[\^~>=\s]+', ''
+          } catch { $pinned = '' }
+          if ($pinned -match '^\d+\.\d+\.\d+$' -and $changed.Count -gt 0) {
+            Push-Location $site
+            try {
+              $rel = @($changed | ForEach-Object { $_.Path })
+              # npx.cmd where it exists: on Windows pwsh resolves `npx` to a shim
+              # that fails with `--yes <spec>` (same note as 701).
+              $npx = if (Get-Command npx.cmd -ErrorAction SilentlyContinue) { 'npx.cmd' } else { 'npx' }
+              & $npx --yes "prettier@$pinned" --check @rel
+              if ($LASTEXITCODE -ne 0) {
+                Write-Output "::warning::prettier@$pinned would reformat some of these files. apply runs prettier --write on them before committing."
+              }
+            } finally { Pop-Location }
+          } elseif ($changed.Count -gt 0) {
+            Write-Output "::warning::The target pins no exact prettier version in package.json, so formatting was not checked."
+          }
+
+          $summary = @(
+            "## 707 plan: FreeForCharity/$repo",
+            '',
+            "PR title: $($v.Title)",
+            '',
+            '| File | Bytes | Change |',
+            '| --- | ---: | --- |'
+          )
+          foreach ($r in $report) { $summary += "| ``$($r.Path)`` | $($r.Bytes) | $($r.Status) |" }
+          $summary += ''
+          $summary += if ($changed.Count -eq 0) {
+            'Every file already matches the target; a live run would open no PR.'
+          } else {
+            "$($changed.Count) file(s) would change. A live run (dry_run=false) opens a PR from ``content/<run_id>`` after the github-prod approval."
+          }
+          ($summary -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          git -C $site --no-pager status --short
+          "changed_count=$($changed.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # The runner appends `exit $LASTEXITCODE`; a prettier exit above is a
+          # warning, not a failure (L303).
+          exit 0
+
+  # The ONLY job that writes, the only one behind the gate, skipped on a dry run
+  # (`validate` is its rehearsal). Holds the org-wide PAT, the same credential
+  # 701 `content` and 706 `deliver` use to write FFC-EX repos.
+  apply:
+    if: inputs.dry_run == false && needs.validate.outputs.changed_count != '0'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: github-prod
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      pr_url: ${{ steps.deliver.outputs.pr_url }}
+      auto_merge: ${{ steps.deliver.outputs.auto_merge }}
+      land_result: ${{ steps.land.outputs.land_result }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Key Vault is the single source of truth for credentials (#844). Never
+      # reintroduce a GitHub-environment copy.
+      - name: Load the GitHub PAT from Key Vault
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show             --vault-name kv-ffc-admin-prod-cbm             --name wr-all-cbm-ffc-copilot-mcp-github-pat             --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Liveness, not just presence (#1102). A revoked-but-present PAT clears the
+          # emptiness check above and fails two to four steps later inside a script,
+          # naming the wrong subsystem -- that is how 502's dead credential was read as
+          # a Key Vault RBAC problem for nine days (#848). The two causes have different
+          # remedies (role assignment vs remint), so both checks stay and their messages
+          # stay distinguishable.
+          #
+          # Probe by status code only: the token goes into a request header and never
+          # into output. `-o /dev/null` discards the body; `-D` keeps the RESPONSE
+          # headers, which carry no credential and are what separates a throttled token
+          # from a rejected one below.
+          #
+          # `|| true` is load-bearing, not defensive habit. The runner invokes this body
+          # under `-e`, and `set -euo pipefail` above keeps it: without it a curl that
+          # cannot reach the network aborts the assignment and the step dies before the
+          # branch below ever runs, with no message of ours (L73). With it, curl's own
+          # `000` reaches the check and fails closed.
+          #
+          # A 200 proves the token AUTHENTICATES. It proves nothing about SCOPE -- a
+          # read-scoped PAT answers 200 here and 403 on a write -- so a green probe is
+          # not a licence to assume the later write will work.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # GitHub answers a PRIMARY rate limit with 403 + `x-ratelimit-remaining: 0`
+          # and a SECONDARY one with 403 + `retry-after`. Either way the credential is
+          # LIVE, so it must not be handed the revoked wording below: prescribing a
+          # remint for a throttled token is the same wrong-subsystem failure this guard
+          # exists to remove. 321 draws the same line for Cloudflare, where a 403 on a
+          # resource endpoint is authenticated-but-unauthorized and never "dead".
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-cbm-ffc-copilot-mcp-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          {
+            echo "GH_TOKEN<<${d}"
+            echo "$token"
+            echo "${d}"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: automation
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # Re-validates from the dispatch inputs rather than trusting `validate`'s
+      # outputs, re-reads the repo with the PAT (archived/renamed since?), then
+      # writes, commits, pushes `content/<run_id>` and opens the PR.
+      - name: Write the content and open the PR
+        id: deliver
+        shell: pwsh
+        working-directory: automation
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+          CONTENT_JSON: ${{ inputs.content_json }}
+          PR_TITLE: ${{ inputs.title }}
+          ISSUE_URL: ${{ inputs.issue_url }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/website-content-apply-guard.ps1
+          $policy = Get-ContentApplyPolicy -Path ./config/website-content-apply-paths.json
+          $v = Invoke-ContentApplyValidation -TargetRepo $env:TARGET_REPO -ContentJson $env:CONTENT_JSON `
+            -Title $env:PR_TITLE -IssueUrl $env:ISSUE_URL -Policy $policy
+          if (-not $v.Ok) {
+            Write-Output "::error::content-apply refused the dispatch at the apply step ($(@($v.Errors).Count) problem(s)); see the validate job. Nothing was written."
+            exit 1
+          }
+          $repo = $v.TargetRepo
+          $full = "FreeForCharity/$repo"
+
+          $info = gh api "repos/$full" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "gh api repos/$full failed (exit $LASTEXITCODE)." }
+          if ([string]$info.name -cne $repo -or [string]$info.owner.login -ne 'FreeForCharity') { throw "target_repo '$repo' now resolves to '$($info.full_name)'; refusing." }
+          if ([bool]$info.archived) { throw "$full is archived; refusing." }
+          $branch = [string]$info.default_branch
+          if ($branch -notmatch '^[A-Za-z0-9._/-]+$') { throw "$full reports an unexpected default branch name." }
+
+          # Commits are attributed to the account whose token pushes them, so the
+          # PR's author and its commits' author are one identity.
+          $me = gh api user | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "gh api user failed (exit $LASTEXITCODE)." }
+
+          # gh's token (GH_TOKEN) as git's credential helper for github.com.
+          gh auth setup-git --hostname github.com
+          if ($LASTEXITCODE -ne 0) { throw "gh auth setup-git failed (exit $LASTEXITCODE)." }
+          $site = Join-Path $env:RUNNER_TEMP 'content-apply-site'
+          $patterns = @('/package.json', '/.prettierrc*', '/.prettierignore', '/src/lib/site.config.ts') +
+            @($v.Files | ForEach-Object { '/' + $_.Path })
+          $env:GIT_LFS_SKIP_SMUDGE = '1'
+          git clone --quiet --depth 1 --filter=blob:none --no-checkout --branch $branch "https://github.com/$full.git" $site
+          if ($LASTEXITCODE -ne 0) { throw "git clone of $full failed (exit $LASTEXITCODE)." }
+          git -C $site sparse-checkout set --no-cone @patterns
+          if ($LASTEXITCODE -ne 0) { throw "git sparse-checkout failed (exit $LASTEXITCODE)." }
+          git -C $site checkout --quiet $branch
+          if ($LASTEXITCODE -ne 0) { throw "git checkout of $branch failed (exit $LASTEXITCODE)." }
+          if (-not (Test-Path -LiteralPath (Join-Path $site 'src/lib/site.config.ts') -PathType Leaf)) {
+            throw "$full has no src/lib/site.config.ts on '$branch'; refusing."
+          }
+
+          $report = Write-ContentApplyFileSet -RepoPath $site -Files $v.Files
+          $changed = @($report | Where-Object { $_.Status -ne 'unchanged' } | ForEach-Object { $_.Path })
+
+          # Format with the prettier version the site pins, so the PR does not
+          # arrive red on the site's own `prettier --check .`. The PAT is taken
+          # out of the environment for the npx call: it downloads and runs a
+          # package, and nothing in it needs the token.
+          $pinned = ''
+          try {
+            $pinned = [string]((Get-Content -Raw (Join-Path $site 'package.json') | ConvertFrom-Json).devDependencies.prettier) -replace '^[\^~>=\s]+', ''
+          } catch { $pinned = '' }
+          if ($pinned -match '^\d+\.\d+\.\d+$' -and $changed.Count -gt 0) {
+            $saved = $env:GH_TOKEN
+            Remove-Item Env:GH_TOKEN
+            Push-Location $site
+            try {
+              $npx = if (Get-Command npx.cmd -ErrorAction SilentlyContinue) { 'npx.cmd' } else { 'npx' }
+              & $npx --yes "prettier@$pinned" --write @changed | Out-Host
+              if ($LASTEXITCODE -ne 0) { Write-Output "::warning::prettier@$pinned --write exited $LASTEXITCODE; committing the content as submitted." }
+            } finally {
+              Pop-Location
+              $env:GH_TOKEN = $saved
+            }
+          }
+
+          git -C $site add -- @changed
+          if ($LASTEXITCODE -ne 0) { throw "git add failed (exit $LASTEXITCODE)." }
+          git -C $site diff --cached --quiet
+          $diffExit = $LASTEXITCODE
+          if ($diffExit -eq 0) {
+            Write-Output "::notice::Every file already matches $full@$branch; no PR opened."
+            "## 707: no change`n`nEvery file already matches ``$full@$branch``. No PR was opened." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "pr_url=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "auto_merge=not-applicable" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          if ($diffExit -ne 1) { throw "git diff --cached failed (exit $diffExit)." }
+
+          $head = "content/$($env:RUN_ID)"
+          git -C $site config user.name ([string]$me.login)
+          if ($LASTEXITCODE -ne 0) { throw "git config user.name failed (exit $LASTEXITCODE)." }
+          git -C $site config user.email ("{0}+{1}@users.noreply.github.com" -f $me.id, $me.login)
+          if ($LASTEXITCODE -ne 0) { throw "git config user.email failed (exit $LASTEXITCODE)." }
+          git -C $site checkout --quiet -b $head
+          if ($LASTEXITCODE -ne 0) { throw "git checkout -b $head failed (exit $LASTEXITCODE)." }
+          git -C $site commit --quiet -m $v.Title -m "Site content delivered by hub workflow 707 ($($env:RUN_URL))."
+          if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
+          # The branch is named for this run and nothing else writes it, so a
+          # re-run of this job replaces its own earlier push.
+          git -C $site push --quiet --force origin "HEAD:refs/heads/$head"
+          if ($LASTEXITCODE -ne 0) { throw "git push of $head failed (exit $LASTEXITCODE)." }
+
+          $lines = @(
+            'Site content delivered by hub workflow 707 (Website - Content Apply).',
+            '',
+            "- Run: $($env:RUN_URL)"
+          )
+          if ($v.IssueUrl) { $lines += "- Work order: $($v.IssueUrl)" }
+          $lines += ''
+          $lines += '| File | Change |'
+          $lines += '| --- | --- |'
+          foreach ($r in $report) { $lines += "| ``$($r.Path)`` | $($r.Status) |" }
+          $lines += ''
+          $lines += 'Only allowlisted content files can be written by this workflow (config/website-content-apply-paths.json in FreeForCharity/FFC-Cloudflare-Automation).'
+          $bodyFile = Join-Path $env:RUNNER_TEMP 'content-apply-pr.md'
+          ($lines -join "`n") | Out-File -FilePath $bodyFile -Encoding utf8
+
+          $existing = gh pr list --repo $full --head $head --state open --json url --jq '.[0].url // empty'
+          if ($LASTEXITCODE -ne 0) { throw "gh pr list failed (exit $LASTEXITCODE)." }
+          # "$x", not [string]$x: a native command that prints nothing yields
+          # AutomationNull, which [string] casts to $null (measured), so .Trim()
+          # would throw on exactly the no-existing-PR path.
+          $prUrl = "$existing".Trim()
+          if (-not $prUrl) {
+            $created = gh pr create --repo $full --base $branch --head $head "--title=$($v.Title)" --body-file $bodyFile
+            if ($LASTEXITCODE -ne 0) { throw "gh pr create failed (exit $LASTEXITCODE)." }
+            $prUrl = "$($created | Select-Object -Last 1)".Trim()
+          }
+          if ($prUrl -notmatch '^https://github\.com/FreeForCharity/[A-Za-z0-9._-]+/pull/[0-9]+$') { throw "gh pr create returned an unexpected value: '$prUrl'." }
+          Write-Output "PR: $prUrl"
+
+          # Auto-merge, only when it means "after CI" (see the header). The PR
+          # is open whatever happens below, so nothing here fails the job.
+          $rules = @()
+          $rulesRaw = gh api "repos/$full/rules/branches/$($branch)?per_page=100" 2>$null
+          if ($LASTEXITCODE -eq 0 -and $rulesRaw) { $rules = @($rulesRaw | ConvertFrom-Json) }
+          $classic = @()
+          $classicKnown = $true
+          $prot = gh api "repos/$full/branches/$branch/protection/required_status_checks" 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0) {
+            $p = $prot | ConvertFrom-Json
+            $classic = @(@($p.contexts) + @($p.checks | ForEach-Object { $_.context }) | Where-Object { $_ })
+          } elseif ($prot -notmatch 'Branch not protected|Required status checks not enabled|HTTP 404') {
+            $classicKnown = $false
+          }
+          $plan = Get-ContentApplyAutoMergePlan -Requested (([string]$env:AUTO_MERGE) -eq 'true') -Repo $info `
+            -Rules $rules -ClassicRequiredChecks $classic -ClassicProtectionKnown $classicKnown
+          $autoMerge = if ($plan.Enable) { 'enabled' } elseif (([string]$env:AUTO_MERGE) -eq 'true') { 'unavailable' } else { 'not-requested' }
+          $autoMergeNote = $plan.Reason
+          if ($plan.Enable) {
+            $mergeOut = gh pr merge $prUrl --auto "--$($plan.Method)" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              $autoMerge = 'failed'
+              $autoMergeNote = "gh pr merge --auto failed: $($mergeOut.Trim())"
+              Write-Output "::warning::Could not enable auto-merge on $prUrl (the PR is open): $($mergeOut.Trim())"
+            }
+          } elseif (([string]$env:AUTO_MERGE) -eq 'true') {
+            Write-Output "::notice::Auto-merge not enabled on ${prUrl}: $($plan.Reason)"
+          }
+
+          $summary = @(
+            "## 707: PR opened on $full",
+            '',
+            "**PR:** $prUrl",
+            '',
+            "**Auto-merge:** $autoMerge. $autoMergeNote",
+            '',
+            '| File | Change |',
+            '| --- | --- |'
+          )
+          foreach ($r in $report) { $summary += "| ``$($r.Path)`` | $($r.Status) |" }
+          ($summary -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "pr_url=$prUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "auto_merge=$autoMerge" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $headSha = "$(git -C $site rev-parse HEAD)".Trim()
+          "head_sha=$headSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # A failed auto-merge call above is reported, not fatal (L303).
+          exit 0
+
+      # G3.3b (epic #1618): FFC-EX repos have auto-merge off and no required
+      # checks, so "auto-merge" cannot mean "after CI" there. This step waits for
+      # the site's own CI on the exact commit 707 pushed and merges only on
+      # positive evidence that it passed (Get-ContentApplyLandDecision). Anything
+      # else, including a merge GitHub refuses (rulesets: review threads, extra
+      # approval), leaves the PR open with the reason. It never retries another
+      # way and never bypasses a ruleset.
+      - name: Land the PR once the site CI is green
+        id: land
+        if: >-
+          inputs.land_when_green && steps.deliver.outputs.pr_url != '' &&
+          steps.deliver.outputs.auto_merge != 'enabled'
+        shell: pwsh
+        working-directory: automation
+        env:
+          PR_URL: ${{ steps.deliver.outputs.pr_url }}
+          HEAD_SHA: ${{ steps.deliver.outputs.head_sha }}
+          WAIT_MINUTES: ${{ inputs.land_wait_minutes }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/website-content-apply-guard.ps1
+          if ($env:PR_URL -notmatch '^https://github\.com/(FreeForCharity/[A-Za-z0-9._-]+)/pull/([0-9]+)$') { throw "unexpected PR URL '$($env:PR_URL)'." }
+          $full = $Matches[1]; $num = $Matches[2]
+          if ($env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw "unexpected head sha '$($env:HEAD_SHA)'." }
+          $wait = 25
+          if ($env:WAIT_MINUTES -match '^[0-9]{1,2}$' -and [int]$env:WAIT_MINUTES -ge 1 -and [int]$env:WAIT_MINUTES -le 30) { $wait = [int]$env:WAIT_MINUTES }
+          $deadline = (Get-Date).AddMinutes($wait)
+
+          $result = $null
+          while ($true) {
+            $pull = gh api "repos/$full/pulls/$num" | ConvertFrom-Json
+            $runs = @((gh api "repos/$full/commits/$($env:HEAD_SHA)/check-runs?per_page=100" | ConvertFrom-Json).check_runs)
+            $statuses = @((gh api "repos/$full/commits/$($env:HEAD_SHA)/status" | ConvertFrom-Json).statuses)
+            $d = Get-ContentApplyLandDecision -Pull $pull -ExpectedSha $env:HEAD_SHA -CheckRuns $runs -Statuses $statuses
+            if ($d.Action -eq 'leave') { $result = "left_open: $($d.Reason)"; break }
+            if ($d.Action -eq 'merge') {
+              $repoInfo = gh api "repos/$full" | ConvertFrom-Json
+              $method = if ($repoInfo.allow_merge_commit) { 'merge' } elseif ($repoInfo.allow_squash_merge) { 'squash' } else { 'rebase' }
+              $body = @{ sha = $env:HEAD_SHA; merge_method = $method } | ConvertTo-Json -Compress
+              $out = $body | gh api -X PUT "repos/$full/pulls/$num/merge" --input - 2>&1 | Out-String
+              if ($LASTEXITCODE -eq 0) { $result = "merged ($method): $($d.Reason)" }
+              else { $result = "left_open: GitHub refused the merge: $($out.Trim())" }
+              break
+            }
+            if ((Get-Date) -ge $deadline) { $result = "left_open: still waiting after $wait min ($($d.Reason))"; break }
+            Start-Sleep -Seconds 30
+          }
+
+          Write-Output "Land: $result"
+          "### Land`n`n$result" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $short = ($result -replace "[`r`n]+", ' ')
+          if ($short.Length -gt 300) { $short = $short.Substring(0, 300) }
+          "land_result=$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          exit 0

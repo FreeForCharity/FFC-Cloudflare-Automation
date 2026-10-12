@@ -12,6 +12,10 @@
 //   detect <scripts/check-drift.mjs>             -> "footer" | "single" (exit 2 if neither)
 //   merge <template package.json> <package.json> -> rewrites the target, prints JSON
 //                                                   {"changes": [...]} on stdout
+//   add-dev <template package.json> <package.json> <name>
+//                                                -> adds one allowlisted test devDependency
+//                                                   at the template's version, prints JSON
+//                                                   {"changes": [...]} (empty if present)
 //
 // Exit codes are load-bearing: 0 = done, 2 = BLOCKED (report the repo, write
 // nothing), 1 = unexpected error.
@@ -34,6 +38,27 @@ const TEMPLATE_MARKERS = {
 // postcss with `$postcss` (the direct version), so an old direct postcss keeps
 // its advisory however the overrides read.
 const FLOOR_DEPS = ['next', 'postcss'];
+
+// Test-only devDependencies a template test needs. Drift sync brings template
+// tests into a site, but not always their devDependency: the first 751 dry run
+// found four sites whose build failed on `@jest/globals` (TS2307), because Next
+// 16.3 type-checks tests during `next build` (#1640). Kept to an allowlist so
+// the build fallback can never pull in an arbitrary package.
+const TEST_DEPS = ['@jest/globals'];
+
+function addDevDependency(template, target, name) {
+  if (!TEST_DEPS.includes(name)) return { error: `${name} is not an allowlisted test dependency` };
+  const want = template.devDependencies && template.devDependencies[name];
+  if (!want) return { error: `the template has no devDependency ${name}` };
+  const has =
+    (target.dependencies && target.dependencies[name]) ||
+    (target.devDependencies && target.devDependencies[name]);
+  if (has) return { pkg: target, changes: [] };
+  const out = JSON.parse(JSON.stringify(target));
+  out.devDependencies = out.devDependencies || {};
+  out.devDependencies[name] = want;
+  return { pkg: out, changes: [`devDependency ${name}: (none) -> ${want}`] };
+}
 
 function detectTemplate(driftSource) {
   const hits = Object.entries(TEMPLATE_MARKERS)
@@ -140,13 +165,40 @@ function main(argv) {
     process.stdout.write(JSON.stringify({ changes }) + '\n');
     return 0;
   }
+  if (cmd === 'add-dev') {
+    const template = JSON.parse(fs.readFileSync(args[0], 'utf8'));
+    const raw = fs.readFileSync(args[1], 'utf8');
+    let target;
+    try {
+      target = JSON.parse(raw);
+    } catch (e) {
+      process.stderr.write(`package.json does not parse: ${e.message}\n`);
+      return BLOCKED;
+    }
+    const r = addDevDependency(template, target, args[2]);
+    if (r.error) {
+      process.stderr.write(r.error + '\n');
+      return BLOCKED;
+    }
+    if (r.changes.length) fs.writeFileSync(args[1], serialize(r.pkg, raw));
+    process.stdout.write(JSON.stringify({ changes: r.changes }) + '\n');
+    return 0;
+  }
   process.stderr.write(
-    'usage: fleet-overrides-sync.js detect <file> | merge <template> <target>\n',
+    'usage: fleet-overrides-sync.js detect <file> | merge <template> <target> | add-dev <template> <target> <name>\n',
   );
   return 1;
 }
 
-module.exports = { detectTemplate, mergePackage, serialize, TEMPLATE_MARKERS, FLOOR_DEPS };
+module.exports = {
+  detectTemplate,
+  mergePackage,
+  addDevDependency,
+  serialize,
+  TEMPLATE_MARKERS,
+  FLOOR_DEPS,
+  TEST_DEPS,
+};
 
 if (require.main === module) {
   process.exitCode = main(process.argv.slice(2));

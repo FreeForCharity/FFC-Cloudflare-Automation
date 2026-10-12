@@ -221,6 +221,18 @@ jobs:
                 build='pass (template types added)'
               fi
             fi
+            # A template test synced in without its devDependency (the first dry
+            # run, #1640). Only this exact TS2307, and only allowlisted packages.
+            extra='[]'
+            if [ "$build" = fail ] && grep -q "Cannot find module '@jest/globals'" build.log; then
+              if added="$(node scripts/fleet-overrides-sync.js add-dev "templates/${kind}/package.json" site/package.json @jest/globals)" &&
+                (cd site && corepack pnpm install --no-frozen-lockfile > ../install.log 2>&1); then
+                extra="$(printf '%s' "$added" | jq -c '.changes')"
+                if (cd site && corepack pnpm run build > ../build.log 2>&1); then
+                  if [ "$copied" -eq 1 ]; then build='pass (template types and test dependency added)'; else build='pass (template test dependency added)'; fi
+                fi
+              fi
+            fi
             if [ "$build" = fail ]; then tail -40 build.log; fi
 
             # This change owns three kinds of path. Anything else changed means
@@ -236,6 +248,7 @@ jobs:
             if [ "$audit" = pass ] && [ "$build" != fail ]; then
               git -C site diff --cached --binary > "out/patches/${name}.patch"
               printf '%s' "$merged" | jq -r '.changes[]' > "out/patches/${name}.changes.txt"
+              printf '%s' "$extra" | jq -r '.[]' >> "out/patches/${name}.changes.txt"
               record "$name" "$kind" ready "$audit" "$build" "$nchanges" ''
             else
               record "$name" "$kind" blocked "$audit" "$build" "$nchanges" 'audit or build still fails after the change'
@@ -425,7 +438,7 @@ jobs:
               echo ''
               echo '**Changes**'
               sed 's/^/- /' "out/patches/${name}.changes.txt"
-              if [ "$build" != pass ]; then echo "- template \`types/*.d.ts\` added: the build failed without them (Next 16.3 type-checks the tests)"; fi
+              if [[ "$build" == *types* ]]; then echo "- template \`types/*.d.ts\` added: the build failed without them (Next 16.3 type-checks the tests)"; fi
               echo "- \`pnpm-lock.yaml\` regenerated with the pinned pnpm"
               echo ''
               echo '## Test plan'

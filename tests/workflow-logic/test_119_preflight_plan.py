@@ -303,13 +303,18 @@ def test_empty_dry_run_mapping_fails_closed_with_no_plan():
 
 def test_empty_resolved_domain_list_fails_closed_with_no_plan():
     # AC5. Reachable if the default list is ever emptied: `domains` is
-    # `required: false` with a blank default, so a blank box is the common
-    # path and cannot itself refuse. A plan naming zero zones tells an
-    # approver nothing while looking like a clean preflight.
-    proc, summary = run_preflight({"IN_DOMAINS": "   ", "DEFAULTS_EMPTY": "1"})
-    # The body's own default fills a blank input, so emptiness has to be forced
-    # through the default itself; assert the guard exists and is reached by
-    # running the body with the default removed.
+    # `required: false` with a blank default (unlike `target`), so a blank box
+    # IS the common path there and cannot itself refuse — the body substitutes
+    # the 13-domain default. A plan naming zero zones tells an approver nothing
+    # while looking like a clean preflight.
+    #
+    # So the empty list cannot be produced through the inputs at all; it has to
+    # be forced by removing the default from the body. There is deliberately no
+    # `run_preflight(...)` call here: an earlier draft opened with one passing a
+    # `DEFAULTS_EMPTY` override, which was dead twice over — its `proc` and
+    # `summary` were overwritten before use, and no `DEFAULTS_EMPTY` is read by
+    # the body, so it implied a refusal trigger that does not exist. Caught by
+    # review; the mutation below is the whole mechanism.
     body = step_run(WORKFLOW, PREFLIGHT_JOB, "approval plan")
     emptied = re.sub(r'default_domains="[^"]+"', 'default_domains=""', body)
     assert 'default_domains=""' in emptied, "could not empty the default list for this test"

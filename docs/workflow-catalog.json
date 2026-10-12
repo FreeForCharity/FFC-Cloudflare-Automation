@@ -642,10 +642,10 @@
       "environments": [
         "whmcs-prod"
       ],
-      "description": "Manually open a WHMCS support ticket (new request or break/fix logging). Defaults to dry-run (no ticket created).",
+      "description": "Manually open a WHMCS support ticket (new request or break/fix logging). Defaults to dry-run (no ticket created).  Optional `template` (charity-lane #1618, G3.5): open a client ticket whose subject and body come from config/whmcs-ticket-templates.json instead of the `subject` / `message` inputs, which must then be left blank. Only a client-visible template that carries a `subject` can open a ticket (today: `preview_ready`); `extra_message` is appended to the body (the preview URL). With `template` blank the `Resolve ticket template` step is skipped and the `Open ticket` step receives the dispatched subject and message exactly as before.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 whmcs-prod",
-      "guard": "one-way GitHub\u2192WHMCS",
+      "guard": "one-way GitHub\u2192WHMCS; optional `template` opens a client ticket from a client-visible template that carries a `subject` in config/whmcs-ticket-templates.json (e.g. `preview_ready`), resolved before the credential is minted; `subject`/`message` must be blank with a template",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1180,6 +1180,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 232,
+      "title": "WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "232-whmcs-charity-lane-verdicts.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3)) and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE, with machine-readable reason codes, from the machine-checkable subset of the ffcadmin inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33: a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain, and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE. FraudLabs Pro is readable only through 228's own environment, so every row reports fraud_check: not_run. It accepts nothing and writes nothing to WHMCS.  Output is PII-free (this repo is public): order id, client id, pid, gate, org name, desired domain, verdict, reason codes, readiness score. Job summary table + the charity-lane-verdicts.json artifact; optionally the same table as a comment on `issue_number` (the 219 pattern).  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "read-only verdicts (`ACCEPT` / `NEED_INFO` / `ESCALATE` + reason codes) for Pending pid 16/33/40 orders; accepts nothing; PII-free output (ids, org name, desired domain, verdict, codes, readiness); public GETs to ProPublica and the org Facebook/LinkedIn pages; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [
@@ -1672,6 +1692,26 @@
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 github-prod on the `deliver` job ONLY",
       "guard": "`resolve` and `convert` are ungated and read-only; `mode=convert` default performs the whole conversion \u2014 capture, integrate, Next.js build, self-containment gate \u2014 and writes nothing, so it needs no approval; only `deliver` is gated and only `deliver` writes. `target_repo` is a required, separately-validated bare repo name (never derived from `domain`), so a capture of one site cannot be delivered to a repo nobody named. Forms are replaced with a `mailto:` block before the artifact is made, and `deliver` re-checks for a surviving `<form>` before committing \u2014 a static export has no form backend, so a surviving form would accept a visitor's message and drop it. `deliver` consumes the artifact the gate passed rather than re-capturing, so the charity's server is read once. Offline `--self-test` of every script the workflow runs gates every live request.",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 707,
+      "title": "Website - Content Apply (FFC-EX PR)",
+      "apis": [
+        "GH"
+      ],
+      "file": "707-website-content-apply.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Delivers a charity's site content, written by a cloud worker agent, into its FFC-EX-<domain> repo as a pull request (charity-lane epic #1618, step G3.3).  WHY A HUB WORKFLOW. A cloud session can only reach the repos attached when it started, and a charity's FFC-EX repo is usually created (by 701) after the worker's session began. So the worker cannot push there; it hands the content to this workflow as data, and the hub is the only writer.  WHAT BOUNDS THE WRITE. scripts/website-content-apply-guard.ps1 with the path allowlist in config/website-content-apply-paths.json: lowercase FFC-EX-* repos only, site.config.ts and the templates' src/data/ files only, never .github/, workflows, CNAME, package manifests, lockfiles, binaries, `..` or absolute paths, and at most 60 KB. Both jobs run the same validation function, so the files `apply` writes are the files `validate` printed.  SAFETY. `validate` holds no credential and no environment: it parses and checks everything, then rehearses the write against an anonymous clone of the (public) target and prints the plan. `apply` is the only job that writes, the only one behind the github-prod gate, and it is skipped on a dry run. It opens a PR and never pushes the default branch. Auto-merge is enabled only when the target repo allows it AND its default branch requires a status check, because on a branch with no required check auto-merge means \"merge now\", before the site's CI has reported (Get-ContentApplyAutoMergePlan).",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod on the `apply` job ONLY",
+      "guard": "`dry_run` (default true); `validate` is ungated and credential-free: it runs scripts/website-content-apply-guard.ps1 (lowercase `FFC-EX-*` repo that exists and is not archived; only paths on the allowlist in config/website-content-apply-paths.json, i.e. `src/lib/site.config.ts` and the templates' `src/data/` files; never `.github/`, workflows, CNAME, package manifests, lockfiles, binaries, dotfiles, `..` or absolute paths; 60 KB payload cap; duplicate keys, invalid JSON and code-execution constructs in `.ts` refused) and rehearses the write against an anonymous sparse clone, printing the plan; `apply` re-runs the same validation, opens a PR from `content/<run_id>` (never pushes the default branch) and enables auto-merge only when the repo allows it AND the default branch requires a status check; otherwise (`land_when_green`, default true) it waits up to `land_wait_minutes` for the site CI on the exact pushed commit and merges via REST pinned to that sha only if at least one check ran and every check passed, else leaves the PR open with the reason (never `--admin`, never retried another way, rulesets honored); skipped when nothing would change; serialized per target repo",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

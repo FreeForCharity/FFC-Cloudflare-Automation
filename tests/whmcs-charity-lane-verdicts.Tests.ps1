@@ -186,6 +186,16 @@ Describe 'Get-LaneOrgName' {
         $r.Status | Should -Be 'applicant'
         $r.Name | Should -Be ''
     }
+    It "treats an org name made only of the applicant's own name words as the applicant" {
+        (Get-LaneOrgName -CompanyName 'James' -ApplicantFullName 'James Smith' -Fields @()).Status | Should -Be 'applicant'
+        (Get-LaneOrgName -CompanyName 'Smith, James' -ApplicantFullName 'James Smith' -Fields @()).Status | Should -Be 'applicant'
+        (Get-LaneOrgName -CompanyName 'James' -ApplicantFullName 'James Smith' -Fields @()).Name | Should -Be ''
+    }
+    It 'keeps a real org name that merely shares a word with the applicant' {
+        $r = Get-LaneOrgName -CompanyName 'James Smith Foundation' -ApplicantFullName 'James Smith' -Fields @()
+        $r.Status | Should -Not -Be 'applicant'
+        (Get-LaneOrgName -CompanyName 'Hope House' -ApplicantFullName 'Hope Jones' -Fields @()).Status | Should -Be 'ok'
+    }
     It 'withholds a person-like or contact-bearing name' {
         (Get-LaneOrgName -CompanyName 'JOHN SMITH' -ApplicantFullName 'Jane Doe' -Fields @()).Status | Should -Be 'withheld'
         (Get-LaneOrgName -CompanyName 'Call 555 123 4567 Relief' -ApplicantFullName '' -Fields @()).Status | Should -Be 'withheld'

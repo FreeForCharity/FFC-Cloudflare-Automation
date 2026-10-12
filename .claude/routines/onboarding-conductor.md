@@ -136,10 +136,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      (`.claude/routines/site-builder.md` step 5). No such comment for the current preview yet: leave
      the item for the next run. A FAIL row sets the label back to `lane:build-ready` (remove
      `lane:validate`) with the failing rows; WARN rows are reported, not blocking.
-   - Your check and every Gate 3 machine row pass: run rule `205-templated` with
-     `template=preview_ready`, the `client_id`, and the preview URL as `extra_message`; set the
-     label to `lane:charity-review` (remove `lane:validate`). A failure sets it back to
-     `lane:build-ready` (remove `lane:validate`) with the reason.
+   - Your check and every Gate 3 machine row pass [`extra_message` on rule `205-templated`, #1632]:
+     run rule `205-templated` with `template=preview_ready`, the `client_id`, and the preview URL as
+     `extra_message`; set the label to `lane:charity-review` (remove `lane:validate`). A failure
+     sets it back to `lane:build-ready` (remove `lane:validate`) with the reason.
    - Items in `lane:charity-review`: classify the charity's reply with workflow `233` [ticket-reply
      classifier] (`client_id`, `subject_prefix=[Website Preview]`, `issue_number` = the hub item).
      `APPROVED`: set `lane:gate3-done` (remove `lane:charity-review`); the charity may now order its

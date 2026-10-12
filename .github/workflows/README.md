@@ -586,6 +586,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 | 231 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `231-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 234 | WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS] | `234-whmcs-charity-lane-site-fields.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

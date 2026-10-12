@@ -1200,6 +1200,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 234,
+      "title": "WHMCS - Charity-Lane Site Content Fields (public, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "234-whmcs-charity-lane-site-fields.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G3.3c of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Emits ONE charity's public website fields for the Cloud Worker that builds its site (.claude/routines/site-builder.md): the footer email / phone / city & state, mission, tagline, descriptions, programs, brand color, logo, social, donation and volunteer URLs, founding year, alternate names, EIN, Candid URL and template choice. The applicant gave these FOR PUBLICATION on the website, so they are printed in full; 219 masks contact data and is the wrong source for them.  The allowlist is config/charity-lane-site-fields.json: only its fields can appear, each cleaned (HTML, control characters) and validated by type. Never emitted: the mailing address, the client record's own name / email / phone, board / officer / team / contact fields, or anything else not listed. A value that fails validation is reported by reason code only, never printed. Source per field: the Custom Client Field, then the matching product answer on the client's pid 16/33/40 services.  Output: charity-lane-site-fields.json artifact, the same JSON in the job log and job summary, and the list of missing fields (the worker marks them `pending`); optionally a comment on `issue_number` carrying `<!-- charity-lane:site-fields -->`.  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. WHMCS actions: GetClientsDetails and GetClientsProducts only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "one client's PUBLIC website fields for the site builder (G3.3c); prints values in full by design, but only the allowlist in `config/charity-lane-site-fields.json` (footer email/phone/city & state, mission, tagline, descriptions, programs, brand color, logo/social/donation/volunteer URLs, founding year, alternate names, EIN, Candid URL, template choice), each HTML/control-stripped, length-capped and type-validated; the loader refuses any address/contact/board/team field; never the mailing address or the client record's own name/email/phone; a rejected value is reported by reason code only; WHMCS actions GetClientsDetails + GetClientsProducts only; `client_id` / `issue_number` digits-only, validated before the credential step; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

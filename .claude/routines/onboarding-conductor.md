@@ -54,7 +54,9 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
 1. **Verdicts** [workflow 232]. Dispatch `232-whmcs-charity-lane-verdicts.yml` (ungated), wait for
    it, and read the verdict table from the log of its final job (see "Reading results"). You get one
    row per Pending pid 16/33/40 order: ACCEPT, NEED_INFO or ESCALATE with reason codes. Act only on
-   rows whose fraud screening ran; an unscreened row is never an ACCEPT.
+   rows whose fraud screening ran (the `finalize` job's table, or the `charity-lane-verdicts`
+   artifact). Never act on the `charity-lane-verdicts-unscreened` report, and if `finalize` did not
+   run, treat every order as ESCALATE.
 2. **Gate 1/2 decisions.** At most 3 accepts per run (testing period).
    - **ACCEPT, pid 16/33:**
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.

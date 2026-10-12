@@ -27,8 +27,8 @@ the charity's public contact.
   link.
 - The work order carries the **generated site.config partial** (ffcadmin's footer bridge) or its gap
   list, plus the structured intake fields. Prefer it over anything else. A gap list means the
-  application is incomplete: comment the gaps on the hub item, relabel `lane:build-ready` with
-  `lane:needs-info`, and stop. The conductor sends the `need_info` ticket.
+  application is incomplete: comment the gaps on the hub item, relabel it `lane:needs-info` (remove
+  `lane:building`), and stop. The conductor sends the `need_info` ticket.
 - If the partial is missing, dispatch `219` with the client id and `issue_number=<hub item>` through
   REST and read its comment. Never guess a value; an unknown field is listed as pending.
 
@@ -44,7 +44,8 @@ the charity's public contact.
    copy drawn from the application's own words; tighten, do not invent facts). Leave
    `src/data/events.generated.json` alone.
 4. Prove it builds: in the scratch clone run `npm ci`, `npm run build` and `npm run check:drift`. A
-   failure you cannot fix is a comment on the hub item and `lane:build-ready` again.
+   failure you cannot fix: comment it on the hub item, set the label back to `lane:build-ready`
+   (remove `lane:building`), and stop.
 
 ## 4. Hand off
 

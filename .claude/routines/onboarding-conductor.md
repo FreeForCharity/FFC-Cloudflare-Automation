@@ -73,8 +73,9 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - comment the content PR link on the hub item. If 707 left the PR open (FFC-EX repos have no
      auto-merge yet, epic item G3.3b), list it as `DECISION NEEDED: merge content PR <url>`.
    - once the content PR has merged and the site answers HTTP 200 at
-     `https://freeforcharity.github.io/FFC-EX-<domain>/`, relabel `lane:validate`. A failure
-     relabels `lane:build-ready` with the reason; a second failure is `DECISION NEEDED`.
+     `https://freeforcharity.github.io/FFC-EX-<domain>/`, set the label to `lane:validate` (remove
+     `lane:built`). On a failure, comment the reason and set the label back to `lane:build-ready`
+     (remove `lane:built`); a second failure is `DECISION NEEDED`.
 
    Items labelled `lane:needs-info` get the `need_info` ticket (step 2) and go back to
    `lane:build-ready` after the charity's data changes.

@@ -194,6 +194,12 @@ def test_land_routes_through_the_merge_queue_when_the_branch_requires_it():
     assert verdict < route < unknown < queue < enqueue < direct
     assert "mergeQueueEntry" in body, "an accepted enqueue is confirmed by a queue entry"
     assert "UNMERGEABLE" not in body, "a failed queue entry is not counted as enqueued"
+    # The rules endpoint pages at 30: read them all, or a merge_queue rule on a
+    # later page would route to the refused direct merge.
+    assert 'rules/branches/$($pull.base.ref)?per_page=100' in body
+    # The queue entry lags a good enqueue: re-poll before calling it missing.
+    assert "for ($attempt = 1; $attempt -le 6 -and -not $live; $attempt++)" in body
+    assert body.index("for ($attempt = 1") < body.index("if ($live) { $result = \"enqueued")
 
 
 # --------------------------------------------------------------------------

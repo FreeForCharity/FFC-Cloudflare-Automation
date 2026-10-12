@@ -205,12 +205,38 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
        While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
        has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
        that has started (Gemini, Codex, Claude) must also have finished.
+    - **An error body is TERMINAL. Report it and move on — do not try to recover it.** Measured on
+      the same cohort in run 259, after runs 257 and 258 each spent a step on it. Once Copilot posts
+      an error body it is dropped from `requested_reviewers`, and all three things that look like
+      remedies are dead:
+      - **a fresh push does nothing.** #1589 carried an empty chore commit (`b8b480c1`) pushed at
+        07:49:28Z purely to re-trigger. **No `copilot-pull-request-reviewer` check run was created
+        at all** — not queued, not failed, absent. Still absent 5h33m later.
+      - **re-requesting does nothing.** `POST .../pulls/<n>/requested_reviewers` naming the bot
+        returns **HTTP 200 with no effect**: `requested_reviewers` is still `[]` on re-read. It can
+        also return 422. Both are silent in the sense that matters — neither reads as "refused".
+      - **promoting out of draft does nothing.** #1645 was promoted in run 258; its error body was
+        still the only review on head 5h18m later.
+
+      So the 60-minute rule above is the whole of it: past that, the PR is **blocked on a human**,
+      and a run that pushes, re-requests or promotes is burning a step on a known dead end. Do not
+      read an error body as an outage. Copilot stays healthy throughout — during the 5h in which 17
+      hub PRs sat error-bodied it posted real reviews on others at 09:17, 10:16, 10:59, 12:17, 12:33
+      and 13:01Z. PRs created _after_ the triggering event review normally; only the ones caught
+      _in_ it are stuck, which is why "is Copilot up?" is the wrong question and "does this head
+      have a `<!-- ccr-overview-v2 -->` review?" is the right one.
+
+      The cohort is created by load: all 17 were stamped inside run 257's 22-minute `update-branch`
+      sweep. #1645 caps that batch size for exactly this reason, and
+      `scripts/audit-open-pr-readiness.py` cannot currently see this condition at all (#1648), so
+      its `ok` bucket overstates the landable set by however many PRs are error-bodied.
     3. **No open question.** Every review thread is answered and resolved. Nothing in a review, a
        comment or the PR body asks for a decision that has not been made.
     4. **Coverage matches the change.** New or changed behaviour has a test that would fail without
        it, and that test runs in CI. A documentation-only PR needs only the repository's existing
        checks. A behaviour change with no covering test is not ready: add the test, or say why it
        cannot have one and leave the PR for Clarke.
+
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
@@ -229,6 +255,7 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.
+
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).

@@ -85,12 +85,13 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      already exists: link the hub item to it, do not provision a second repo, and continue that
      charity's existing thread instead. `POSSIBLE_MATCH` is a `DECISION NEEDED` with the matches
      listed.
-   - **No desired domain** (every pid 33 application): run a web search with the query 750 prints
-     (IRS name, city and state from the EIN). If the charity has its own site, record the domain on
-     the hub item and re-run 750 with it; that charity has an **existing live site**, so it follows
-     the ready-for-cutover path in step 7, never the brand-new-domain path. If nothing is found,
-     send the `onboarding_need_info` ticket asking for the desired domain and label the item
-     `lane:needs-info`.
+   - **No desired domain** (pid 33 applications from before 2026-10-14, or a newer one that left the
+     optional "Your website domain" answer blank; 232 reads it as `desired_domain`): run a web
+     search with the query 750 prints (IRS name, city and state from the EIN). If the charity has
+     its own site, record the domain on the hub item and re-run 750 with it; that charity has an
+     **existing live site**, so it follows the ready-for-cutover path in step 7, never the
+     brand-new-domain path. If nothing is found, send the `onboarding_need_info` ticket asking for
+     the desired domain and label the item `lane:needs-info`.
    - Backlog: the newest `BACKLOG:` lines the Cloud Worker posted on #1608 are approved charities
      with a work order but no lane item (its client id is in the line). Treat each like an accepted
      order here (750 first; an existing repo means an in-flight item at `lane:validate`), at most 3

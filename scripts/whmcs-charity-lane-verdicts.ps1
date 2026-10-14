@@ -222,7 +222,8 @@ $script:LaneFieldPatterns = @{
     LinkedInFallback = '^(?!.*(president|vice|secretary|treasurer|board|chair|member|primary|technical|personal|your own)).*linkedin'
     # 'I certify our organization is legally established and operating in the United States'
     UsAttest         = 'legally established|operating in the united states|based in the (us|united states)|(?=.*(certify|attest))(?=.*(united states|\bu\.?s\.?\b))'
-    # 'What is your current/desired domain name?' (pid 16). pid 33 has no domain question.
+    # 'What is your current/desired domain name?' (pid 16), and since 2026-10-14 pid 33's optional
+    # 'desired-domain|Your website domain (your current site, or the domain you want)'.
     DesiredDomain    = '(desired|requested|current).*domain|domain.*(desired|requested)'
     # pid 40 Gate-2 proof fields (#671): the approved-application reference and
     # the "fully approved" checkbox. The reference pattern excludes the checkbox

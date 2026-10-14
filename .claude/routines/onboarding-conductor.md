@@ -103,12 +103,34 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      FFC-IN-ffcadmin.org): put any such link on the item. The Cloud Worker confirms it by the
      `ffc-<client id>` marker. The Cloud Worker picks these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
-   `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
-   `dry_run=false`, the org name, and the public footer fields from workflow `234` [site-content
-   fields] (`client_id`, `issue_number` = the hub item; public by design, allowlisted). If step 3
-   found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports live, add
-   `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL and DNS is
-   never touched. Comment the result on the hub item.
+   `FFC-EX-<domain>` repo yet, run workflow `234` [site-content fields] (`client_id`, `issue_number`
+   = the hub item; public by design, allowlisted) and then
+   `charity_lane_gate.py run --rule 701-provision` with `domain`, `dry_run=false` and, from 234's
+   fields (omit any input whose field is absent):
+   - `charity_name` = `charityName` (the application's legal-name answer), else the org name 232
+     reported;
+   - `technical_poc_github_username` = `maintainerGithub`: 701 grants that account maintainer access
+     to the new repo (729). Absent: post `DECISION NEEDED: no maintainer GitHub user for <domain>`
+     and provision anyway;
+   - `irs_status` = `501(c)(3) (approved)` for pid 33, `Not yet / pending (pre-501(c)(3))` for pid
+     16;
+   - `website_situation` from `domainOwnership` and the live-site check: a live site on a Wix or
+     Squarespace domain =
+     `New charity domain name but existing charity site (Wix / Squarespace / etc)`; any other live
+     site = `Existing domain name and existing website (WordPress / formal hosting)`; no live site =
+     `New charity domain name and new charity website`;
+   - `domain_registrar`: map `domainRegistrar` onto the policy enum (GoDaddy, Wix, Squarespace, else
+     `Other / another registrar`); `No domain yet` when they do not own it; `Unknown / not sure`
+     when blank;
+   - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
+     `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
+     `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
+     `leadership_lines` = `leadershipLines`.
+
+   If step 3 found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports
+   live, add `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL
+   and DNS is never touched. Comment the result on the hub item.
+
 5. **Deliver and check worker output** [workflow 707; policy rule `707-content-apply`]. The Cloud
    Worker builds content per `.claude/routines/site-builder.md` and labels the item `lane:built`.
    For each `lane:built` item (one per run):

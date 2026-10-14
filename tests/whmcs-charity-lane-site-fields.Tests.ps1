@@ -69,7 +69,8 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
         foreach ($k in 'publicEmail', 'publicPhone', 'footerLocation', 'mission', 'tagline', 'siteDescription',
             'siteShortDescription', 'program1Title', 'program1Description', 'brandColor', 'logoUrl', 'facebookUrl',
             'linkedinUrl', 'instagramUrl', 'xUrl', 'youtubeUrl', 'donationUrl', 'volunteerUrl', 'foundingYear',
-            'alternateNames', 'ein', 'candidProfileUrl', 'templateChoice') {
+            'alternateNames', 'ein', 'candidProfileUrl', 'templateChoice', 'charityName', 'maintainerGithub',
+            'domainOwnership', 'domainRegistrar', 'seoKeywords', 'leadershipLines') {
             $keys | Should -Contain $k
         }
         $script:Config.productIds | Should -Be @(16, 33, 40)
@@ -378,6 +379,32 @@ Describe 'Validators' {
             (Test-SiteFieldValue -Value 'Single Page' -Field (Get-Field 'templateChoice')).value | Should -Be 'Single Page'
             (Test-SiteFieldValue -Value 'Single Page {{x}}' -Field (Get-Field 'templateChoice')).reason | Should -Be 'not_a_choice'
             (Test-SiteFieldValue -Value ('x' * 61) -Field (Get-Field 'templateChoice')).reason | Should -Be 'too_long'
+        }
+        It 'maintainer GitHub user: bare, @-prefixed or profile URL; anything else refused' {
+            $f = Get-Field 'maintainerGithub'
+            (Test-SiteFieldValue -Value 'jane-doe' -Field $f).value | Should -Be 'jane-doe'
+            (Test-SiteFieldValue -Value '@jane-doe' -Field $f).value | Should -Be 'jane-doe'
+            (Test-SiteFieldValue -Value 'https://github.com/jane-doe/' -Field $f).value | Should -Be 'jane-doe'
+            (Test-SiteFieldValue -Value 'jane doe' -Field $f).reason | Should -Be 'not_a_github_user'
+            (Test-SiteFieldValue -Value 'jane@example.org' -Field $f).reason | Should -Be 'not_a_github_user'
+            (Test-SiteFieldValue -Value '-jane' -Field $f).reason | Should -Be 'not_a_github_user'
+            (Test-SiteFieldValue -Value ('a' * 40) -Field $f).reason | Should -Be 'not_a_github_user'
+        }
+        It 'domain ownership: the dropdown answers pass as a choice' {
+            $f = Get-Field 'domainOwnership'
+            (Test-SiteFieldValue -Value 'Yes - and it has a live website' -Field $f).value | Should -Be 'Yes - and it has a live website'
+            (Test-SiteFieldValue -Value 'No - please register it for us' -Field $f).value | Should -Be 'No - please register it for us'
+            (Test-SiteFieldValue -Value 'Yes' -Field $f).value | Should -Be 'Yes'
+        }
+        It 'SEO keywords: split on commas and capped' {
+            $r = Test-SiteFieldValue -Value 'food pantry, seniors, Raleigh, food pantry' -Field (Get-Field 'seoKeywords')
+            $r.value | Should -Be @('food pantry', 'seniors', 'Raleigh')
+        }
+        It 'leadership lines: kept as text, embedded contact details redacted' {
+            $r = Test-SiteFieldValue -Value "Jane Doe - Board President`nSam Roe - Treasurer, sam@example.org" -Field (Get-Field 'leadershipLines')
+            $r.value | Should -Match 'Jane Doe - Board President'
+            $r.value | Should -Not -Match 'sam@example.org'
+            $r.redacted | Should -BeTrue
         }
         It 'alternate names: split, de-duplicated, capped, contact-looking entries dropped' {
             $r = Test-SiteFieldValue -Value 'BFF; Bright Future, BFF, jane@gmail.com, A, B, C, D, E' -Field (Get-Field 'alternateNames')

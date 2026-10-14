@@ -64,7 +64,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:SiteFieldsMarker = '<!-- charity-lane:site-fields -->'
-$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice')
+$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice', 'githubUser')
 
 # --- pure, testable helpers (dot-source stops below) -----------------------
 
@@ -268,6 +268,13 @@ function Test-SiteFieldValue {
             $y = [int]$clean
             if ($y -lt 1700 -or $y -gt ((Get-Date).ToUniversalTime().Year)) { return @{ ok = $false; reason = 'year_out_of_range' } }
             return @{ ok = $true; value = $clean }
+        }
+        'githubUser' {
+            # A GitHub username (public by design): the site's maintainer, granted
+            # access by 701/729. Accepts 'name', '@name' or a github.com profile URL.
+            $u = $clean -replace '^(?i)https?://(www\.)?github\.com/', '' -replace '^@', '' -replace '/+$', ''
+            if ($u -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$') { return @{ ok = $false; reason = 'not_a_github_user' } }
+            return @{ ok = $true; value = $u }
         }
         'ein' {
             if ($clean -notmatch '^(\d{2})-?(\d{7})$') { return @{ ok = $false; reason = 'not_an_ein' } }

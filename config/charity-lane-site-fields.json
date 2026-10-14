@@ -269,6 +269,12 @@
       "type": "text",
       "maxLength": 1000,
       "multiline": true
+    },
+    {
+      "key": "currentWebsiteUrl",
+      "productFields": ["current-site-url"],
+      "type": "url",
+      "maxLength": 300
     }
   ]
 }

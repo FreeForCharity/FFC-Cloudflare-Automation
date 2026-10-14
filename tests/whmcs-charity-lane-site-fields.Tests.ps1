@@ -70,7 +70,7 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
             'siteShortDescription', 'program1Title', 'program1Description', 'brandColor', 'logoUrl', 'facebookUrl',
             'linkedinUrl', 'instagramUrl', 'xUrl', 'youtubeUrl', 'donationUrl', 'volunteerUrl', 'foundingYear',
             'alternateNames', 'ein', 'candidProfileUrl', 'templateChoice', 'charityName', 'maintainerGithub',
-            'domainOwnership', 'domainRegistrar', 'seoKeywords', 'leadershipLines') {
+            'domainOwnership', 'domainRegistrar', 'seoKeywords', 'leadershipLines', 'currentWebsiteUrl') {
             $keys | Should -Contain $k
         }
         $script:Config.productIds | Should -Be @(16, 33, 40)
@@ -395,6 +395,10 @@ Describe 'Validators' {
             (Test-SiteFieldValue -Value 'Yes - and it has a live website' -Field $f).value | Should -Be 'Yes - and it has a live website'
             (Test-SiteFieldValue -Value 'No - please register it for us' -Field $f).value | Should -Be 'No - please register it for us'
             (Test-SiteFieldValue -Value 'Yes' -Field $f).value | Should -Be 'Yes'
+        }
+        It 'current website: a free-host page without its own domain is accepted' {
+            (Test-SiteFieldValue -Value 'https://hope-pantry.my.canva.site/' -Field (Get-Field 'currentWebsiteUrl')).ok | Should -BeTrue
+            (Test-SiteFieldValue -Value 'https://brand.page/hopepantry' -Field (Get-Field 'currentWebsiteUrl')).ok | Should -BeTrue
         }
         It 'SEO keywords: split on commas and capped' {
             $r = Test-SiteFieldValue -Value 'food pantry, seniors, Raleigh, food pantry' -Field (Get-Field 'seoKeywords')

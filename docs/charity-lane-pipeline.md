@@ -114,11 +114,11 @@ marker orders from `224` need no gate.
 1. **Queue:** for each accepted charity the conductor keeps exactly one hub issue titled
    `[CHARITY-LANE] <domain or org>` labelled `charity-lane` and `lane:build-ready`, linking the
    ffcadmin work order. Labels move it through `lane:building`, `lane:built` and `lane:validate`.
-2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. pid 33 has no domain
-   question, so the conductor first searches for an existing site (750's EIN-based query, then a web
-   search) and otherwise sends an `onboarding_need_info` ticket asking for the domain; it never
-   guesses. A charity found to have its own live site is provisioned with 701 `skip_dns=true` and
-   follows the ready-for-cutover path.
+2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. Since 2026-10-14 pid 33
+   asks it (optional `desired-domain`, "Your website domain"); when it is blank the conductor first
+   searches for an existing site (750's EIN-based query, then a web search) and otherwise sends an
+   `onboarding_need_info` ticket asking for the domain; it never guesses. A charity found to have
+   its own live site is provisioned with 701 `skip_dns=true` and follows the ready-for-cutover path.
 3. **Provision:** `701. Website - Provision` with `dry_run=false` through the gate script (rule
    `701-provision`). A charity at this gate has no FFC zone yet, so 701 publishes on
    `https://freeforcharity.github.io/FFC-EX-<domain>/` and skips DNS.

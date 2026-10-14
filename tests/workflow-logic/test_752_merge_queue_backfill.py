@@ -39,7 +39,7 @@ if "/rules/branches/" in path:
         sys.exit(1)
     print(sum(1 for t in r.get("rules", []) if t == "merge_queue"))
 else:
-    print("\t".join([r["visibility"], str(r["archived"]).lower(), str(r["merge_commit"]).lower(), r["branch"]]))
+    print("|".join([r["visibility"], str(r["archived"]).lower(), "null" if r["merge_commit"] is None else str(r["merge_commit"]).lower(), r["branch"]]))
 '''
 
 FAKE_JQ = r'''
@@ -158,6 +158,23 @@ def test_blocked_cases_are_reported_not_applied():
     assert "752-plan: FFC-EX-old.org blocked - archived" in out
     assert "752-plan: FFC-EX-squash.org blocked - merge commits are disabled" in out
     assert "752-plan: FFC-EX-unread.org blocked - could not read the rules on main" in out
+
+
+def test_a_merge_commit_setting_the_job_token_cannot_see_is_not_blocked():
+    # GitHub omits allow_merge_commit for callers without push/admin, so gh --jq
+    # renders it as null. The first live run blocked all ten repos on this.
+    rc, out, ready, _, _ = run_plan("FFC-EX-hidden.org", {"FFC-EX-hidden.org": repo(merge_commit=None)})
+    assert rc == 0, out
+    assert json.loads(ready) == [{"repo": "FFC-EX-hidden.org", "branch": "main"}]
+    assert "752-plan: FFC-EX-hidden.org ready - no merge queue on main; merge-commit setting not visible" in out
+
+
+def test_apply_rechecks_merge_commits_with_the_pat_before_creating():
+    run = find_step(_wf(), "apply", "Create the merge queue ruleset")["run"]
+    check = run.index("--jq '.allow_merge_commit'")
+    create = run.index('gh api -X POST "repos/${ORG}/${r}/rulesets"')
+    assert check < create
+    assert 'if [ "$mc" != "true" ]' in run
 
 
 def test_a_missing_repo_is_blocked_and_the_rest_still_plan():

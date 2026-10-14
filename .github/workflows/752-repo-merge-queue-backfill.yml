@@ -17,8 +17,9 @@ run-name: 'Merge Queue Backfill (dry_run=${{ inputs.dry_run }}, repos=${{ inputs
 #
 # Two jobs, the 742/751 shape:
 #   - plan  - ungated, job token, read-only. Per repo: public, not archived,
-#             merge commits allowed (merge_method MERGE needs them), and no
-#             merge_queue rule on the default branch yet. Prints one
+#             merge commits not disabled (merge_method MERGE needs them; the
+#             job token usually cannot see the setting, so apply re-checks
+#             it), and no merge_queue rule on the default branch yet. Prints one
 #             `752-plan: <repo> <status> - <reason>` line each to the log.
 #   - apply - only when dry_run=false, on `github-prod` (Clarke approves the
 #             plan). Creates the ruleset on each ready repo, then re-reads the
@@ -91,26 +92,35 @@ jobs:
               echo "::error::'$r' is not an FFC-EX repo name"
               exit 1
             fi
-            if ! info="$(gh api "repos/${ORG}/${r}" --jq '[.visibility, .archived, .allow_merge_commit, .default_branch] | @tsv')"; then
+            if ! info="$(gh api "repos/${ORG}/${r}" --jq '"\(.visibility)|\(.archived)|\(.allow_merge_commit)|\(.default_branch)"')"; then
               result "$r" blocked 'repo not found or not readable'
               continue
             fi
-            IFS=$'\t' read -r visibility archived merge_commit branch <<< "$info"
+            # '|', not a tab: IFS whitespace merges empty fields and shifts the columns.
+            IFS='|' read -r visibility archived merge_commit branch <<< "$info"
             if [ "$archived" = "true" ]; then result "$r" blocked 'archived'; continue; fi
             if [ "$visibility" != "public" ]; then
               result "$r" blocked "visibility is ${visibility}: the merge queue is available on public repos only on this plan"
               continue
             fi
-            if [ "$merge_commit" != "true" ]; then
+            # GitHub returns allow_merge_commit only to callers with push or admin
+            # on the repo. This job token has neither on FFC-EX repos, so the field
+            # is usually absent ("null" here): that is "unknown", not "disabled", and
+            # the apply job re-checks it with the PAT before writing. First run
+            # (2026-10-13) called all ten repos blocked on this.
+            note=''
+            if [ "$merge_commit" = "false" ]; then
               result "$r" blocked 'merge commits are disabled, and the ruleset merges with merge_method MERGE'
               continue
+            elif [ "$merge_commit" != "true" ]; then
+              note='; merge-commit setting not visible to the job token, apply re-checks it'
             fi
             if ! has="$(gh api "repos/${ORG}/${r}/rules/branches/${branch}?per_page=100" --jq '[.[] | select(.type == "merge_queue")] | length')"; then
               result "$r" blocked "could not read the rules on ${branch}"
               continue
             fi
             if [ "$has" -gt 0 ]; then result "$r" current "${branch} already has a merge queue"; continue; fi
-            result "$r" ready "no merge queue on ${branch}"
+            result "$r" ready "no merge queue on ${branch}${note}"
             ready="$(jq -c --arg r "$r" --arg b "$branch" '. + [{repo: $r, branch: $b}]' <<< "$ready")"
           done <<< "$repos"
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
@@ -241,6 +251,15 @@ jobs:
               failures=$((failures + 1)); continue
             fi
             if [ "$has" -gt 0 ]; then row "$r" "current: ${branch} gained a merge queue since the plan"; continue; fi
+            # The plan's job token often cannot see this field; the PAT can.
+            if ! mc="$(gh api "repos/${ORG}/${r}" --jq '.allow_merge_commit')"; then
+              row "$r" "error: could not re-read the merge-commit setting"
+              failures=$((failures + 1)); continue
+            fi
+            if [ "$mc" != "true" ]; then
+              row "$r" "blocked: merge commits are disabled (allow_merge_commit=${mc}), and the ruleset merges with merge_method MERGE"
+              continue
+            fi
             if ! out="$(gh api -X POST "repos/${ORG}/${r}/rulesets" --input ruleset.json --jq '.id' 2>&1)"; then
               row "$r" "error: GitHub refused the ruleset ($(printf '%s' "$out" | tr '\n' ' ' | head -c 200))"
               failures=$((failures + 1)); continue

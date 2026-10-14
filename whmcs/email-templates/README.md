@@ -44,6 +44,25 @@ each `_new` body is pasted in per
 | `welcome_B1_m365.html`         | (no correction pending)            |
 | `welcome_B2_google.html`       | (no correction pending)            |
 
+## 2026-10-14: build-first onboarding (applied live)
+
+The application forms (pid 16 and 33) now collect the website content, a required domain, a required
+organization legal name and the technical contact's GitHub username, so the website product (pid 40)
+is no longer a separate step. These changes were made **directly in the WHMCS admin** on 2026-10-14
+(Clarke's direction) and are mirrored here:
+
+- **115 / 116** (`tmpl_115_new.html` / `tmpl_116_new.html`): "What happens next: we build your
+  website for you" (build, preview link, approve, then order the domain named in the application,
+  with the coupon), plus a "Your website maintainer" section linking the FFCadmin site-owner pages
+  (accept-invitation, training, common-edits). The pid 40 order link is gone. Live is these bodies
+  with the real coupon in place of the `{DISCOUNT_CODE …}` placeholder.
+- **16 Order Confirmation** (stock template, not mirrored): a "what happens next" paragraph for
+  applicants and a maintainer prep list (GitHub signup, ffcadmin.org/site-owner and
+  /site-owner/training).
+- **7 / 23 / 8 Support Ticket Opened / Opened by Admin / Reply** (stock, not mirrored): one
+  "Maintaining your charity's website?" line linking the site-owner guides, training track and
+  common edits.
+
 ## Template ID / product mapping
 
 ### Onboarding acceptance emails (sent when an application product activates)

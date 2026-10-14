@@ -70,7 +70,7 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
             'siteShortDescription', 'program1Title', 'program1Description', 'brandColor', 'logoUrl', 'facebookUrl',
             'linkedinUrl', 'instagramUrl', 'xUrl', 'youtubeUrl', 'donationUrl', 'volunteerUrl', 'foundingYear',
             'alternateNames', 'ein', 'candidProfileUrl', 'templateChoice', 'charityName', 'maintainerGithub',
-            'domainOwnership', 'domainRegistrar', 'seoKeywords', 'leadershipLines', 'currentWebsiteUrl') {
+            'domainOwnership', 'domainRegistrar', 'seoKeywords', 'leadershipLines', 'currentWebsiteUrl', 'leader1Name', 'leader2Name', 'leader3Name') {
             $keys | Should -Contain $k
         }
         $script:Config.productIds | Should -Be @(16, 33, 40)

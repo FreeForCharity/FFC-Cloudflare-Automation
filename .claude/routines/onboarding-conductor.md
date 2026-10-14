@@ -130,7 +130,9 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
      `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
      `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
-     `leadership_lines` = `leadershipLines`.
+     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
+     `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
+     consent to appear), then any `leadershipLines`.
 
    If step 3 found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports
    live, add `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL

@@ -275,6 +275,24 @@
       "productFields": ["current-site-url"],
       "type": "url",
       "maxLength": 300
+    },
+    {
+      "key": "leader1Name",
+      "productFields": ["site-leader-1"],
+      "type": "text",
+      "maxLength": 100
+    },
+    {
+      "key": "leader2Name",
+      "productFields": ["site-leader-2"],
+      "type": "text",
+      "maxLength": 100
+    },
+    {
+      "key": "leader3Name",
+      "productFields": ["site-leader-3"],
+      "type": "text",
+      "maxLength": 100
     }
   ]
 }

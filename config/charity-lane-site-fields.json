@@ -229,6 +229,46 @@
       "productFields": ["template-choice"],
       "type": "choice",
       "maxLength": 60
+    },
+    {
+      "key": "charityName",
+      "productFields": ["org-name"],
+      "productLabelPatterns": ["organi[sz]ation'?s legal name"],
+      "type": "text",
+      "maxLength": 120
+    },
+    {
+      "key": "maintainerGithub",
+      "productFields": ["technical-github"],
+      "type": "githubUser"
+    },
+    {
+      "key": "domainOwnership",
+      "productFields": ["domain-owned"],
+      "productLabelPatterns": ["^do you have a domain name"],
+      "type": "choice",
+      "maxLength": 60
+    },
+    {
+      "key": "domainRegistrar",
+      "productFields": ["domain-registrar"],
+      "type": "text",
+      "maxLength": 80
+    },
+    {
+      "key": "seoKeywords",
+      "productFields": ["seo-keywords"],
+      "type": "nameList",
+      "maxLength": 40,
+      "maxItems": 15,
+      "clientField": "SEO keywords"
+    },
+    {
+      "key": "leadershipLines",
+      "productFields": ["leadership-public"],
+      "type": "text",
+      "maxLength": 1000,
+      "multiline": true
     }
   ]
 }

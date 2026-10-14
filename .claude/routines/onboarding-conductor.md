@@ -114,8 +114,13 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      and provision anyway;
    - `irs_status` = `501(c)(3) (approved)` for pid 33, `Not yet / pending (pre-501(c)(3))` for pid
      16;
-   - `website_situation` from `domainOwnership` and the live-site check: a live site on a Wix or
-     Squarespace domain =
+   - `current_website_url` = `currentWebsiteUrl`: the charity's current public site or page, which
+     may sit on a free host with no domain of its own (Canva, brand.page, a Wix or Google Sites
+     subdomain, Linktree, Carrd). The site builder reuses its content;
+   - `website_situation` from `domainOwnership`, `currentWebsiteUrl` and the live-site check: a site
+     only on a free host (no domain of their own) =
+     `New charity domain name but existing charity site (Wix / Squarespace / etc)`; otherwise a live
+     site on a Wix or Squarespace domain =
      `New charity domain name but existing charity site (Wix / Squarespace / etc)`; any other live
      site = `Existing domain name and existing website (WordPress / formal hosting)`; no live site =
      `New charity domain name and new charity website`;
@@ -125,7 +130,9 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
      `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
      `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
-     `leadership_lines` = `leadershipLines`.
+     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
+     `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
+     consent to appear), then any `leadershipLines`.
 
    If step 3 found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports
    live, add `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL

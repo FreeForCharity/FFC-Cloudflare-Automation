@@ -56,13 +56,36 @@ def test_ffcs_donation_form_on_a_charity_page_fails():
     assert len(problems) == 1 and "free-for-charity-endowment-fund" in problems[0], problems
 
 
-def test_ffcs_own_donation_policy_page_is_exempt():
+def test_the_retired_ffc_donation_policy_page_fails():
+    # One donation policy per site: a provisioned build must not ship FFC's
+    # separate page (it used to be exempt as FFC's own document).
+    for rel in ("free-for-charity-donation-policy.html", "free-for-charity-donation-policy/index.html"):
+        problems = run("riverbend-pantry", {"index.html": own_links("riverbend-pantry"), rel: "<p>FFC</p>"})
+        assert problems == [
+            f"{rel}: ships the retired Free For Charity donation policy page "
+            "(the standard is one donation policy, the charity's own /donation-policy)"
+        ], problems
+
+
+def test_its_ffc_targets_are_no_longer_exempt():
     pages = {
         "index.html": own_links("riverbend-pantry"),
         "free-for-charity-donation-policy.html": f'<a href="{FFC_ZEFFY}">FFC</a>',
-        "free-for-charity-donation-policy/index.html": f'<a href="{FFC_ZEFFY}">FFC</a>',
     }
-    assert run("riverbend-pantry", pages) == []
+    problems = run("riverbend-pantry", pages)
+    assert any("free-for-charity-endowment-fund" in p for p in problems), problems
+
+
+def test_a_link_to_the_retired_page_fails():
+    for href in ("/free-for-charity-donation-policy", "/free-for-charity-donation-policy/", "/sub/free-for-charity-donation-policy.html#x"):
+        body = own_links("riverbend-pantry") + f'<a href="{href}">FFC Donation Policy</a>'
+        problems = run("riverbend-pantry", {"index.html": body})
+        assert problems == [f"index.html: links the retired Free For Charity donation policy {href}"], problems
+
+
+def test_the_charitys_own_donation_policy_link_passes():
+    body = own_links("riverbend-pantry") + '<a href="/donation-policy/">Donation Policy</a>'
+    assert run("riverbend-pantry", {"index.html": body, "donation-policy.html": "<h1>DP</h1>"}) == []
 
 
 def test_a_missing_own_donation_url_fails():

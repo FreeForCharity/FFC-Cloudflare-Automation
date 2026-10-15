@@ -63,6 +63,40 @@ const TIMESTAMP_FIELD = 'generated_at';
 // reported on its first morning.
 const STALE_AFTER_HOURS = 36;
 
+// 36h is the right budget for a COUNT and the wrong one for a QUEUE.
+//
+// Measured 2026-10-11T07:1xZ (Conductor run 249): the published feed was built
+// `2026-10-10T07:36:04Z` — 23.5h old, comfortably inside the window above, so
+// this monitor read FRESH on its 10:23Z tick and would have read FRESH again at
+// the next one. Meanwhile the page it describes was telling the public that
+// **two environment approval gates were waiting on a human**. Both had in fact
+// completed the previous evening (`37283881466` at 23:27Z, `37384577096` at
+// 23:39Z). Zero gates were pending, verified on the union of three query shapes.
+//
+// Nothing was broken. `generated_at` was honest, the publisher was on cadence,
+// and every field was accurate *at generation time*. The defect is that one
+// threshold governs fields whose tolerance for age differs by orders of
+// magnitude. `backlog_issues: 193` a day late is a rounding error. `pending_gates`
+// is not a statistic — it is a work queue addressed to a named human, and its
+// whole purpose is to say "click something now". A day-old queue is wrong in
+// both of the ways that matter: it cries wolf, and the morning it is real nobody
+// looks.
+//
+// SCOPE, stated because the complement is not covered. This catches
+// OVER-reporting only — a queue the feed still asserts after it has drained. The
+// mirror case, a gate opened *after* generation and therefore absent from a feed
+// that reads perfectly fresh, cannot be seen from the feed's own bytes at all;
+// it needs a live read of the gates and belongs to #1547. An empty
+// `pending_gates` is therefore NOT aged here: it asserts no work, so there is
+// no claim to go stale.
+const ACTIONABLE_STALE_AFTER_HOURS = 12;
+
+// Fields that are human work queues rather than statistics. Each must be an
+// array whose emptiness means "nothing is waiting". Adding a field here is a
+// deliberate act: it says a reader is expected to ACT on this value, so the
+// value decays on human time rather than on publication cadence.
+const ACTIONABLE_FIELDS = ['pending_gates'];
+
 // A timestamp ahead of now by more than this is treated as invalid rather than
 // as very fresh. Without it, a bad clock or a hand-edited date reads as fresh
 // forever, which is the same fail-open this workflow exists to close. One hour
@@ -98,6 +132,11 @@ const ISSUE_LABELS = ['bug', 'agentic-os'];
  *              no `generated_at`, an empty or non-ISO value, or a value in the
  *              future.
  * STALE      — a good timestamp, older than STALE_AFTER_HOURS.
+ * ACTIONABLE_STALE
+ *            — inside the publication window, but the feed still asserts a
+ *              non-empty human work queue (ACTIONABLE_FIELDS) that is older
+ *              than ACTIONABLE_STALE_AFTER_HOURS. The page is telling a reader
+ *              to act on something that may well have been handled.
  * FRESH      — a good timestamp within the window. The only non-finding.
  */
 function classifyFeed(obs, nowIso) {
@@ -171,6 +210,44 @@ function classifyFeed(obs, nowIso) {
   if (ageHours > STALE_AFTER_HOURS) {
     return out('STALE', `last published ${ageHours}h ago`, { generatedAt: value, ageHours });
   }
+  // Checked only after STALE has had its chance: a feed past the publication
+  // window is already a finding and does not need a second, narrower one.
+  if (ageHours > ACTIONABLE_STALE_AFTER_HOURS) {
+    // A registered queue field that is PRESENT but not an array is reported
+    // rather than skipped. `Array.isArray(...) && length > 0` reads naturally
+    // and fails open: change the generator to emit `pending_gates: 2` — a count
+    // instead of a list, which is how the panel is described in prose — and the
+    // whole rule goes silent with nothing to notice. An absent field is
+    // different and is NOT a finding: the page then renders no queue at all, so
+    // it misleads no reader, and firing on it would red-line every feed
+    // predating this check.
+    const asserted = [];
+    const malformed = [];
+    for (const f of ACTIONABLE_FIELDS) {
+      if (!(f in parsed)) continue;
+      if (!Array.isArray(parsed[f])) malformed.push(f);
+      else if (parsed[f].length > 0) asserted.push(f);
+    }
+    if (malformed.length) {
+      return out(
+        'ACTIONABLE_STALE',
+        `published ${ageHours}h ago and ` +
+          malformed.map((f) => `\`${f}\` is not an array`).join(', ') +
+          ' — cannot establish whether a work queue is being asserted, so this is reported ' +
+          'rather than assumed empty',
+        { generatedAt: value, ageHours, actionableFields: malformed },
+      );
+    }
+    if (asserted.length) {
+      return out(
+        'ACTIONABLE_STALE',
+        `published ${ageHours}h ago and still asserts ` +
+          asserted.map((f) => `\`${f}\` (${parsed[f].length})`).join(', ') +
+          ` — a work queue older than ${ACTIONABLE_STALE_AFTER_HOURS}h cannot be acted on`,
+        { generatedAt: value, ageHours, actionableFields: asserted },
+      );
+    }
+  }
   return out('FRESH', `published ${ageHours}h ago`, { generatedAt: value, ageHours });
 }
 
@@ -209,6 +286,7 @@ function analyze(input) {
 
   const pick = (v) => results.filter((r) => r.verdict === v);
   const stale = pick('STALE');
+  const actionableStale = pick('ACTIONABLE_STALE');
   const missing = pick('MISSING');
   const unreadable = pick('UNREADABLE');
   const invalid = pick('INVALID');
@@ -219,13 +297,21 @@ function analyze(input) {
     checked: results.length,
     registered: FEED_PATHS.length,
     thresholdHours: STALE_AFTER_HOURS,
+    actionableThresholdHours: ACTIONABLE_STALE_AFTER_HOURS,
     results,
     stale,
+    actionableStale,
     missing,
     unreadable,
     invalid,
     fresh,
-    hasFinding: Boolean(stale.length || missing.length || unreadable.length || invalid.length),
+    hasFinding: Boolean(
+      stale.length ||
+      actionableStale.length ||
+      missing.length ||
+      unreadable.length ||
+      invalid.length,
+    ),
   };
 }
 
@@ -262,8 +348,10 @@ function findRollingIssue(items) {
 function summary(a) {
   return (
     `feed=${a.feedRepo} checked=${a.checked} of ${a.registered} fresh=${a.fresh.length} ` +
-    `stale=${a.stale.length} missing=${a.missing.length} invalid=${a.invalid.length} ` +
-    `unreadable=${a.unreadable.length} threshold=${a.thresholdHours}h`
+    `stale=${a.stale.length} actionable_stale=${a.actionableStale.length} ` +
+    `missing=${a.missing.length} invalid=${a.invalid.length} ` +
+    `unreadable=${a.unreadable.length} threshold=${a.thresholdHours}h ` +
+    `actionable_threshold=${a.actionableThresholdHours}h`
   );
 }
 
@@ -291,6 +379,8 @@ function renderBody(a, iso) {
     `- Generated: ${iso}`,
     `- Paths checked: ${a.checked} of ${a.registered} registered`,
     `- Stale after: ${a.thresholdHours}h (502 publishes daily, so one missed tick does not report)`,
+    `- Work queues (${ACTIONABLE_FIELDS.map((f) => `\`${f}\``).join(', ')}) stale after: ` +
+      `${a.actionableThresholdHours}h — a queue decays on human time, not on publication cadence`,
     '',
     'This rolling issue auto-closes on the next run where every registered path is present, ' +
       'readable, carries a parseable `' +
@@ -309,6 +399,26 @@ function renderBody(a, iso) {
         'data-refresh PR stuck behind `main` (#908), or the publisher never opening a PR at all.',
       '',
       ..._table(['Path', TIMESTAMP_FIELD, 'Age', 'Detail'], a.stale.map(_row)),
+      '',
+    );
+  }
+
+  if (a.actionableStale.length) {
+    lines.push(
+      `## 📣 Stale work queue — inside the ${a.thresholdHours}h window, but older than ` +
+        `${a.actionableThresholdHours}h (${a.actionableStale.length})`,
+      '',
+      'The feed is on cadence and its timestamp is honest. It is still **publishing a work queue ' +
+        'addressed to a human** that is old enough to have been drained — so the page names ' +
+        'approvals that may already be done. That is wrong in both of the ways that matter: it ' +
+        'cries wolf, and the morning it is real nobody looks.',
+      '',
+      'Fix by regenerating the feed (`scripts/generate-agentic-os-status.py`) and shipping it to ' +
+        '`FFC-IN-ffcadmin.org` — the Conductor can do this directly; it does not need 502. This ' +
+        'reports **over**-reporting only: a gate opened *after* generation is absent from a feed ' +
+        'that reads perfectly fresh, and that case needs a live gate read (#1547).',
+      '',
+      ..._table(['Path', TIMESTAMP_FIELD, 'Age', 'Detail'], a.actionableStale.map(_row)),
       '',
     );
   }
@@ -375,6 +485,8 @@ module.exports = {
   FEED_PATHS,
   TIMESTAMP_FIELD,
   STALE_AFTER_HOURS,
+  ACTIONABLE_STALE_AFTER_HOURS,
+  ACTIONABLE_FIELDS,
   FUTURE_TOLERANCE_HOURS,
   ISO_8601,
   MARKER,

@@ -97,11 +97,20 @@ EXIT CODES
     1  not wired, the probe did not land both verdicts, or the workspace was
        inferred and could only certify itself (#1237)
     2  usage error (missing template, unreadable workspace)
+    3  permissions drifted -- the hooks ARE wired and the guard demonstrably
+       fires, but a grant the template expects has not reached the workspace.
+       Remedy: @clarkemoyer applies the missing grant; re-run to confirm.
 
-    Non-zero is deliberately the same for "no config", "config present but the
-    guard does not work" and "cannot tell". All three mean the same thing to the
-    run about to start: you are not known to be guarded. Distinguishing them is
-    the report's job, not the exit code's.
+    0, 1 and 2 keep their original contract: non-zero among them is deliberately
+    the same for "no config", "config present but the guard does not work" and
+    "cannot tell", because all three mean one thing to the run about to start --
+    you are not known to be guarded. Distinguishing those is the report's job,
+    not the exit code's.
+
+    3 is outside that group on purpose, and a caller testing `rc != 0` as
+    "unguarded" will misread it. The run IS guarded; what is missing is a grant
+    only Clarke can apply. Collapsing it into 1 would send the next run hunting a
+    hook defect that is not there.
 """
 
 from __future__ import annotations
@@ -130,6 +139,16 @@ SOURCE_EXPLICIT = "explicit"  # --workspace was given
 SOURCE_ENV = "env"  # $CLAUDE_PROJECT_DIR, which the SESSION sets
 SOURCE_INFERRED = "inferred"  # the cwd fallback -- a guess
 SOURCES = frozenset({SOURCE_EXPLICIT, SOURCE_ENV, SOURCE_INFERRED})
+
+# Exit codes. 0/1 keep the meaning every caller already tests for -- "the guards
+# run" vs "this run is unguarded". Permissions drift gets its OWN code because it
+# is a different fact with a different remedy and a different actor: the hooks are
+# wired, the run is guarded, and what is missing is a grant only Clarke can apply.
+# Collapsing it into 1 would tell step 0 "unguarded" when the guards demonstrably
+# fire, and the next run would go looking for a hook defect that is not there.
+EXIT_WIRED = 0
+EXIT_NOT_WIRED = 1
+EXIT_PERMISSIONS_DRIFTED = 3
 
 # One command that MUST be refused and one that MUST be permitted. The blocking
 # case is L50 -- the exact shape that went unguarded in run 134 and produced
@@ -397,6 +416,90 @@ def load_settings(workspace: pathlib.Path) -> tuple[dict, list[str]]:
     return merged, carriers
 
 
+def collect_permissions(workspace: pathlib.Path) -> dict[str, set[str]]:
+    """Union of `permissions.allow` / `.deny` across every settings file.
+
+    Deliberately NOT read off `load_settings`'s merged dict. That merge is
+    `dict.update`, which is shallow and last-wins, so a `permissions` block in
+    `settings.local.json` REPLACES the one in `settings.json` wholesale. For
+    `hooks` that is right -- it is what Claude Code does. For permissions it is
+    not: the allowlists are additive across the layers, so the shallow merge
+    would report a rule as missing purely because a different file also carried a
+    permissions block. The Conductor's workspace is exactly that shape -- a
+    rendered `settings.json` beside a hand-held `settings.local.json` of
+    per-command allows -- so this is the live case, not a hypothetical one.
+    """
+    found: dict[str, set[str]] = {"allow": set(), "deny": set()}
+    for name in SETTINGS_NAMES:
+        path = workspace / ".claude" / name
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        perms = data.get("permissions")
+        if not isinstance(perms, dict):
+            continue
+        for key in found:
+            value = perms.get(key)
+            if isinstance(value, list):
+                found[key].update(v for v in value if isinstance(v, str))
+    return found
+
+
+def rendered_from_template(workspace: pathlib.Path) -> bool:
+    """Is this workspace's `settings.json` a RENDER of the tracked template?
+
+    The drift check only means something where the template is the source of the
+    file. Any other workspace -- a clone, a worker root, a test fixture -- has
+    never been rendered, so "the template declares grants you lack" is not a
+    finding about it, and making it one changed the exit code for every existing
+    caller (caught by this module's own pre-existing tests).
+
+    The discriminator is the template's first `_comment` line, which `render()`
+    copies verbatim and which nothing else writes. Compared against the template
+    rather than against a literal, so the two cannot drift apart silently.
+    """
+    target = workspace / ".claude" / "settings.json"
+    if not target.is_file():
+        return False
+    try:
+        marker = json.loads((REPO_ROOT / TEMPLATE_REL).read_text(encoding="utf-8"))["_comment"][0]
+        rendered = json.loads(target.read_text(encoding="utf-8")).get("_comment")
+    except (json.JSONDecodeError, OSError, KeyError, IndexError, TypeError):
+        return False
+    return isinstance(rendered, list) and bool(rendered) and rendered[0] == marker
+
+
+def template_permissions() -> dict[str, list[str]]:
+    """The `permissions` block the tracked template declares, or empty.
+
+    Unreadable or absent is reported as "declares nothing", which makes the
+    drift check silent rather than red. A verifier that fails because its own
+    reference file moved would block every bootstrap on a repo-side edit, and the
+    question it answers -- "has the grant reached the session?" -- is meaningless
+    when there is no grant to reach it.
+    """
+    empty: dict[str, list[str]] = {"allow": [], "deny": []}
+    template = REPO_ROOT / TEMPLATE_REL
+    try:
+        data = json.loads(template.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return empty
+    perms = data.get("permissions") if isinstance(data, dict) else None
+    if not isinstance(perms, dict):
+        return empty
+    return {
+        key: [v for v in perms.get(key, []) if isinstance(v, str)]
+        if isinstance(perms.get(key), list)
+        else []
+        for key in empty
+    }
+
+
 def probe_guard(guard: pathlib.Path) -> list[dict]:
     """Run the configured Bash guard on one must-block and one must-allow command.
 
@@ -595,6 +698,70 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
     return report
 
 
+def check_permissions(workspace: pathlib.Path, report: dict) -> None:
+    """Record whether the template's grants have reached the session (run 254).
+
+    Mutates `report` with `permissions_declared`, `permissions_missing` and
+    `permissions_wired`. Kept out of `verify()`'s problem list on purpose: a
+    missing grant does not make the run unguarded, and folding it in would make
+    `wired` false for a session whose guards demonstrably fire.
+
+    Why this check exists. Run 253 found `gh pr ready` and
+    `markPullRequestReadyForReview` both refused by the host classifier, while
+    `AGENTS.md` -- authored and merged by Clarke -- instructed the Conductor to
+    run exactly those commands. That was escalated as a harness/policy mismatch
+    with two ways out: a permission rule, or moving the action back to Clarke.
+    Clarke chose the rule and committed it to the template (#1616).
+
+    It did not take effect, and could not. The template is a BUILD PRODUCT: it
+    only reaches a session once rendered into that session's own
+    `.claude/settings.json`, and the documented render command is run by the
+    Conductor. Attempting it returns `[Self-Modification]` -- correctly, since it
+    is an agent granting itself permissions. So the grant is authored, reviewed,
+    merged and unreachable by the only actor that runs the render, and the way
+    run 254 discovered this was by being refused at the enqueue, an hour into the
+    run, after the measurements the enqueue depended on had already been taken.
+
+    The remedy is for a human to render it, so the only useful thing a verifier
+    can do is say so at bootstrap instead of at the point of use.
+    """
+    declared = template_permissions()
+    report["permissions_declared"] = declared
+    report["permissions_scoped"] = rendered_from_template(workspace)
+    report["permissions_missing"] = {"allow": [], "deny": []}
+    if not any(declared.values()) or not report["permissions_scoped"]:
+        report["permissions_wired"] = True
+        return
+    live = collect_permissions(workspace)
+    missing = {key: sorted(set(declared[key]) - live[key]) for key in declared}
+    report["permissions_missing"] = missing
+    report["permissions_wired"] = not any(missing.values())
+
+
+def permissions_line(report: dict) -> str:
+    """Printed in both directions, for the same reason `start_line` is."""
+    declared = report.get("permissions_declared") or {"allow": [], "deny": []}
+    if not any(declared.values()):
+        return "PERMISSIONS: none declared -- the template carries no `permissions` block"
+    if not report.get("permissions_scoped"):
+        return (
+            "PERMISSIONS: not applicable -- this workspace's settings were not rendered "
+            "from the template, so the template's grants are not a claim about it"
+        )
+    if report.get("permissions_wired"):
+        total = sum(len(v) for v in declared.values())
+        return f"PERMISSIONS: wired -- all {total} rule(s) the template declares are live in the session"
+    missing = report.get("permissions_missing") or {}
+    parts = [f"{key}: {', '.join(vals)}" for key, vals in missing.items() if vals]
+    return (
+        "PERMISSIONS: NOT WIRED -- the template declares grants this session does not have ("
+        + "; ".join(parts)
+        + "). The hooks ARE wired and this run IS guarded; what is missing is a grant. "
+        "@clarkemoyer must render it -- the Conductor cannot, because rendering its own "
+        "permission file is refused as `[Self-Modification]`."
+    )
+
+
 def start_line(report: dict) -> str:
     """The one line a run's START comment carries (#1042 AC2).
 
@@ -721,12 +888,15 @@ def main(argv: list[str] | None = None) -> int:
             return rc
 
     report = verify(workspace, source=source)
+    check_permissions(workspace, report)
     if args.as_json:
         report["start_line"] = start_line(report)
+        report["permissions_line"] = permissions_line(report)
         print(json.dumps(report, indent=2, sort_keys=True))
-        return 0 if report["wired"] else 1
+        return exit_code(report)
 
     print(start_line(report))
+    print(permissions_line(report))
     if not report["wired"]:
         # Quoted, because these are printed to be pasted and the two hosts that
         # run this both have spaces in the relevant paths: the Conductor's clone
@@ -756,7 +926,27 @@ def main(argv: list[str] | None = None) -> int:
                 f"--hub-clone {shlex.quote(str(hub_clone))}"
             )
         print("  (docs/runbooks/conductor-hook-wiring.md explains why the copy is a build product)")
-    return 0 if report["wired"] else 1
+    if report["wired"] and not report.get("permissions_wired", True):
+        # Addressed to a human by name, because the Conductor running it is the
+        # one actor who cannot carry it out.
+        print()
+        print("Remedy (@clarkemoyer, not the Conductor):")
+        print(f"  python3 {shlex.quote(str(REPO_ROOT / 'scripts' / 'verify-conductor-hooks.py'))} \\")
+        print(
+            f"    --render --force --workspace {shlex.quote(str(workspace))} "
+            f"--hub-clone {shlex.quote(str(hub_clone))}"
+        )
+        print("  # --force because the workspace already has a rendered settings.json to replace")
+    return exit_code(report)
+
+
+def exit_code(report: dict) -> int:
+    """0 / 1 / 3 -- see the EXIT_* constants for why drift gets its own code."""
+    if not report["wired"]:
+        return EXIT_NOT_WIRED
+    if not report.get("permissions_wired", True):
+        return EXIT_PERMISSIONS_DRIFTED
+    return EXIT_WIRED
 
 
 if __name__ == "__main__":

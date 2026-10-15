@@ -117,9 +117,54 @@ HOOKS: NOT WIRED -- this run is unguarded (#1042). <what is wrong>
 HOOKS: UNVERIFIED -- workspace was inferred, not stated, and it ships the hooks under test … (#1237)
 ```
 
-Exit 0 wired, 1 not-or-unknown, 2 usage. The line prints in **all** directions on purpose: a
-verifier that only speaks up on failure leaves "guarded" and "the check never ran" identical in the
-record, which is L218 one level up.
+Exit 0 wired, 1 not-or-unknown, 2 usage, **3 permissions drift** (below). The line prints in **all**
+directions on purpose: a verifier that only speaks up on failure leaves "guarded" and "the check
+never ran" identical in the record, which is L218 one level up.
+
+### Exit 3: the grants in the template have not reached the session (run 254)
+
+A second line prints beside `HOOKS:`, and it answers a different question — not "do the guards run?"
+but "has the `permissions` block the template declares actually arrived?".
+
+```
+PERMISSIONS: wired -- all N rule(s) the template declares are live in the session
+PERMISSIONS: NOT WIRED -- the template declares grants this session does not have (allow: …)
+PERMISSIONS: not applicable -- this workspace's settings were not rendered from the template
+PERMISSIONS: none declared -- the template carries no `permissions` block
+```
+
+**Exit 3, not 1, and the distinction is load-bearing.** Step 0 reads a non-zero exit as "this run is
+unguarded". On drift the hooks are wired and the run _is_ guarded; what is missing is a grant. A
+shared exit code sends the next run hunting a hook defect that does not exist.
+
+Why the check exists at all. Run 253 escalated a harness/policy mismatch — `AGENTS.md` instructed
+the Conductor to promote and enqueue, and auto mode refused both `gh pr ready` and
+`markPullRequestReadyForReview` — naming two ways out: a permission rule, or moving the action back
+to Clarke. #1616 took the first and committed the grants to the template. That alone cannot work:
+the template is a **build product**, it reaches a session only once rendered, and the render command
+is run by the Conductor. Run 254 attempted it and was refused **`[Self-Modification]`**, correctly —
+an agent must not grant itself permissions. So the grant is authored, reviewed, merged and
+unreachable by the only actor that runs the render.
+
+**The render is therefore @clarkemoyer's to run, not the Conductor's**, and the printed remedy says
+so by name:
+
+```bash
+python3 scripts/verify-conductor-hooks.py \
+  --render --force --workspace <workspace> --hub-clone <hub clone>
+```
+
+`--force` because the workspace already holds an older rendered copy. Two details worth keeping:
+
+- The drift check is **scoped** to a workspace whose `settings.json` carries the template's own
+  first `_comment` line, which `render()` copies verbatim. Unscoped, exit 3 fired on clones, worker
+  roots and test fixtures that were never rendered and about which the template's grants say
+  nothing.
+- The live allow/deny sets are **unioned across `settings.json` and `settings.local.json`** rather
+  than read off the merged view `load_settings` builds. That merge is `dict.update` — shallow and
+  last-wins — so a `permissions` block in `settings.local.json` replaces the one in `settings.json`.
+  Correct for `hooks`, and it would report a false NOT WIRED here. The Conductor's workspace is
+  exactly that shape: a rendered `settings.json` beside a hand-held `settings.local.json`.
 
 ### Pass `--workspace` only when you know the root — otherwise run bare (#1237)
 

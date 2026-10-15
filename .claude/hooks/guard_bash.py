@@ -1247,6 +1247,68 @@ def echo_secret_violation(cmd):
     return None
 
 
+_TEE_RE = re.compile(r"(?:^|\s)tee\b(?!\s*-?-?a)")
+_HEAD_RE = re.compile(r"^\s*(?:\S*/)?head\b")
+
+
+def tee_into_head_truncation(cmd):
+    """`cmd | tee FILE | head -N` leaves FILE TRUNCATED, and nothing says so.
+
+    `head` exits after N lines, so `tee` takes SIGPIPE/EPIPE mid-stream and dies
+    with the file holding only what it had flushed. The terminal shows the N
+    lines you asked for, `gh` exits 0, and the file you went on to measure is
+    short by however much never got written.
+
+    Conductor run 255, counting the agentic-os backlog:
+
+        gh api --paginate ".../issues?...&labels=agentic-os" --jq '...' \\
+          | tee "$SP/aos.txt" | head -25
+        wc -l < "$SP/aos.txt"   ->  79
+
+    The real count is **183**. The 79 was read into a START comment as the
+    backlog size and compared against the routine's 5-15 ceiling. What exposed
+    it was not the number -- 79 is entirely plausible for that label -- but that
+    the narrower `labels=agentic-os,agent-ready` query returned **93**, which
+    cannot be a subset of 79. Same tell as the dropped-parameter rule: two
+    queries whose results are impossible together, where neither value looks
+    wrong on its own.
+
+    Sibling of ledger L50 (`pipeline_exit_code_violation`, directly below): both
+    are a pipeline silently destroying the thing the author went on to read, and
+    both fail in the flattering direction -- L50 prints the exit code you hoped
+    for, this prints a plausible undercount.
+
+    WARNS rather than blocks. `tee … | head` is legitimate when the file is the
+    artifact and the `head` is only a glance at a stream you know is shorter than
+    N, and blocking a correct command trains people to switch the guard off.
+    `tee -a` is excluded: append has the same truncation risk but no safe
+    rewrite to recommend, so flagging it would be noise.
+    """
+    for stmt in _statements(cmd):
+        bare = _strip_quoted(stmt)
+        # Split on real pipes only: not `||`, not `|&`.
+        stages = re.split(r"(?<!\|)\|(?![|&])", bare)
+        if len(stages) < 2:
+            continue
+        for i, stage in enumerate(stages):
+            if not _TEE_RE.search(stage):
+                continue
+            # Any LATER stage that is `head` can cut the stream short.
+            if any(_HEAD_RE.search(s) for s in stages[i + 1 :]):
+                return (
+                    "[#255] `tee FILE` piped into `head` leaves FILE TRUNCATED. `head` exits "
+                    "after its line count, `tee` dies on EPIPE, and the file keeps only what "
+                    "it had flushed -- while the terminal shows exactly what you asked for "
+                    "and the exit status is 0.\n"
+                    f"  pipeline: {stmt.strip()[:140]}\n"
+                    "  Write the file first, then look at it:\n"
+                    "    cmd > FILE; head -25 FILE        # and `wc -l < FILE` is now true\n"
+                    "  Fine to ignore if FILE is not something you will measure or re-read.\n"
+                    "  Run 255 read a backlog of 79 this way against a true 183."
+                )
+    return None
+
+
 def pipeline_exit_code_violation(cmd):
     """`cmd | filter; echo $?` reports the FILTER's status, not the command's.
 
@@ -2171,6 +2233,18 @@ def main():
                     "  Fine to ignore if you only want the newest N and are claiming nothing "
                     "about the rest."
                 )
+
+    # 10b. `tee FILE | head` truncates FILE (run 255) -- WARN, do not block.
+    #
+    #     The sibling of rule 5b's L50: a pipeline that silently destroys what
+    #     the author went on to read, failing in the flattering direction. Run
+    #     255 measured an agentic-os backlog of 79 against a true 183 and put
+    #     the 79 in a public log comment. Advisory because `tee … | head` is
+    #     correct whenever the file is the artifact and the head is just a
+    #     glance -- see tee_into_head_truncation for why blocking would be wrong.
+    reason = tee_into_head_truncation(cmd)
+    if reason:
+        warn(reason)
 
     # 11. Classic branch-protection read (#1518) -- WARN, do not block.
     #

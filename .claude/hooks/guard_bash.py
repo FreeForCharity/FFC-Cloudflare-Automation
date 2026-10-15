@@ -1471,6 +1471,27 @@ COLLECTION_SEGMENTS = {
 # the function is removed; reach for `_strip_quoted`.
 
 
+def _gh_api_has_field_flag(cmd):
+    """True when a `gh api` call passes `-f`/`-F`/`--raw-field`/`--field`.
+
+    Takes the RAW command and blanks quoted spans itself, deliberately: only the
+    FLAG matters here and a quoted value may contain anything. Taking `cmd`
+    rather than a caller's already-stripped `bare` is also what keeps this out of
+    `_reason_sinks`' discovered sink set -- a helper called from `main()` with a
+    variable bound to `_strip_quoted` is indistinguishable from a reporting
+    channel, because `_strip_quoted` does return string literals, and the walker
+    then derives two unreadable refusal sites inside it. `_gh_api_endpoint` and
+    `_jq_expression` take `cmd` for the same reason.
+
+    The `(?<![\\w-])` guard is what makes the short forms mean the flag rather
+    than the tail of `--some-f`, matching the idiom `_jq_expression` uses
+    for `-q`. Presence of one of these flags without an explicit `-X`/`--method`
+    is what silently turns a read into a POST -- see rule 10b.
+    """
+    return bool(re.search(r"(?<![\w-])(?:-f|-F|--raw-field|--field)(?=[\s=])",
+                          _strip_quoted(cmd)))
+
+
 def _gh_api_endpoint(cmd):
     """The API path/URL argument of a `gh api` call, or None.
 
@@ -2157,7 +2178,13 @@ def main():
         path, query = _gh_api_endpoint(cmd)
         if path:
             method = re.search(r"(?:-X|--method)\s+(\w+)", cmd)
-            is_read = not method or method.group(1).upper() == "GET"
+            # A `-f`/`-F` with no explicit method is a POST, not a read -- see rule
+            # 10b below. Treating it as a read offered pagination advice about a
+            # CREATE call, which is advice for a request the caller is not making.
+            is_read = (
+                method.group(1).upper() == "GET" if method
+                else not _gh_api_has_field_flag(cmd)
+            )
             explicit_page = bool(re.search(r"(?:^|&)page=", query or ""))
             last = path.rstrip("/").split("/")[-1].lower()
             if is_read and not explicit_page and last in COLLECTION_SEGMENTS:
@@ -2170,6 +2197,51 @@ def main():
                     "  Add --paginate, or compare .total_count against what you actually got.\n"
                     "  Fine to ignore if you only want the newest N and are claiming nothing "
                     "about the rest."
+                )
+
+    # 10b. `gh api -f` with no `-X` is a POST -- a READ-SHAPED command that WRITES.
+    #
+    #      `-f`/`-F` adds a request-body parameter, and `gh` switches the method to
+    #      POST the moment one is present. So a call written as a filtered list
+    #      read is in fact a CREATE against the same collection:
+    #
+    #        gh api "repos/O/R/issues" -f state=open --paginate --jq '.[]|.number'
+    #
+    #      Conductor run 258 issued exactly that to enumerate open issues. It
+    #      attempted to OPEN AN ISSUE on the public hub repo, and survived only
+    #      because `title` is required and absent. The 422 names `title`, not the
+    #      method, so it reads as a malformed filter rather than as a write -- and
+    #      had the parameters happened to satisfy the create schema it would have
+    #      returned 201 with a real issue URL and exit 0. That is the #1591 shape:
+    #      every signal at the call site says success.
+    #
+    #      BLOCK, because no reading of the command does what it says. The
+    #      discriminator is deliberately narrow, since a legitimate create also
+    #      uses `-f` and must stay allowed: this fires only when the call ALSO
+    #      asks for something only a list read can give -- `--paginate` (a POST
+    #      has one response, so there is nothing to paginate) or a `--jq` that
+    #      iterates (`.[`/`.[]`, meaningless against a created object).
+    #      `graphql` is exempt: it is a POST by design and legitimately paginates.
+    if re.search(r"\bgh\s+api\b", bare) and not re.search(r"(?:-X|--method)\s+\w+", bare):
+        fpath, _fquery = _gh_api_endpoint(cmd)
+        if fpath and fpath.rstrip("/").lower() != "graphql" and _gh_api_has_field_flag(cmd):
+            fexpr = _jq_expression(cmd)
+            iterating = fexpr is not None and (
+                fexpr.lstrip().startswith(".[") or ".[]" in fexpr
+            )
+            if "--paginate" in cmd or iterating:
+                block(
+                    f"`-f`/`-F` with no `-X`/`--method` makes this a POST, not a read -- so "
+                    f"`gh api {fpath}` is a CREATE against that collection, while the "
+                    "--paginate/--jq here only make sense for a list read.\n"
+                    "  A POST has ONE response: there is nothing to paginate and nothing to "
+                    "iterate with `.[]`.\n"
+                    "  Reading a filtered list -- put the filter in the QUERY STRING:\n"
+                    f"    gh api \"{fpath}?state=open&per_page=100\" --paginate --jq '.[] | .number'\n"
+                    "  Genuinely need -f on a read (rare): pass `-X GET` so the method is explicit.\n"
+                    "  Creating something: pass `-X POST` and drop --paginate / the `.[]` filter.\n"
+                    "  Run 258 issued this shape against `issues` and attempted to open a public "
+                    "issue; only a missing required `title` turned it into a 422 instead of a 201."
                 )
 
     # 11. Classic branch-protection read (#1518) -- WARN, do not block.

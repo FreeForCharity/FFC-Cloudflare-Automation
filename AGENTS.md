@@ -205,12 +205,59 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
        While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
        has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
        that has started (Gemini, Codex, Claude) must also have finished.
+    - **An error body is recoverable, but only by RE-REQUESTING — and `requested_reviewers` is the
+      wrong field to confirm it with.** Measured end to end on #1589 in run 259, after runs 257 and
+      258 each spent a step guessing. Of the three things that look like remedies, exactly one
+      works:
+      - **Re-requesting works.** `gh api --method POST repos/<o>/<r>/pulls/<n>/requested_reviewers`
+        naming `copilot-pull-request-reviewer[bot]`. On #1589 the POST landed ~13:14Z; a
+        `copilot-pull-request-reviewer` check run appeared on the head at **13:18:43Z** and a real
+        `<!-- ccr-overview-v2 -->` review was delivered at **13:23:01Z** — about 5 minutes to the
+        check run and 9 to the verdict. **Allow ~10 minutes before concluding anything.**
+      - **A fresh push does NOT re-arm it.** #1589's `b8b480c1` was an empty chore commit pushed at
+        07:49:28Z purely to re-trigger: no check run was created for **5.5 hours**, until the
+        re-request produced one. So the branch CI re-running is not the reviewer re-arming.
+      - **Promoting out of draft does NOT re-arm it.** #1645 was promoted in run 258 and its error
+        body was still the only review on head 5h18m later.
+
+      **The trap, and it cost run 259 a wrong conclusion in a public escalation:
+      `requested_reviewers` is empty BOTH when the bot was never armed AND after it has delivered
+      its review.** Run 259 re-read that field at **13:22:40Z**, about 9 minutes after its own
+      successful POST, saw `[]`, and reported the re-request as a silent no-op — while the review
+      was **21 seconds** from completing (13:23:01Z). The field does not model the question.
+      **Confirm with the check run on the head SHA instead**, which distinguishes all three states
+      (`absent` = not armed, `queued`/`in_progress` = wait, `completed` = read the review):
+
+      ```bash
+      gh api "repos/<o>/<r>/commits/<head-sha>/check-runs?per_page=100" \
+        --jq '.check_runs[] | select(.name|test("copilot";"i")) | "\(.status)/\(.conclusion)"'
+      ```
+
+      This is the read-after-write rule in CLAUDE.md ("a negative read straight after a successful
+      GitHub write means _unknown_, not _failed_") reached through a field that looks authoritative
+      and is not — the same shape as `autoMergeRequest` reading `null` for both "never enabled" and
+      "already queued".
+
+      Do not read an error body as an outage. Copilot stays healthy throughout — during the 5h in
+      which 17 hub PRs sat error-bodied it posted real reviews on others at 09:17, 10:16, 10:59,
+      12:17, 12:33 and 13:01Z, and #1650 (opened in that window) was reviewed 8 minutes after its
+      push. PRs created _after_ the triggering event review normally; only the ones caught _in_ it
+      are stuck, which is why "is Copilot up?" is the wrong question and "does this head have a
+      `<!-- ccr-overview-v2 -->` review?" is the right one.
+
+      **Re-request in small batches and confirm each one.** The cohort is created by load — all 17
+      were stamped inside run 257's 22-minute `update-branch` sweep — so firing 17 re-requests at
+      once risks reproducing the burst that caused it. #1645 caps the batch at 3 for this reason;
+      apply the same cap here and confirm each check run before sending the next. And
+      `scripts/audit-open-pr-readiness.py` cannot see this condition at all (#1648), so its `ok`
+      bucket overstates the landable set by however many PRs are error-bodied.
     3. **No open question.** Every review thread is answered and resolved. Nothing in a review, a
        comment or the PR body asks for a decision that has not been made.
     4. **Coverage matches the change.** New or changed behaviour has a test that would fail without
        it, and that test runs in CI. A documentation-only PR needs only the repository's existing
        checks. A behaviour change with no covering test is not ready: add the test, or say why it
        cannot have one and leave the PR for Clarke.
+
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
@@ -229,6 +276,7 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.
+
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).

@@ -330,7 +330,18 @@ jobs:
             }
 
             if (existing) {
-              await github.rest.issues.update({ owner, repo, issue_number: existing.number, body });
+              // The title is re-rendered on every update, not only at creation.
+              // A rolling issue outlives the signal that opened it -- one opened
+              // on `conductor-silence` would otherwise keep saying "may have
+              // stopped" for days after the routine came back and the only
+              // remaining finding was `merge-silence`.
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: existing.number,
+                title: lib.issueTitle(analysis),
+                body,
+              });
               await github.rest.issues.addLabels({
                 owner,
                 repo,
@@ -342,7 +353,7 @@ jobs:
               const created = await github.rest.issues.create({
                 owner,
                 repo,
-                title: lib.ISSUE_TITLE,
+                title: lib.issueTitle(analysis),
                 labels: lib.ISSUE_LABELS,
                 body,
               });

@@ -104,7 +104,7 @@ function Get-SiteFieldLabelText {
     # "(optional)" hint before matching.
     param([AllowEmptyString()][AllowNull()][string]$Name)
     $t = [System.Net.WebUtility]::HtmlDecode([string]$Name)
-    $t = $t -replace '[‘’]', "'"
+    $t = $t -replace '[\u2018\u2019]', "'"
     $t = [regex]::Replace($t, '\s+', ' ').Trim()
     return [regex]::Replace($t, '(?i)\s*\(optional\)$', '')
 }

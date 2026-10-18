@@ -3,6 +3,14 @@ run-name: 'WHMCS Open Ticket (dry_run=${{ inputs.dry_run }})'
 
 # Manually open a WHMCS support ticket (new request or break/fix logging).
 # Defaults to dry-run (no ticket created).
+#
+# Optional `template` (charity-lane #1618, G3.5): open a client ticket whose
+# subject and body come from config/whmcs-ticket-templates.json instead of the
+# `subject` / `message` inputs, which must then be left blank. Only a
+# client-visible template that carries a `subject` can open a ticket (today:
+# `preview_ready`); `extra_message` is appended to the body (the preview URL).
+# With `template` blank the `Resolve ticket template` step is skipped and the
+# `Open ticket` step receives the dispatched subject and message exactly as before.
 
 on:
   workflow_dispatch:
@@ -13,13 +21,25 @@ on:
         type: string
         default: '1'
       subject:
-        description: 'Ticket subject'
-        required: true
+        description: 'Ticket subject (required unless template is set; leave blank with template)'
+        required: false
         type: string
       message:
-        description: 'Ticket message'
-        required: true
+        description: 'Ticket message (required unless template is set; leave blank with template)'
+        required: false
         type: string
+      template:
+        description: >-
+          Optional template key from config/whmcs-ticket-templates.json (e.g. preview_ready).
+          Supplies the subject and body; leave blank to use subject/message.
+        required: false
+        type: string
+        default: ''
+      extra_message:
+        description: 'Text appended to the template body (e.g. the preview URL); template mode only'
+        required: false
+        type: string
+        default: ''
       client_email:
         description: 'Charity contact email (used if client id unknown)'
         required: false
@@ -57,6 +77,39 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
+      # Template mode (#1618 G3.5). Runs BEFORE the credential is minted, so a
+      # refused template costs no Key Vault read. Its outputs feed the `Open
+      # ticket` step's TICKET_SUBJECT / TICKET_MESSAGE through that step's own
+      # `env:` mapping (visible plumbing, not GITHUB_ENV), where the existing
+      # fail-closed guards check them exactly as they check dispatched values.
+      # Supplying subject/message as well is refused rather than silently
+      # overridden: the approver would otherwise read one text and send another.
+      - name: Resolve ticket template
+        id: template
+        if: inputs.template != ''
+        shell: pwsh
+        env:
+          TICKET_TEMPLATE: ${{ inputs.template }}
+          TICKET_EXTRA_MESSAGE: ${{ inputs.extra_message }}
+          DISPATCH_SUBJECT: ${{ inputs.subject }}
+          DISPATCH_MESSAGE: ${{ inputs.message }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:TICKET_TEMPLATE)) {
+            Write-Output '::error::TICKET_TEMPLATE is empty: this step runs only when a template was dispatched, so the env: mapping is missing or the value was whitespace.'
+            exit 1
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:DISPATCH_SUBJECT) -or -not [string]::IsNullOrWhiteSpace($env:DISPATCH_MESSAGE)) {
+            Write-Output '::error::template is set, so subject and message must be left blank: the template supplies both. Put any extra text in extra_message.'
+            exit 1
+          }
+          . ./scripts/whmcs-ticket-template.ps1
+          $resolved = Resolve-WhmcsOpenTicketTemplate -ConfigPath ./config/whmcs-ticket-templates.json -Name $env:TICKET_TEMPLATE -ExtraMessage $env:TICKET_EXTRA_MESSAGE
+          Write-Output "Template '$($resolved.Template)': subject '$($resolved.Subject)'."
+          $d = 'TPL_EOF_' + [guid]::NewGuid().ToString('N')
+          "subject=$($resolved.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "message<<$d`n$($resolved.Message)`n$d" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
       - uses: ./.github/actions/whmcs-secrets-from-kv
         with:
@@ -68,8 +121,10 @@ jobs:
         env:
           WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
           TICKET_DEPTID: ${{ inputs.deptid }}
-          TICKET_SUBJECT: ${{ inputs.subject }}
-          TICKET_MESSAGE: ${{ inputs.message }}
+          # A resolved template wins; with no template the step output is empty
+          # and the dispatched value passes through unchanged.
+          TICKET_SUBJECT: ${{ steps.template.outputs.subject || inputs.subject }}
+          TICKET_MESSAGE: ${{ steps.template.outputs.message || inputs.message }}
           TICKET_EMAIL: ${{ inputs.client_email }}
           TICKET_CLIENT_ID: ${{ inputs.client_id }}
         run: |

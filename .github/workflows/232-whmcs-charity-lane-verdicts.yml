@@ -1,0 +1,272 @@
+name: '232. WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [FRAUDLABS+WHMCS]'
+run-name: 'WHMCS Charity-Lane Verdicts (Gate 1/2)'
+
+# Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md,
+# epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3))
+# and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE,
+# with machine-readable reason codes, from the machine-checkable subset of the ffcadmin
+# inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP
+# 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33:
+# a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain,
+# and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE.
+# Every order is then screened with FraudLabs Pro exactly as 228 does it (G1.3b), on
+# 228's own fraudlabspro-prod-read environment and key, deciding on the FraudLabs
+# status alone: only an APPROVE can leave an ACCEPT standing; REJECT -> ESCALATE
+# FRAUD_FLAGGED, REVIEW -> ESCALATE FRAUD_REVIEW, a failed, missing or skipped lookup
+# -> ESCALATE FRAUD_CHECK_FAILED (fail closed). The score is reported, never decisive
+# (a high score on a $0 onboarding order is the known false positive, #813). It accepts nothing and writes nothing
+# to WHMCS.
+#
+# Three jobs, because no one environment holds both credentials:
+#   charity_lane_verdicts (whmcs-prod-read) - the checks; every row leaves it
+#     UNSCREENED (FRAUD_CHECK_NOT_RUN, ESCALATE). Also writes the FraudLabs lookup
+#     keys (order id -> the order field 228 sends; no applicant data), kept 1 day.
+#   fraud_screen (fraudlabspro-prod-read) - one stored-verdict lookup per order;
+#     no WHMCS credential; writes only order id, status, score, error code.
+#   finalize (no environment, no credential) - applies the results; runs even when
+#     fraud_screen failed, and then marks every row FRAUD_CHECK_FAILED.
+#
+# Output is PII-free (this repo is public): order id, client id, pid, gate, org name,
+# desired domain, verdict, reason codes, readiness score, fraud check + score. The
+# finalize job summary table + the charity-lane-verdicts.json artifact; optionally
+# the same table as a comment on `issue_number` (the 219 pattern).
+#
+# Both reads use the READ-scoped credential: `scope: read` on the READ_ALL_FFC_AZURE_*
+# (ffc-admin-kv-reader) identity, exactly as 219/221 (WHMCS) and 228 (FraudLabs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+      issue_number:
+        description: 'Optional: issue number to comment the verdict table back to'
+        required: false
+        type: string
+      fraud_order_id_field:
+        description: 'WHMCS order field sent to FraudLabs Pro as the order id (228 order_id_field)'
+        required: false
+        type: choice
+        options:
+          - ordernum
+          - id
+        default: 'ordernum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 232-whmcs-charity-lane-verdicts
+  cancel-in-progress: false
+
+jobs:
+  charity_lane_verdicts:
+    runs-on: windows-latest
+    environment: whmcs-prod-read
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer.
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Compute charity-lane verdicts (read-only, unscreened)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          FRAUD_ORDER_ID_FIELD: ${{ inputs.fraud_order_id_field }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          # Validate the optional issue number before any work, so a typo fails fast
+          # instead of after the WHMCS sweep. finalize re-checks it before posting.
+          $issue = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            if (-not [int]::TryParse($env:ISSUE_NUMBER, [ref]$issue) -or $issue -lt 1) {
+              Write-Output "::error::issue_number must be a positive integer (got '$($env:ISSUE_NUMBER)')."
+              exit 1
+            }
+          }
+          $field = $env:FRAUD_ORDER_ID_FIELD
+          if ([string]::IsNullOrWhiteSpace($field)) { $field = 'ordernum' }
+          if ($field -notin @('ordernum', 'id')) {
+            Write-Output "::error::fraud_order_id_field must be 'ordernum' or 'id' (got '$field')."
+            exit 1
+          }
+
+          $json = 'artifacts/whmcs/charity-lane-verdicts-unscreened.json'
+          $md = 'artifacts/whmcs/charity-lane-verdicts-unscreened.md'
+          $lookups = 'artifacts/whmcs/charity-lane-fraud-lookups.json'
+          # In-process call (`&`, not `pwsh -File`): PowerShell's own binder, so an
+          # empty value can never shift the arguments (ledger L214).
+          & .\scripts\whmcs-charity-lane-verdicts.ps1 -ApiUrl $env:WHMCS_API_URL -OutputFile $json -MarkdownFile $md -OrderIdField $field -FraudLookupFile $lookups
+          if ($LASTEXITCODE -ne 0) { throw "Charity-lane verdicts failed (exit $LASTEXITCODE)." }
+
+      # Unscreened: every row is ESCALATE FRAUD_CHECK_NOT_RUN. Transport for
+      # finalize only; the decision artifact is finalize's charity-lane-verdicts.
+      - name: Upload unscreened verdicts artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-verdicts-unscreened
+          path: artifacts/whmcs/charity-lane-verdicts-unscreened.json
+          if-no-files-found: error
+          retention-days: 1
+
+      # [{order_id, lookup_id}] only: the order id and the WHMCS field 228 sends
+      # to FraudLabs (order number by default). No applicant data. Transport for
+      # fraud_screen, which holds no WHMCS credential.
+      - name: Upload FraudLabs lookup keys artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-fraud-lookups
+          path: artifacts/whmcs/charity-lane-fraud-lookups.json
+          if-no-files-found: error
+          retention-days: 1
+
+  fraud_screen:
+    needs: charity_lane_verdicts
+    runs-on: windows-latest
+    environment: fraudlabspro-prod-read
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Repository Variables, NOT environment secrets: `fraudlabspro-prod-read`
+      # carries no secrets (#912, see 228).
+      - name: Validate required Azure OIDC identifiers
+        shell: bash
+        env:
+          AZURE_KV_CLIENT_ID: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+        run: |
+          if [ -z "$AZURE_KV_CLIENT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_KV_CLIENT_ID is not set; see docs/fraudlabspro-api.md";
+            exit 1;
+          fi
+          if [ -z "$AZURE_TENANT_ID" ]; then
+            echo "::error::repository Variable READ_ALL_FFC_AZURE_TENANT_ID is not set; see docs/fraudlabspro-api.md";
+            exit 1;
+          fi
+
+      # FraudLabs Pro key from Key Vault at runtime via OIDC, exactly as 228.
+      - uses: ./.github/actions/fraudlabspro-keys-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Download FraudLabs lookup keys artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: charity-lane-fraud-lookups
+          path: artifacts/whmcs
+
+      - name: Screen lane orders with FraudLabs Pro (read-only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # A missing lookup file fails the job (no orders arrives as `[]`), and
+          # finalize then marks every row FRAUD_CHECK_FAILED.
+          $in = 'artifacts/whmcs/charity-lane-fraud-lookups.json'
+          $out = 'artifacts/whmcs/charity-lane-fraud-results.json'
+          & .\scripts\whmcs-charity-lane-fraud-screen.ps1 -LookupFile $in -OutputFile $out
+          if ($LASTEXITCODE -ne 0) { throw "FraudLabs screening failed (exit $LASTEXITCODE)." }
+
+      - name: Upload FraudLabs results artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-fraud-results
+          path: artifacts/whmcs/charity-lane-fraud-results.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Runs whether or not fraud_screen succeeded (but never after a cancel, and only
+  # when the verdicts exist): a failed screen must still produce a report, with
+  # every row ESCALATE FRAUD_CHECK_FAILED, rather than leave no decision artifact.
+  finalize:
+    needs: [charity_lane_verdicts, fraud_screen]
+    if: ${{ !cancelled() && needs.charity_lane_verdicts.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Download unscreened verdicts artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: charity-lane-verdicts-unscreened
+          path: artifacts/whmcs
+
+      - name: Download FraudLabs results artifact
+        if: ${{ needs.fraud_screen.result == 'success' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: charity-lane-fraud-results
+          path: artifacts/fraudlabs
+
+      - name: Apply FraudLabs results (fail closed)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          FRAUD_SCREEN_RESULT: ${{ needs.fraud_screen.result }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $issue = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:ISSUE_NUMBER)) {
+            if (-not [int]::TryParse($env:ISSUE_NUMBER, [ref]$issue) -or $issue -lt 1) {
+              Write-Output "::error::issue_number must be a positive integer (got '$($env:ISSUE_NUMBER)')."
+              exit 1
+            }
+          }
+
+          # Results count only from a screen that SUCCEEDED; otherwise none are
+          # passed and every row is FRAUD_CHECK_FAILED.
+          $results = ''
+          if ($env:FRAUD_SCREEN_RESULT -eq 'success') {
+            $results = 'artifacts/fraudlabs/charity-lane-fraud-results.json'
+          }
+          else {
+            Write-Output "::warning::fraud_screen ended '$($env:FRAUD_SCREEN_RESULT)'; every row is ESCALATE FRAUD_CHECK_FAILED."
+          }
+
+          $json = 'artifacts/whmcs/charity-lane-verdicts.json'
+          $md = 'artifacts/whmcs/charity-lane-verdicts.md'
+          & ./scripts/whmcs-charity-lane-fraud-merge.ps1 -VerdictsFile artifacts/whmcs/charity-lane-verdicts-unscreened.json -FraudResultsFile $results -OutputFile $json -MarkdownFile $md
+          if ($LASTEXITCODE -ne 0) { throw "Charity-lane fraud merge failed (exit $LASTEXITCODE)." }
+
+          if ($issue -gt 0) {
+            gh issue comment $issue --repo $env:GITHUB_REPOSITORY --body-file $md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to comment on issue $issue (exit $LASTEXITCODE)." }
+          }
+
+      - name: Upload verdicts artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: charity-lane-verdicts
+          path: artifacts/whmcs/charity-lane-verdicts.json
+          if-no-files-found: warn

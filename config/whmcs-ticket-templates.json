@@ -1,5 +1,5 @@
 {
-  "_comment": "Templated WHMCS ticket responses used by workflow 39 (whmcs-ticket-respond). 'internal': true -> AddTicketNote (staff-only); false -> AddTicketReply (client-visible, requires a WHMCS admin username). Bodies are intentionally generic with no PII; the workflow appends an optional extra_message. Edit/extend keys here without touching the workflow.",
+  "_comment": "Templated WHMCS ticket text. Workflow 207 (Ticket Respond) replies to an existing ticket from any template: 'internal': true -> AddTicketNote (staff-only); false -> AddTicketReply (client-visible, requires a WHMCS admin username). Workflow 205 (Open Ticket) can open a NEW client ticket from a template that also carries a 'subject' (the ticket subject, after 'subject_prefix'); a template without 'subject' is reply-only. 'extra_message_required': true makes the dispatcher's extra_message mandatory (e.g. the preview URL for preview_ready). Bodies are intentionally generic with no PII; the workflow appends an optional extra_message. Edit/extend keys here without touching the workflows. Pester: scripts/tests/whmcs-ticket-template.Tests.ps1.",
   "templates": {
     "ack_new_request": {
       "internal": false,
@@ -30,6 +30,20 @@
       "internal": true,
       "subject_prefix": "",
       "body": "International charity (country of record outside the United States) - not eligible for FFC services per policy. Referred to TechSoup (https://www.techsoup.org) and any related order(s) cancelled. See docs/whmcs-support-tickets.md."
+    },
+    "preview_ready": {
+      "internal": false,
+      "subject_prefix": "[Website Preview]",
+      "subject": "Your new website is ready to review",
+      "extra_message_required": true,
+      "body": "Good news: a preview of your organization's new website is ready for you to review. The preview link is below. Please open it on both a phone and a computer and read through every section, including the contact details, links and team names. When you are done, reply to this ticket with any changes you would like (the more specific the better, for example which section and what it should say instead), or reply \"approved\" if everything looks right. The preview is on a temporary web address; your own domain is set up only after you approve. Thank you for the work your organization does."
+    },
+    "onboarding_need_info": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "A few details are needed to continue your application",
+      "extra_message_required": true,
+      "body": "Thank you for applying to Free For Charity. Before we can approve your application and start your website, we need a few details that are missing or could not be confirmed. The specific items are listed below. Please update them in your application at https://freeforcharity.org/hub (or reply to this ticket with them), and we will continue automatically once they are in place. If anything here looks wrong, reply and a volunteer will take a look."
     }
   }
 }

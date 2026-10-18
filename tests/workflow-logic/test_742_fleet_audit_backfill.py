@@ -1124,6 +1124,18 @@ def test_does_not_collide_with_741_or_738_sweeps():
     assert "schedule" not in on, on
 
 
+def test_apply_fetches_an_existing_backfill_branch_before_the_lease_push():
+    """`git clone --depth 1` tracks only the default branch, so with no fetch
+    the lease compares against an absent ref and git rejects the push as stale
+    info whenever a previous 742 PR is still open. The "updated existing PR"
+    path would then be unreachable. Found on #1641 (751), tracked as #1642.
+    """
+    raw = (REPO_ROOT / ".github" / "workflows" / WF_FILE).read_text(encoding="utf-8")
+    fetch = raw.index('git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"')
+    push = raw.index('git push -u origin "$BRANCH" --force-with-lease')
+    assert raw.index('git clone --depth 1') < fetch < push
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

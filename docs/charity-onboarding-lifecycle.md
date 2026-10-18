@@ -15,6 +15,9 @@ which ones pause for approval, see
 > website-provision `repo` step is chained behind DNS approval. Expect the rhythm: _dispatch → wait
 > for approval → continue_. Phases that gate are marked **⏸ waits for approval** below.
 
+> **Unattended version:** [charity-lane-pipeline.md](charity-lane-pipeline.md) maps each phase onto
+> the four-gate journey and says which steps the Onboarding Conductor runs without a human.
+
 ## Prerequisites & roles
 
 - **Operator** (files/assigns issues, dispatches workflows): needs **write** access to this repo.
@@ -56,6 +59,13 @@ workflow. The relevant intake templates:
   full-chain run; see [retro](restored-radiance-first-fullchain-retro.md)). The org name lives only
   in the mission text (a product custom field); use **219. WHMCS - Application Detail** for the full
   per-client view once you have the id.
+- **Gate 1/2 verdicts for every Pending order:** **232. WHMCS - Charity-Lane Verdicts** (read-only,
+  ungated `whmcs-prod-read`) checks each Pending pid 16 / 33 / 40 order against the
+  machine-checkable inventory section 5 checks and reports `ACCEPT` / `NEED_INFO` / `ESCALATE` with
+  reason codes (catalog in its `charity-lane-verdicts.json` artifact). Every order is also screened
+  with FraudLabs Pro the way 228 does it; only a FraudLabs `APPROVE` status can leave an `ACCEPT`
+  (the score is reported, never decisive), and a failed lookup is `ESCALATE` (`FRAUD_CHECK_FAILED`).
+  It accepts nothing; acceptance stays with 211 / 226 under the `whmcs-prod` gate.
 - **Run:** **101. Domain - Status (All Sources)** — read-only across **Cloudflare + M365** (it is
   the `[CF+M365]` workflow and does not query WHMCS). To check for an existing **WHMCS**
   client/domain, run **104. Domain - Export Inventory** (which includes WHMCS) or a WHMCS export

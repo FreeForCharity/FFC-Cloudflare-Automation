@@ -1,5 +1,38 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(python3 scripts/charity_lane_gate.py check:*)",
+      "Bash(python3 scripts/charity_lane_gate.py run:*)",
+      "Bash(python3 scripts/charity_lane_gate.py live-site:*)",
+      "Bash(gh api -X POST repos/FreeForCharity/FFC-Cloudflare-Automation/actions/workflows/*/dispatches *)",
+      "Bash(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/actions/*)",
+      "Bash(gh api \"repos/FreeForCharity/FFC-Cloudflare-Automation/actions/*)",
+      "Bash(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/issues*)",
+      "Bash(gh api \"repos/FreeForCharity/FFC-Cloudflare-Automation/issues*)",
+      "Bash(gh api -X PATCH repos/FreeForCharity/FFC-Cloudflare-Automation/issues/*)",
+      "Bash(gh api -X DELETE repos/FreeForCharity/FFC-Cloudflare-Automation/issues/*/labels/*)",
+      "Bash(gh api --method DELETE repos/FreeForCharity/FFC-Cloudflare-Automation/issues/*/labels/*)",
+      "Bash(gh api repos/FreeForCharity/FFC-Cloudflare-Automation/pulls*)",
+      "Bash(gh api \"repos/FreeForCharity/FFC-Cloudflare-Automation/pulls*)",
+      "Bash(gh api user*)",
+      "Bash(gh api rate_limit*)",
+      "Bash(git fetch *)",
+      "Bash(git show *)",
+      "Bash(curl -s -o /dev/null -w * https://freeforcharity.github.io/*)"
+    ],
+    "deny": [
+      "Bash(*pending_deployments*)",
+      "Bash(gh api *pulls/*/merge*)",
+      "Bash(gh api -X PUT *)",
+      "Bash(gh api --method PUT *)",
+      "Bash(gh api * -X PUT*)",
+      "Bash(gh api * --method PUT*)",
+      "Bash(gh pr merge *)",
+      "Bash(gh repo delete *)",
+      "Bash(gh secret *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

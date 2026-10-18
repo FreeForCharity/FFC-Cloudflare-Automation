@@ -1046,6 +1046,20 @@ def test_a_distant_home_ancestor_is_still_not_evidence():
         assert hint != str(home), f"the hint must not name a distant home, got {hint!s}"
 
 
+
+def test_the_template_lets_the_conductor_promote_and_enqueue_but_never_admin_merge():
+    """Run 253: auto mode refused `gh pr ready` and the enqueue, so every run stalled.
+
+    Clarke authorised both on 2026-10-11. `--admin` bypasses the merge queue, so it
+    must stay denied even though `gh pr merge` is allowed.
+    """
+    perms = json.loads(TEMPLATE.read_text(encoding="utf-8")).get("permissions", {})
+    allow, deny = perms.get("allow", []), perms.get("deny", [])
+    assert "Bash(gh pr ready:*)" in allow, allow
+    assert "Bash(gh pr merge:*)" in allow, allow
+    assert any("--admin" in rule and rule.startswith("Bash(gh pr merge") for rule in deny), deny
+    assert not any("--admin" in rule for rule in allow), allow
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

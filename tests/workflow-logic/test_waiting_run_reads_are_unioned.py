@@ -60,6 +60,29 @@ BRANCH_SHAPE = re.compile(
 
 COMMENT = re.compile(r"^\s*(#|//|\*|<#)")
 
+# `if status == "waiting"` is NOT one of these reads, and excluding it is a
+# correctness fix rather than a waiver. L341 is about a *list* query whose
+# failure mode is to under-report: `?status=waiting` answers `total_count: 0`
+# while runs are provably waiting. A comparison tests the `status` field of one
+# run already identified by id, so there is no page to come back short and no
+# second shape to union -- `repos/{repo}/actions/runs/{id}` either returns that
+# run or errors. `scripts/charity_lane_gate.py:262` (arrived on `main` in
+# `1184fed`, after this guard was written) does exactly that, and the guard read
+# it as a bare consumer: a false positive that no companion shape could have
+# satisfied, because the remedy it demanded is meaningless there.
+#
+# Keyed on `==`/`!=` rather than on a file list, so the exclusion expires by
+# itself the day a consumer stops comparing (L181: an exemption keyed to
+# instances decays into an exemption keyed to nothing). A single `=` is
+# deliberately not a comparison -- that is `?status=waiting`, the query shape
+# itself.
+COMPARISON = re.compile(
+    r"""[=!]=+\s*["']?waiting\b            # status == "waiting"
+        | ["']waiting["']\s*[=!]=+          # "waiting" == status
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
 # The shared sentence every consumer must carry, so that "all reads failed" is
 # never served as "the queue is clean". One spelling across Python and the
 # janitor's inline JS on purpose: a grep for it answers "is this defended?" in
@@ -74,6 +97,8 @@ def _reads(path):
         path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
     ):
         if COMMENT.match(line):
+            continue
+        if COMPARISON.search(line):
             continue
         if READ.search(line):
             hits.append((n, line.strip()))
@@ -94,6 +119,54 @@ def test_the_scan_finds_the_known_consumers():
         "generate-agentic-os-status.py",
     ):
         assert expected in found, f"{expected} not matched by the scan; found={sorted(found)}"
+
+
+def test_the_query_shapes_the_guard_exists_for_are_still_matched():
+    """The comparison exclusion must not swallow the shapes it sits beside.
+
+    An exclusion added to clear a false positive is the cheapest way to turn a
+    guard into a no-op, and it fails silently: the population shrinks and every
+    later run reports `0 violations`. These are the three real spellings, taken
+    from the three consumers rather than invented, so widening `COMPARISON`
+    until the guard is quiet costs a red here first.
+    """
+    for shape in (
+        "status: 'waiting', per_page: 100, page, ...shape,",  # janitor's inline JS
+        '["run", "list", "--repo", repo, "--status", "waiting",',  # gh run list
+        'base = {"status": "waiting", "per_page": "100"}',  # REST params dict
+        "runs?status=waiting&per_page=100",  # the raw query string
+    ):
+        assert READ.search(shape), f"READ stopped matching a real query shape: {shape}"
+        assert not COMPARISON.search(shape), (
+            f"COMPARISON is too broad -- it excludes a real query shape: {shape}"
+        )
+
+
+def test_a_single_run_status_comparison_is_not_treated_as_a_list_read():
+    """One already-identified run's `status` field is not a list query.
+
+    Asserted on the construct, and then on the live tree, because the two can
+    disagree: a later consumer may compare in a spelling this does not cover.
+    """
+    for compared in (
+        'if status == "waiting":',
+        "if (run.status === 'waiting') {",
+        'if status != "waiting":',
+        'if "waiting" == run["status"]:',
+    ):
+        assert COMPARISON.search(compared), (
+            f"a per-run status comparison is still read as a list query: {compared}"
+        )
+
+    offenders = {
+        p.relative_to(REPO_ROOT).as_posix(): _reads(p)
+        for p in SCAN
+        if p.name == "charity_lane_gate.py" and _reads(p)
+    }
+    assert not offenders, (
+        "charity_lane_gate.py polls one run by id and compares its own status; "
+        f"it has no shape to union, so it must not be in the population: {offenders}"
+    )
 
 
 def test_every_waiting_run_read_has_a_branch_qualified_companion():

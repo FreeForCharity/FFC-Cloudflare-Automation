@@ -188,6 +188,140 @@ def test_the_cap_is_named_ONCE_so_the_report_and_the_helper_cannot_disagree():
     )
 
 
+# ----------------------------------------------------------------------------
+# The cap has to be the ONLY remedy the report hands over.
+#
+# Reviewed on #1645 (Copilot, 2026-10-12): capping the plan was additive, not a
+# replacement. Every `stale_green` row still ended its `reason` with
+# `Fix: PUT /pulls/<n>/update-branch`, and the section loop still printed one
+# row per PR directly above the cap -- so the run-257 report rendered 19
+# independently-actionable remedies and then a note saying to do 3. The burst
+# the cap exists to prevent was still the thing the report most invited.
+#
+# The two tests above this block assert on `render`'s SOURCE, which is why they
+# could not see it: they check that the plan is computed, never that the rows
+# stopped offering a competing instruction. These render the real thing and
+# count.
+
+
+def _stale_green_rows(n):
+    """`n` green PRs, each far enough behind to be stale-green."""
+    prs = [
+        {
+            "number": 1600 + i,
+            "title": "t%d" % (1600 + i),
+            "is_draft": False,
+            "head": "b%d" % i,
+            "labels": ["agentic-os"],
+            "rollup": "SUCCESS",
+            "unresolved": 0,
+            "behind": 40,
+            "critical_hits": [],
+        }
+        for i in range(n)
+    ]
+    result = _mod.classify(prs, 5)
+    assert len(result["stale_green"]) == n, (
+        "fixture no longer produces stale-green rows: %d of %d"
+        % (len(result["stale_green"]), n)
+    )
+    return result
+
+
+def test_a_stale_green_ROW_offers_no_remedy_that_competes_with_the_cap():
+    """19 rows must yield exactly CAP actionable `update-branch` calls, not 19+CAP."""
+    import re
+
+    result = _stale_green_rows(len(RUN_257_STALE))
+    report = _mod.render(result, 5, len(RUN_257_STALE), None)
+
+    planned = re.findall(r"^\s+PUT /pulls/(\d+)/update-branch$", report, re.M)
+    assert len(planned) == CAP, (
+        f"the capped plan must be the only place the report names a concrete "
+        f"update-branch call; found {len(planned)} planned lines, expected {CAP}"
+    )
+
+    per_row = re.findall(r"Fix: PUT /pulls/\d+/update-branch", report)
+    assert not per_row, (
+        f"{len(per_row)} per-row `Fix: PUT ...` remedies are still printed above "
+        f"the cap, so the report hands over {len(per_row)} independently "
+        f"actionable calls and then asks for {CAP} -- this is the run-257 sweep "
+        f"being invited by the same report that warns against it"
+    )
+
+
+def test_a_stale_green_row_still_STATES_its_cause():
+    """Dropping the remedy must not drop the diagnosis -- a row with no reason
+    to be stale is worse than one with a remedy that over-reaches."""
+    result = _stale_green_rows(1)
+    reason = result["stale_green"][0]["reason"]
+    assert "behind main" in reason, f"the row stopped naming its cause: {reason}"
+    assert "update-branch plan" in reason, (
+        f"the row drops the remedy without pointing at the capped plan that "
+        f"replaced it, so a reader has a cause and nowhere to go: {reason}"
+    )
+    assert "PUT /pulls/" not in reason, (
+        f"the row still carries a copy-pasteable call: {reason}"
+    )
+
+
+def test_the_JSON_payload_carries_the_cap_and_not_just_the_rows():
+    """`--json` is the other consumer, and it never saw the plan at all: it
+    emitted `{threshold, **result}`, so a machine reader got 19 stale rows and
+    no statement that they must not all be issued."""
+    result = _stale_green_rows(len(RUN_257_STALE))
+    # Resolved by name rather than attribute access on purpose. The harness
+    # only catches AssertionError, so a missing builder raised AttributeError
+    # and ABORTED the module -- 6 of 13 tests reported, the rest silently
+    # unrun, which a FAIL-grep scores as a pass (L194).
+    builder = getattr(_mod, "json_payload", None)
+    assert builder is not None, (
+        "the script has no json_payload(); --json still emits the bare result, "
+        "so a machine consumer reads 19 stale rows with no cap"
+    )
+    payload = builder(result, 5)
+
+    assert "update_branch_plan" in payload, (
+        "the --json body carries no update-branch plan, so a machine consumer "
+        "reads 19 stale rows with no cap and reproduces the run-257 burst"
+    )
+    plan = payload["update_branch_plan"]
+    assert plan["cap"] == CAP, f"plan cap disagrees with the helper: {plan['cap']}"
+    assert plan["now"] == [r["number"] for r in result["stale_green"]][:CAP], (
+        f"the plan's batch is not the first {CAP} rows in the audit's order: "
+        f"{plan['now']}"
+    )
+    assert len(plan["deferred"]) == len(RUN_257_STALE) - CAP, (
+        f"deferred count is wrong: {len(plan['deferred'])}"
+    )
+    # The prose report's two dead re-trigger routes have to travel with the
+    # data too, or a machine consumer "repairs" an error body in place.
+    for token in ("ONE AT A TIME", "422", "404"):
+        assert token in plan["instruction"], (
+            f"the plan's instruction omits {token}"
+        )
+    # Nothing the rows carry may still read as a per-PR call.
+    import json as _json
+
+    assert "Fix: PUT /pulls/" not in _json.dumps(payload), (
+        "the --json rows still carry per-row update-branch remedies"
+    )
+
+
+def test_the_json_PATH_uses_the_payload_builder():
+    """A builder main() does not call is a test passing against dead code."""
+    import inspect
+
+    src = inspect.getsource(_mod.main)
+    assert "json_payload(" in src, (
+        "main() still serialises its own dict, so the plan added to "
+        "json_payload() never reaches --json output"
+    )
+    assert '{"threshold": threshold, **result}' not in src, (
+        "main() still has the uncapped inline payload"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

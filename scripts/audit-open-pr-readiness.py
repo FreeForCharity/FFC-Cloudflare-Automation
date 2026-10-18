@@ -250,8 +250,9 @@ def classify(prs, threshold):
                         reason=(
                             "every check is green, but %s -- the guard's pass "
                             "was measured before main moved and will fail on "
-                            "the next run. Fix: PUT /pulls/%d/update-branch"
-                            % ("; and ".join(causes), pr["number"])
+                            "the next run. Remedy is capped and ordered: read "
+                            "it from the update-branch plan, not one PUT per "
+                            "row" % ("; and ".join(causes),)
                         ),
                     )
                 )
@@ -323,6 +324,37 @@ def update_branch_batch(numbers, cap=UPDATE_BRANCH_BATCH_CAP):
         )
     ordered = list(numbers)
     return ordered[:cap], ordered[cap:]
+
+
+def json_payload(result, threshold):
+    """The `--json` body, including the capped update-branch plan.
+
+    The plan is part of the payload rather than a rendering detail. A machine
+    consumer that reads `stale_green` and issues one `update-branch` per row
+    reproduces the run-257 burst exactly, and the rows deliberately no longer
+    carry a per-row remedy for it to copy -- so the cap has to travel with the
+    data, not only with the prose report.
+    """
+    stale = [r["number"] for r in result["stale_green"]]
+    batch, deferred = update_branch_batch(stale)
+    return {
+        "threshold": threshold,
+        **result,
+        "update_branch_plan": {
+            "cap": UPDATE_BRANCH_BATCH_CAP,
+            "now": batch,
+            "deferred": deferred,
+            "instruction": (
+                "Issue these ONE AT A TIME, confirming each draws a real "
+                "Copilot review on its new head before moving the next. Moving "
+                "many heads at once makes Copilot return an error body instead "
+                "of a review, and an error body is not a review (AGENTS.md "
+                "merge condition). It cannot be repaired in place: requesting "
+                "the reviewer by login is 422 and re-requesting the check-run "
+                "is 404 -- only another push re-triggers it."
+            ),
+        },
+    }
 
 
 def has_findings(result):
@@ -678,7 +710,7 @@ def main(argv=None):
 
     result = classify(prs, threshold)
     if args.json:
-        print(json.dumps({"threshold": threshold, **result}, indent=2))
+        print(json.dumps(json_payload(result, threshold), indent=2))
     else:
         print(render(result, threshold, len(prs), args.label))
     return 1 if has_findings(result) else 0

@@ -1202,6 +1202,46 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 233,
+      "title": "WHMCS - Charity-Lane Ticket Reply (classify, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "233-whmcs-charity-lane-ticket-reply.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G3.6 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). After 205 sends a charity the `preview_ready` ticket (\"[Website Preview] Your new website is ready to review\"), this finds that client's most recent ticket with the chosen subject prefix (GetTickets by clientid, then GetTicket), takes the client's latest reply after FFC's opening message (client vs admin by the API's `admin` field), and classifies it: APPROVED / CHANGES / UNCLEAR / NO_REPLY / TICKET_NOT_FOUND. It fails closed: anything unsure is UNCLEAR.  This repo is PUBLIC. The reply text is never written anywhere: the job summary and the optional issue comment (marker `<!-- charity-lane:ticket-reply -->`) carry only client id, ticket id, ticket status, reply date (UTC), classification and the matched signal LABELS from fixed word lists. No artifact is uploaded.  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. Every input reaches the script through env:, never the script text.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "read-only classification of a charity's latest reply on its most recent `[Website Preview]` / `[Application]` ticket (GetTickets by clientid + GetTicket): `APPROVED` / `CHANGES` / `UNCLEAR` / `NO_REPLY` / `TICKET_NOT_FOUND`, fail-closed toward `UNCLEAR`; the reply text is never written (output is client id, ticket id, status, reply date, classification and fixed-list signal labels only); no artifact; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 234,
+      "title": "WHMCS - Charity-Lane Site Content Fields (public, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "234-whmcs-charity-lane-site-fields.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G3.3c of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Emits ONE charity's public website fields for the Cloud Worker that builds its site (.claude/routines/site-builder.md): the footer email / phone / city & state, mission, tagline, descriptions, programs, brand color, logo, social, donation and volunteer URLs, founding year, alternate names, EIN, Candid URL and template choice. The applicant gave these FOR PUBLICATION on the website, so they are printed in full; 219 masks contact data and is the wrong source for them.  The allowlist is config/charity-lane-site-fields.json: only its fields can appear, each cleaned (HTML, control characters) and validated by type. Never emitted: the mailing address, the client record's own name / email / phone, board / officer / team / contact fields, or anything else not listed. A value that fails validation is reported by reason code only, never printed. Source per field: the Custom Client Field, then the matching product answer on the client's pid 16/33/40 services.  Output: charity-lane-site-fields.json artifact, the same JSON in the job log and job summary, and the list of missing fields (the worker marks them `pending`); optionally a comment on `issue_number` carrying `<!-- charity-lane:site-fields -->`.  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. WHMCS actions: GetClientsDetails and GetClientsProducts only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "one client's PUBLIC website fields for the site builder (G3.3c); prints values in full by design, but only the allowlist in `config/charity-lane-site-fields.json` (footer email/phone/city & state, mission, tagline, descriptions, programs, brand color, logo/social/donation/volunteer URLs, founding year, alternate names, EIN, Candid URL, template choice), each HTML/control-stripped, length-capped and type-validated; the loader refuses any address/contact/board/team field; never the mailing address or the client record's own name/email/phone; a rejected value is reported by reason code only; WHMCS actions GetClientsDetails + GetClientsProducts only; `client_id` / `issue_number` digits-only, validated before the credential step; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [
@@ -2325,6 +2365,46 @@
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "no environment, no credential beyond the job token; public data only (FreeForCharity repo names, org-wide issue/PR search with a whole-phrase filter, ffcadmin `docs/sites_list.csv`, ProPublica by EIN); the only write is the optional result comment on a hub issue; free-text inputs reach scripts/charity_lane_lookup.py through env",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 751,
+      "title": "Website - Security Overrides Sync (FFC-EX)",
+      "apis": [
+        "GH"
+      ],
+      "file": "751-website-security-overrides-sync.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Brings named FFC-EX sites up to the dependency security floor of the template each one was made from, as one pull request per repo. Never merges.  Why this exists (#1640, epic #1618): the charity lane's Gate 3 CI row counts the site's Security Audit, and on most FFC-EX repos that audit is red in a way Dependabot cannot fix. The open advisory is transitive (`source-map-js` via `postcss`), and Dependabot bumps direct dependencies only. The templates fix it with a `pnpm.overrides` block that older sites lack. Measured 2026-10-12: about 90 open Dependabot PRs, nearly all still failing `pnpm audit (production)`; the same change made by hand turned five in-flight sites green.  What it changes, per repo, and nothing else: - `package.json`: the template's `pnpm.overrides` (template value wins on a shared key, repo-only keys kept, scoped keys a bare pin makes dead dropped), and `next` / `postcss` raised to the template's floor (scripts/fleet-overrides-sync.js); - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm; - `types/*.d.ts` copied from the template, only when the build fails without them (Next 16.3 type-checks the test files; the template's matcher types are what fixed that there); - in `package.json`, the template's `@jest/globals` devDependency, only when the build fails on TS2307 for it (allowlisted, scripts/fleet-overrides-sync.js add-dev); - an allowlisted test file (`TEMPLATE_TEST_FILES`) the site already has, replaced with the template's version, only when the build log names it.  Two jobs, the 742 shape: - plan  \u2014 ungated, job token, read-only. Clones each repo anonymously, makes the change, installs, audits and builds. A repo is READY only when its high-level audit passes and it builds. dry_run=true (the default) stops here; the patches are uploaded as an artifact. - apply \u2014 dry_run=false only, gated `github-prod`. Applies exactly the patches the plan produced (the gate approver reviews that plan), pushes one branch per repo and opens a PR. It never merges, never approves and never enables auto-merge: landing is the target repo's merge condition.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only, no environment) clones each repo anonymously, detects its template from the drift-guard banner (refuses a repo matching neither), merges that template's `pnpm.overrides` and the `next`/`postcss` floor (scripts/fleet-overrides-sync.js), regenerates `pnpm-lock.yaml`, and marks a repo ready only when `pnpm audit --prod --audit-level high` and the build pass; the charity's own build runs with no token in its environment; the gated `apply` job applies exactly the planned patches, refuses any path outside `package.json`, `pnpm-lock.yaml` and `types/*.d.ts`, and opens one PR per repo; never merges, approves or enables auto-merge (#1640)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 752,
+      "title": "Repo - Merge Queue Backfill (FFC-EX)",
+      "apis": [
+        "GH"
+      ],
+      "file": "752-repo-merge-queue-backfill.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Adds the repo-level \"Merge Queue + Branch Up-to-Date\" ruleset to named FFC-EX repos whose default branch has no merge queue. Never changes a repo that already has one, and never touches any other ruleset or setting.  Why this exists (epic #1618, 2026-10-12): GitHub cannot put a merge queue in an organization ruleset, so the queue exists per repo. 44 of 116 FFC-EX repos carried it and 72 did not: 701 never created it, and nothing backfilled it. With a queue on every site, `gh pr merge --auto` always means \"enqueue\", and 707 lands content PRs through the queue (#1654, #1655).  The ruleset body is config/merge-queue-ruleset.json, copied field for field from the one the 44 repos carry (merge method MERGE, ALLGREEN, 5-minute wait, repository-admin bypass).  Two jobs, the 742/751 shape: - plan  - ungated, job token, read-only. Per repo: public, not archived, merge commits not disabled (merge_method MERGE needs them; the job token usually cannot see the setting, so apply re-checks it), and no merge_queue rule on the default branch yet. Prints one `752-plan: <repo> <status> - <reason>` line each to the log. - apply - only when dry_run=false, on `github-prod` (Clarke approves the plan). Creates the ruleset on each ready repo, then re-reads the branch rules to confirm the queue is in force. Prints one `752-apply: <repo> <result>` line each. A 403 here means the PAT lacks Administration write on the repo; it is reported per repo.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only: public, not archived, merge commits allowed, no `merge_queue` rule yet); `apply` creates only the `config/merge-queue-ruleset.json` ruleset (the one 44 FFC-EX repos already carry), never edits or deletes another ruleset or setting, and re-reads the branch rules to confirm",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

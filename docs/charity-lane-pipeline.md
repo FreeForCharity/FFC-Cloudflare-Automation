@@ -114,11 +114,11 @@ marker orders from `224` need no gate.
 1. **Queue:** for each accepted charity the conductor keeps exactly one hub issue titled
    `[CHARITY-LANE] <domain or org>` labelled `charity-lane` and `lane:build-ready`, linking the
    ffcadmin work order. Labels move it through `lane:building`, `lane:built` and `lane:validate`.
-2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. pid 33 has no domain
-   question, so the conductor first searches for an existing site (750's EIN-based query, then a web
-   search) and otherwise sends an `onboarding_need_info` ticket asking for the domain; it never
-   guesses. A charity found to have its own live site is provisioned with 701 `skip_dns=true` and
-   follows the ready-for-cutover path.
+2. **Repo name:** `FFC-EX-<domain>` from the application's desired domain. Since 2026-10-14 pid 33
+   asks it (optional `desired-domain`, "Your website domain"); when it is blank the conductor first
+   searches for an existing site (750's EIN-based query, then a web search) and otherwise sends an
+   `onboarding_need_info` ticket asking for the domain; it never guesses. A charity found to have
+   its own live site is provisioned with 701 `skip_dns=true` and follows the ready-for-cutover path.
 3. **Provision:** `701. Website - Provision` with `dry_run=false` through the gate script (rule
    `701-provision`). A charity at this gate has no FFC zone yet, so 701 publishes on
    `https://freeforcharity.github.io/FFC-EX-<domain>/` and skips DNS.
@@ -139,11 +139,12 @@ marker orders from `224` need no gate.
    once for the repo (#1641, rule `751-overrides-sync` in #1644), which opens a PR syncing the
    site's `pnpm.overrides` and `next` floor to its template, and the item waits for that PR.
 6. **Charity review:** when every machine row passes, the conductor sends `205` with the
-   `preview_ready` template and the preview URL. Workflow 233 classifies the charity's reply as
-   APPROVED, CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638). APPROVED completes Gate
-   3, and the charity may order its domain. CHANGES go back to the worker (how the change text
-   reaches the worker is an open decision on #1618). UNCLEAR, or no reply after 14 days, is a
-   decision.
+   `preview_ready` template and the preview URL. Workflow `233. WHMCS - Charity-Lane Ticket Reply`
+   (ungated, `subject_prefix=[Website Preview]`) classifies the charity's reply as APPROVED,
+   CHANGES, UNCLEAR or NO_REPLY without printing its text (#1638), and fails closed toward UNCLEAR.
+   APPROVED completes Gate 3, and the charity may order its domain. CHANGES go back to the worker
+   (how the change text reaches the worker is an open decision on #1618). UNCLEAR, or no reply after
+   14 days, is a decision. See [whmcs-support-tickets.md](whmcs-support-tickets.md).
 
 ### Gate 4: domain and DNS
 

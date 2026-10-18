@@ -85,12 +85,13 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      already exists: link the hub item to it, do not provision a second repo, and continue that
      charity's existing thread instead. `POSSIBLE_MATCH` is a `DECISION NEEDED` with the matches
      listed.
-   - **No desired domain** (every pid 33 application): run a web search with the query 750 prints
-     (IRS name, city and state from the EIN). If the charity has its own site, record the domain on
-     the hub item and re-run 750 with it; that charity has an **existing live site**, so it follows
-     the ready-for-cutover path in step 7, never the brand-new-domain path. If nothing is found,
-     send the `onboarding_need_info` ticket asking for the desired domain and label the item
-     `lane:needs-info`.
+   - **No desired domain** (pid 33 applications from before 2026-10-14, or a newer one that left the
+     optional "Your website domain" answer blank; 232 reads it as `desired_domain`): run a web
+     search with the query 750 prints (IRS name, city and state from the EIN). If the charity has
+     its own site, record the domain on the hub item and re-run 750 with it; that charity has an
+     **existing live site**, so it follows the ready-for-cutover path in step 7, never the
+     brand-new-domain path. If nothing is found, send the `onboarding_need_info` ticket asking for
+     the desired domain and label the item `lane:needs-info`.
    - Backlog: the newest `BACKLOG:` lines the Cloud Worker posted on #1608 are approved charities
      with a work order but no lane item (its client id is in the line). Treat each like an accepted
      order here (750 first; an existing repo means an in-flight item at `lane:validate`), at most 3
@@ -102,12 +103,41 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      FFC-IN-ffcadmin.org): put any such link on the item. The Cloud Worker confirms it by the
      `ffc-<client id>` marker. The Cloud Worker picks these up. Never build content yourself.
 4. **Provision** [one per run]. For a `lane:build-ready` item with a desired domain and no
-   `FFC-EX-<domain>` repo yet: `charity_lane_gate.py run --rule 701-provision` with `domain`,
-   `dry_run=false`, the org name, and the public footer fields from workflow `234` [site-content
-   fields] (`client_id`, `issue_number` = the hub item; public by design, allowlisted). If step 3
-   found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports live, add
-   `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL and DNS is
-   never touched. Comment the result on the hub item.
+   `FFC-EX-<domain>` repo yet, run workflow `234` [site-content fields] (`client_id`, `issue_number`
+   = the hub item; public by design, allowlisted) and then
+   `charity_lane_gate.py run --rule 701-provision` with `domain`, `dry_run=false` and, from 234's
+   fields (omit any input whose field is absent):
+   - `charity_name` = `charityName` (the application's legal-name answer), else the org name 232
+     reported;
+   - `technical_poc_github_username` = `maintainerGithub`: 701 grants that account maintainer access
+     to the new repo (729). Absent: post `DECISION NEEDED: no maintainer GitHub user for <domain>`
+     and provision anyway;
+   - `irs_status` = `501(c)(3) (approved)` for pid 33, `Not yet / pending (pre-501(c)(3))` for pid
+     16;
+   - `current_website_url` = `currentWebsiteUrl`: the charity's current public site or page, which
+     may sit on a free host with no domain of its own (Canva, brand.page, a Wix or Google Sites
+     subdomain, Linktree, Carrd). The site builder reuses its content;
+   - `website_situation` from `domainOwnership`, `currentWebsiteUrl` and the live-site check: a site
+     only on a free host (no domain of their own) =
+     `New charity domain name but existing charity site (Wix / Squarespace / etc)`; otherwise a live
+     site on a Wix or Squarespace domain =
+     `New charity domain name but existing charity site (Wix / Squarespace / etc)`; any other live
+     site = `Existing domain name and existing website (WordPress / formal hosting)`; no live site =
+     `New charity domain name and new charity website`;
+   - `domain_registrar`: map `domainRegistrar` onto the policy enum (GoDaddy, Wix, Squarespace, else
+     `Other / another registrar`); `No domain yet` when they do not own it; `Unknown / not sure`
+     when blank;
+   - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
+     `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
+     `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
+     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
+     `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
+     consent to appear), then any `leadershipLines`.
+
+   If step 3 found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports
+   live, add `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL
+   and DNS is never touched. Comment the result on the hub item.
+
 5. **Deliver and check worker output** [workflow 707; policy rule `707-content-apply`]. The Cloud
    Worker builds content per `.claude/routines/site-builder.md` and labels the item `lane:built`.
    For each `lane:built` item (one per run):
@@ -136,6 +166,18 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      (`.claude/routines/site-builder.md` step 5). No such comment for the current preview yet: leave
      the item for the next run. A FAIL row sets the label back to `lane:build-ready` (remove
      `lane:validate`) with the failing rows; WARN rows are reported, not blocking.
+   - **Security Audit only** [workflow 751; policy rule `751-overrides-sync`]: when the only FAIL
+     row is CI and the only workflow it lists is `Security Audit` (the row names failing workflows,
+     not jobs), the worker cannot fix it (dependencies are outside its content paths). Keep the item
+     at `lane:validate` and, if the item has no `<!-- charity-lane:overrides-sync -->` comment yet,
+     run
+     `charity_lane_gate.py run --rule 751-overrides-sync --input target_repos=FFC-EX-<domain> --input dry_run=false`.
+     Read the job logs: the apply job prints the PR link, and the plan job says why a repo is not
+     ready (no drift guard, or the audit or build still fails after the sync). Comment
+     `<!-- charity-lane:overrides-sync -->` with the PR link, or the not-ready reason, on the item.
+     Run it once per item: while that comment exists, never dispatch 751 for the repo again. A PR
+     waits for the repo's merge condition; list it on the ledger as waiting, and re-check the item
+     when a new Gate 3 table arrives. A not-ready result is `DECISION NEEDED` with the reason.
    - Your check and every Gate 3 machine row pass [`extra_message` on rule `205-templated`, #1632]:
      run rule `205-templated` with `template=preview_ready`, the `client_id`, and the preview URL as
      `extra_message`; set the label to `lane:charity-review` (remove `lane:validate`). A failure

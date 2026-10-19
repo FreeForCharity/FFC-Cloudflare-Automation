@@ -527,6 +527,11 @@ jobs:
             DEFBRANCH="$(git symbolic-ref --short HEAD)"
             git checkout -b "$BRANCH"
             git commit -m "ci: add security audit (npm audit high/critical, daily)"
+            # A shallow clone tracks only the default branch. Fetch the backfill
+            # branch when it already exists (an open 742 PR), so the lease below
+            # compares against its real tip instead of an absent ref, which git
+            # rejects as "stale info". Absent branch: nothing to fetch.
+            git fetch -q --depth 1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
             if ! git push -u origin "$BRANCH" --force-with-lease; then
               echo "::warning::$repo push failed"
               echo "| $repo | ❌ push failed | — | — |" >> "$GITHUB_STEP_SUMMARY"

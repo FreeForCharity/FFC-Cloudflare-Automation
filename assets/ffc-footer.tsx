@@ -137,29 +137,29 @@ export default function FfcFooter() {
   // builds its expectation from the config -- failed the moment a site
   // switched from one footer to the other. The GATE is unchanged.
   const taxStatusLabel = ein && candidUrl ? siteConfig.taxStatusLabel.trim() : ''
-  // The footer standard's "policy pages, minimum set", quoted from
-  // FFC-IN-ffcadmin.org/docs/footer-standard-adoption-checklist.md: "privacy
-  // policy, cookie policy, terms of service, donation policies, vulnerability
-  // disclosure, security acknowledgements". Note the plural on "donation
-  // policies" where every other item is singular -- that is what says the
-  // charity's policy and FFC's are both expected, and the template ships a
-  // route for each. Two of those were missing here
-  // while the converter's own `restoreTemplateRoutes` docblock listed both as
-  // "the pages the footer standard links to" and restored them -- so a site
-  // that switched to this footer shipped two routes nothing linked, and a
-  // footer one item short of the standard it exists to satisfy. Measured on
-  // newheightseducation.org.
+  // The footer standard's six policy pages (FFC-IN-ffcadmin.org,
+  // docs/footer-standard-adoption-checklist.md): privacy policy, cookie
+  // policy, terms of service, the charity's ONE donation policy, vulnerability
+  // disclosure, security acknowledgements. Every one is the charity's own
+  // document, and the templates ship a route for each.
   //
-  // The FFC donation policy is labelled "FFC Donation Policy" rather than by
-  // its page title: the charity repo's `check-drift` identity scan treats the
-  // template org's name as a literal outside its allowlist as leftover branding, and
-  // the abbreviation is clearer in a one-line strip regardless.
+  // The standard used to list "donation policies" -- the charity's plus a
+  // separate "Free For Charity Donation Policy" page -- and this strip linked
+  // both. FFC retired the second page (its charity-relevant terms now live in
+  // the charity's /donation-policy), so it is no longer linked here. A site
+  // converted before the change may still carry that route; leaving it
+  // unlinked is harmless, and the template's check-drift warns until it is
+  // removed.
+  //
+  // This list was once short of the standard while the converter's
+  // `restoreTemplateRoutes` restored every route the standard links to, so a
+  // site that switched to this footer shipped routes nothing linked. Measured
+  // on newheightseducation.org; keep this list and the standard in step.
   const policyLinks = [
     { name: 'Privacy Policy', href: '/privacy-policy' },
     { name: 'Cookie Policy', href: '/cookie-policy' },
     { name: 'Terms of Service', href: '/terms-of-service' },
     { name: 'Donation Policy', href: '/donation-policy' },
-    { name: 'FFC Donation Policy', href: '/free-for-charity-donation-policy' },
     { name: 'Vulnerability Disclosure', href: '/vulnerability-disclosure-policy' },
     { name: 'Security Acknowledgements', href: '/security-acknowledgements' },
   ]

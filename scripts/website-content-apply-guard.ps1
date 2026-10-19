@@ -648,6 +648,34 @@ function Get-ContentApplyLandDecision {
     return & $d 'merge' "all $(@($CheckRuns).Count + @($Statuses).Count) check(s) passed on $ExpectedSha."
 }
 
+function Get-ContentApplyMergeRoute {
+    <#
+    .SYNOPSIS
+        Decides how 707 lands a content PR whose checks passed: 'queue' or 'direct'. Pure.
+    .DESCRIPTION
+        A branch whose rules include `merge_queue` takes changes only through the
+        queue, so a direct `PUT /repos/{o}/{r}/pulls/{n}/merge` is refused there (#1654). 44 of
+        116 FFC-EX repos carried the repo-level "Merge Queue + Branch Up-to-Date"
+        ruleset on 2026-10-12. Returns Route = 'queue' when any rule is
+        `merge_queue`, 'direct' when the rules were read and none is, and 'unknown'
+        when the rules could not be read: the caller then leaves the PR open
+        rather than guess which route GitHub will accept.
+    .PARAMETER Rules
+        The array from GET /repos/{o}/{r}/rules/branches/{branch}.
+    .PARAMETER RulesKnown
+        $false when that read failed.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()][object[]]$Rules = @(),
+        [bool]$RulesKnown = $true
+    )
+    $r = { param($route, $reason) [pscustomobject]@{ Route = $route; Reason = $reason } }
+    if (-not $RulesKnown) { return & $r 'unknown' "the branch rules could not be read, so whether it requires the merge queue is unknown." }
+    if (@($Rules | Where-Object { $_.type -eq 'merge_queue' }).Count -gt 0) { return & $r 'queue' 'the branch requires the merge queue.' }
+    return & $r 'direct' 'the branch has no merge queue rule.'
+}
+
 if ($MyInvocation.InvocationName -eq '.') { return }
 
 Write-Error 'Dot-source this script to load the content-apply guard functions; it does nothing when run directly.'

@@ -93,6 +93,20 @@ full-501(c)(3) match, so a fuzzy answer is not treated as a hard 501(c)(3).
 (`ffc_promote_charity_record.php` has its own fail-safe design — see its section above: it runs on
 `AcceptOrder`, **writes** copy-if-empty into client fields, and on any error simply does nothing.)
 
+## `ffc_require_company.php`: Company Name is required
+
+WHMCS has no setting to make the client Company Name required (General Settings → Other lists only
+name, address and phone), and applicants often skip it, which makes their application hard to find.
+This hook refuses a blank Company Name on registration and client-area profile edits
+(`ClientDetailsValidation`) and at checkout (`ShoppingCartValidateCheckout`; for an existing client
+it reads `tblclients.companyname`). Read-only and fail-open: any exception returns `[]` (allow). The
+applications also ask a required "Organization's legal name" question (`org-name`), which triage's
+org-name pattern already reads, so older accounts are still findable.
+
+Manual test: register a new account with Company Name blank → refused with the message; fill it →
+accepted. Check out as an existing client whose Company Name is blank → refused with the "add it
+under Your Profile" hint.
+
 ## Deploy (FTPS)
 
 The hooks are deployed to the production WHMCS hooks directory:
@@ -100,6 +114,7 @@ The hooks are deployed to the production WHMCS hooks directory:
 ```
 public_html/hub/includes/hooks/ffc_status_product_match.php
 public_html/hub/includes/hooks/ffc_promote_charity_record.php
+public_html/hub/includes/hooks/ffc_require_company.php
 ```
 
 Edit the file **here**, get it reviewed via PR, run `php -l` on it, then upload it over FTPS to that
@@ -113,6 +128,7 @@ Delete the deployed file (per hook):
 ```
 public_html/hub/includes/hooks/ffc_status_product_match.php
 public_html/hub/includes/hooks/ffc_promote_charity_record.php
+public_html/hub/includes/hooks/ffc_require_company.php
 ```
 
 Removing a file removes that behavior instantly — no config change, no restart. (The canonical

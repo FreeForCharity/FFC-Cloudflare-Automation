@@ -585,7 +585,9 @@ No additional setup is required for these workflows to run. However, to get the 
 | 229 | WHMCS - Populate Client Fields from Product Answers [WHMCS] | `229-whmcs-client-field-populate.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
 | 230 | WHMCS - Record Field Set (client/contact/service/domain) [WHMCS] | `230-whmcs-record-field-set.yml` | workflow_dispatch | Writes (record field) | ✅ whmcs-prod |
 | 231 | WHMCS - Domain Order Add (Register/Transfer) (Admin) [WHMCS] | `231-whmcs-domain-order-add.yml` | workflow_dispatch | Writes (dry-run default) | ✅ whmcs-prod |
-| 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [FRAUDLABS+WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read + fraudlabspro-prod-read |
+| 233 | WHMCS - Charity-Lane Ticket Reply (classify, read-only) [WHMCS] | `233-whmcs-charity-lane-ticket-reply.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 234 | WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS] | `234-whmcs-charity-lane-site-fields.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -661,6 +663,9 @@ No additional setup is required for these workflows to run. However, to get the 
 | 747 | Repo - Conductor Liveness [GH] | `747-conductor-liveness.yml` | schedule, workflow_dispatch | Reads | — |
 | 748 | Repo - Template Provisioning Matrix [Repo] | `748-template-provisioning-matrix.yml` | pull_request, schedule, workflow_dispatch | Reads | — |
 | 749 | Org - Invite Member [Org] | `749-org-invite-member.yml` | workflow_call, workflow_dispatch | Writes (dry-run default) | ✅ github-prod (invite job only) |
+| 750 | Repo - Charity-Lane Duplicate Lookup (read-only) [GH] | `750-charity-lane-lookup.yml` | workflow_dispatch | Reads | — |
+| 751 | Website - Security Overrides Sync (FFC-EX) [GH] | `751-website-security-overrides-sync.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
+| 752 | Repo - Merge Queue Backfill (FFC-EX) [GH] | `752-repo-merge-queue-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

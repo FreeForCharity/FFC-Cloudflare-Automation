@@ -37,6 +37,13 @@
       "subject": "Your new website is ready to review",
       "extra_message_required": true,
       "body": "Good news: a preview of your organization's new website is ready for you to review. The preview link is below. Please open it on both a phone and a computer and read through every section, including the contact details, links and team names. When you are done, reply to this ticket with any changes you would like (the more specific the better, for example which section and what it should say instead), or reply \"approved\" if everything looks right. The preview is on a temporary web address; your own domain is set up only after you approve. Thank you for the work your organization does."
+    },
+    "onboarding_need_info": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "A few details are needed to continue your application",
+      "extra_message_required": true,
+      "body": "Thank you for applying to Free For Charity. Before we can approve your application and start your website, we need a few details that are missing or could not be confirmed. The specific items are listed below. Please update them in your application at https://freeforcharity.org/hub (or reply to this ticket with them), and we will continue automatically once they are in place. If anything here looks wrong, reply and a volunteer will take a look."
     }
   }
 }

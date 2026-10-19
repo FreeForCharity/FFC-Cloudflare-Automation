@@ -1,0 +1,171 @@
+{
+  "result": "success",
+  "clientid": "4242",
+  "totalresults": 4,
+  "products": {
+    "product": [
+      {
+        "id": "300",
+        "pid": "16",
+        "name": "Pre-501(c)(3) Charity Onboarding",
+        "status": "Cancelled",
+        "customfields": {
+          "customfield": [
+            {
+              "id": "1",
+              "name": "public-phone|Public phone (website footer)",
+              "value": "555-000-1111"
+            }
+          ]
+        }
+      },
+      {
+        "id": "501",
+        "pid": "16",
+        "name": "Pre-501(c)(3) Charity Onboarding",
+        "status": "Active",
+        "customfields": {
+          "customfield": [
+            {
+              "id": "2",
+              "name": "public-email|Public email (website footer)",
+              "value": "Info@BrightFuture.org"
+            },
+            {
+              "id": "3",
+              "name": "footer-location|Public city & state (website footer)",
+              "value": "Springfield, IL"
+            },
+            { "id": "4", "name": "What is your organization's EIN number?", "value": "123456789" },
+            {
+              "id": "5",
+              "name": "What is your organization's mission?",
+              "value": "An older mission answer that the client field outranks."
+            },
+            {
+              "id": "6",
+              "name": "facebook-page|Charity Facebook Page URL",
+              "value": "<a href=\"https://www.facebook.com/brightfuture\" target=\"_blank\">https://www.facebook.com/brightfuture</a>"
+            },
+            {
+              "id": "7",
+              "name": "linkedin-page|Charity LinkedIn Page URL",
+              "value": "https://www.linkedin.com/in/janet-applicantson"
+            },
+            {
+              "id": "8",
+              "name": "Primary Contact Individual Email",
+              "value": "janet.applicantson@gmail.com"
+            },
+            {
+              "id": "9",
+              "name": "What phone number do you want us to reach you at?",
+              "value": "555-867-5309"
+            },
+            { "id": "10", "name": "Board President Name", "value": "Roberta Boardwalker" },
+            {
+              "id": "11",
+              "name": "Board President Individual Email",
+              "value": "roberta.board@gmail.com"
+            },
+            {
+              "id": "12",
+              "name": "mailing-address|Mailing address (full)",
+              "value": "742 Evergreen Terrace, Springfield, IL 62701"
+            },
+            {
+              "id": "13",
+              "name": "primary-contact-email|Primary contact email",
+              "value": "janet.applicantson@gmail.com"
+            },
+            {
+              "id": "14",
+              "name": "What is your GuideStar.org URL?",
+              "value": "https://www.guidestar.org/profile/12-3456789"
+            },
+            {
+              "id": "15",
+              "name": "Board member mission alignment statement",
+              "value": "Roberta Boardwalker has served on the board since 2019."
+            }
+          ]
+        }
+      },
+      {
+        "id": "777",
+        "pid": "40",
+        "name": "Hosted by GitHub Pages",
+        "status": "Active",
+        "customfields": {
+          "customfield": [
+            {
+              "id": "20",
+              "name": "tagline|Site tagline",
+              "value": "Nobody in Sangamon County goes hungry."
+            },
+            {
+              "id": "21",
+              "name": "site-description|Site description",
+              "value": "Bright Future runs a weekly food pantry\r\nand a senior meal delivery route."
+            },
+            { "id": "22", "name": "program-1-title|Program 1 - title", "value": "Weekly Pantry" },
+            {
+              "id": "23",
+              "name": "program-1-desc|Program 1 - description",
+              "value": "Open every Saturday. Questions? Call 217-555-0199 or email janet.applicantson@gmail.com."
+            },
+            { "id": "24", "name": "brand-color|Brand color (hex)", "value": "#ffffff" },
+            {
+              "id": "25",
+              "name": "zeffy-donation-url|Zeffy donation URL",
+              "value": "https://www.zeffy.com/en-US/donation-form/bright-future?token=SECRET123"
+            },
+            {
+              "id": "26",
+              "name": "idealist-url|Idealist volunteer URL",
+              "value": "https://www.idealist.org/en/nonprofit/bright-future"
+            },
+            { "id": "27", "name": "founding-year|Year founded", "value": "2015" },
+            {
+              "id": "28",
+              "name": "alternate-names|Also known as / abbreviations",
+              "value": "BFF; Bright Future, BFF"
+            },
+            {
+              "id": "29",
+              "name": "logo-url|Logo image URL",
+              "value": "https://cdn.example.org/bff/logo.png"
+            },
+            {
+              "id": "30",
+              "name": "template-choice|Website template choice",
+              "value": "Single Page"
+            },
+            { "id": "31", "name": "team-1-name|Team member 1 - name", "value": "Carol Teamworth" },
+            {
+              "id": "32",
+              "name": "testimonial-1-attribution|Testimonial 1 - attribution",
+              "value": "Danny Donorfield"
+            },
+            { "id": "33", "name": "seo-keywords|SEO keywords", "value": "food,pantry,seniors" }
+          ]
+        }
+      },
+      {
+        "id": "900",
+        "pid": "5",
+        "name": "Some other product",
+        "status": "Active",
+        "customfields": {
+          "customfield": [
+            {
+              "id": "40",
+              "name": "public-email|Public email (website footer)",
+              "value": "other@example.com"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

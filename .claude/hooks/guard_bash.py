@@ -2215,12 +2215,16 @@ def main():
     #      returned 201 with a real issue URL and exit 0. That is the #1591 shape:
     #      every signal at the call site says success.
     #
-    #      BLOCK, because no reading of the command does what it says. The
-    #      discriminator is deliberately narrow, since a legitimate create also
-    #      uses `-f` and must stay allowed: this fires only when the call ALSO
-    #      asks for something only a list read can give -- `--paginate` (a POST
-    #      has one response, so there is nothing to paginate) or a `--jq` that
-    #      iterates (`.[`/`.[]`, meaningless against a created object).
+    #      BLOCK on `--paginate`, because no reading of that command does what it
+    #      says: a POST has one response, so there is nothing to paginate. A
+    #      legitimate create also uses `-f` and must stay allowed, so that is the
+    #      only block criterion.
+    #
+    #      An iterating `--jq` (`.[`/`.[]`) without `--paginate` only WARNS. It is
+    #      ambiguous: adding labels (`issues/<n>/labels -f 'labels[]=bug'`) is a
+    #      POST that returns the whole label array, so `.[].name` is the right
+    #      read-back there (#1647 review). The warning still opens "this is a
+    #      POST", which is what would have stopped run 258.
     #      `graphql` is exempt: it is a POST by design and legitimately paginates.
     if re.search(r"\bgh\s+api\b", bare) and not re.search(r"(?:-X|--method)\s+\w+", bare):
         fpath, _fquery = _gh_api_endpoint(cmd)
@@ -2229,7 +2233,7 @@ def main():
             iterating = fexpr is not None and (
                 fexpr.lstrip().startswith(".[") or ".[]" in fexpr
             )
-            if "--paginate" in cmd or iterating:
+            if "--paginate" in cmd:
                 block(
                     f"`-f`/`-F` with no `-X`/`--method` makes this a POST, not a read -- so "
                     f"`gh api {fpath}` is a CREATE against that collection, while the "
@@ -2242,6 +2246,13 @@ def main():
                     "  Creating something: pass `-X POST` and drop --paginate / the `.[]` filter.\n"
                     "  Run 258 issued this shape against `issues` and attempted to open a public "
                     "issue; only a missing required `title` turned it into a 422 instead of a 201."
+                )
+            elif iterating:
+                warn(
+                    f"[#1647] `-f`/`-F` with no `-X`/`--method` makes `gh api {fpath}` a POST, "
+                    "not a read. If you meant to list, put the filter in the query string "
+                    f"(`gh api \"{fpath}?state=open\" --paginate`). If you meant to create or "
+                    "add (e.g. labels, which return an array), pass `-X POST` to say so."
                 )
 
     # 11. Classic branch-protection read (#1518) -- WARN, do not block.

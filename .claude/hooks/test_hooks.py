@@ -1511,8 +1511,6 @@ RULES = [
          "gh api repos/O/R/issues --paginate -f state=open --jq '.[] | .number'", BLOCK),
         ("-f with --paginate and no --jq is blocked",
          "gh api repos/O/R/issues -f state=open --paginate", BLOCK),
-        ("-f with an iterating --jq and no --paginate is blocked",
-         "gh api repos/O/R/issues -f state=open --jq '.[] | .number'", BLOCK),
         ("--raw-field long form is blocked",
          "gh api repos/O/R/pulls --raw-field state=open --paginate", BLOCK),
         ("-F typed form is blocked",
@@ -1538,6 +1536,22 @@ RULES = [
          "gh api 'repos/O/R/issues?state=open&per_page=100' --paginate --jq '.[] | .number'", SILENT),
         ("non-gh text mentioning the flags is silent",
          "echo 'gh api repos/O/R/issues -f state=open is a POST'", SILENT),
+    ]),
+
+    Rule("gh-api-field-iterating-jq", '[#1647]', WARN_TIER,
+         label='guard_bash / #1647 `gh api -f` with an iterating --jq:', cases=[
+        # Without --paginate the shape is ambiguous, so it warns rather than blocks.
+        ("-f with an iterating --jq and no --paginate warns",
+         "gh api repos/O/R/issues -f state=open --jq '.[] | .number'", WARN),
+        ("the label-add read-back warns",
+         "gh api repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", WARN),
+        # The tier itself: a label add is a correct command and must run.
+        ("the label-add read-back is still allowed",
+         "gh api repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", ALLOW),
+        ("an explicit --method POST label add is silent",
+         "gh api --method POST repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", SILENT),
+        ("a create reading back one field is silent",
+         "gh api repos/O/R/issues -f title=x --jq .number", SILENT),
     ]),
 
     Rule("gh-api-classic-branch-protection", '[#1518]', WARN_TIER,

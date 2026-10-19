@@ -258,6 +258,13 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
        checks. A behaviour change with no covering test is not ready: add the test, or say why it
        cannot have one and leave the PR for Clarke.
 
+  - **The local Conductor is retired (Clarke, 2026-10-19).** Supervision and landing moved to the
+    FFC Cloudflare Automation Claude project. A thread session in that project which Clarke started
+    or is working in is a **live session** under this rule: it may mark PRs ready and enqueue them
+    under the merge condition above. A **scheduled task** is a scheduled worker wherever it runs,
+    the project included, so it never enqueues. Environment gates and the reserved lanes below stay
+    with @clarkemoyer. Read "the Conductor" elsewhere in this file as history: #719 and #1608 are no
+    longer written by a supervisor, and `747` reports `conductor-silence` as context only.
   - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
     `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
     `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
@@ -863,6 +870,10 @@ concluding anything:
 
 Nothing in this repository can restart the Conductor — it runs on an operator workstation reachable
 only by @clarkemoyer — so the deliverable is the escalation, not a fix.
+
+**Since 2026-10-19 there is no Conductor to restart.** An open 747 issue now means nothing is
+landing: say so on that issue, and the remedy is a landing sweep from a live session in the Claude
+project (see **Who merges**), not a workstation restart.
 
 **The cohort is not the sum of its PRs — test it pairwise before publishing a punch list.**
 `mergeable_state: clean` and `behind=0` are each evaluated **against `main`**, independently per PR,

@@ -275,6 +275,139 @@ Describe 'Fallback order: client field -> product answer' {
     }
 }
 
+Describe 'Live pid 33 display labels (GetClientsProducts returns the label, HTML-encoded)' {
+    BeforeAll {
+        # Every question on a real pid 33 service as the live API names it
+        # (display label only, no "machine|" prefix, entities left encoded).
+        # The labels are the public application form; the values are synthetic.
+        $script:LiveAnswers = [ordered]@{
+            'Organization&#039;s legal name (exactly as on your IRS letter or state filing)' = 'Bright Future Fund'
+            'What is your organization&#039;s mission? (one or two plain sentences)'         = 'We feed families.'
+            'What is your organization&#039;s EIN? (format NN-NNNNNNN)'                      = '12-3456789'
+            'Public email address for your website footer'                                   = 'Info@BrightFuture.org'
+            'Public phone number for your website footer'                                    = '(555) 010-2000'
+            'City &amp; state to show in your website footer'                                = 'Shaw AFB, SC'
+            'Instagram URL (optional)'                                                       = 'https://www.instagram.com/brightfuture'
+            'YouTube URL (optional)'                                                         = 'https://www.youtube.com/@brightfuture'
+            'X (Twitter) URL (optional)'                                                     = 'https://x.com/brightfuture'
+            'Charity Facebook Page URL'                                                      = 'https://www.facebook.com/brightfuture'
+            'Site tagline (short slogan)'                                                    = 'Food for every table'
+            'Site description (one or two sentences)'                                        = 'A weekly food pantry.'
+            'Short description (under 200 characters)'                                       = 'Weekly pantry.'
+            'Program 1 - title'                                                              = 'Pantry'
+            'Program 1 - description'                                                        = 'Open Saturdays.'
+            'Program 2 - title (optional)'                                                   = 'Meals'
+            'Program 2 - description (optional)'                                             = 'Senior meal route.'
+            'Program 3 - title (optional)'                                                   = 'Garden'
+            'Program 3 - description (optional)'                                             = 'Community garden.'
+            'Brand color (hex preferred, e.g. #0567B1)'                                      = '#0567B1'
+            'Logo image URL (optional)'                                                      = 'https://cdn.example.org/logo.png'
+            'Zeffy donation form URL'                                                        = 'https://www.zeffy.com/en-US/donation-form/bff'
+            'Idealist volunteer page URL'                                                    = 'https://www.idealist.org/en/nonprofit/bff'
+            'Year founded'                                                                   = '2015'
+            'Also known as / abbreviations (optional)'                                       = 'BFF'
+            'SEO keywords (comma-separated)'                                                 = 'food pantry, meals'
+            'Which starting point fits your charity?'                                        = 'Single Page'
+            'Do you already own this domain?'                                                = 'Yes'
+            'Where is your domain registered? (if you own it)'                               = 'Cloudflare'
+            'Current public website or page, if any (even without your own domain)'          = 'https://brightfuture.example.org'
+            'Other leaders to show on your website (optional, one per line: Name - Role)'    = 'Pat Example - Volunteer Lead'
+            'Public GuideStar Profile Link'                                                  = 'https://www.guidestar.org/profile/12-3456789'
+            # Personal / board / contact questions: none of these values may surface.
+            'Primary Contact Individual Email'                                               = 'janet.applicantson@gmail.com'
+            'Primary Contact Phone Number (###) ###-####'                                    = '555-867-5309'
+            'Primary Contact LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'     = 'https://www.linkedin.com/in/janet'
+            'Technical Contact Individual Email'                                             = 'tech.person@gmail.com'
+            'Technical Contact Phone Number (###) ###-####'                                  = '555-000-1111'
+            'Technical Contact GitHub username (your website maintainer)'                    = 'techperson'
+            'Board President/Chair Individual Email'                                         = 'roberta.board@gmail.com'
+            'Board President/Chair Phone Number (###) ###-####'                              = '217-555-0199'
+            'Board Chair / President - full name to show on your website'                    = 'Roberta Boardwalker'
+            'Board Treasurer - full name to show on your website'                            = 'Carol Teamworth'
+            'Best times to contact?'                                                         = 'Evenings 555-222-3333'
+        }
+        $set = New-Set -ProductPid 33 -ServiceId 680 -Answers $script:LiveAnswers
+        $script:LiveResult = Resolve-SiteFields -Config $script:Config -ClientValues @{} -ProductSets @($set) -ClientId 499 -ClientFieldsNamed $false
+        $script:LiveJson = $script:LiveResult | ConvertTo-Json -Depth 8
+    }
+
+    It 'fills the footer email, phone and city & state from their labels' {
+        $script:LiveResult.fields.publicEmail | Should -Be 'info@brightfuture.org'
+        $script:LiveResult.fields.publicPhone | Should -Be '(555) 010-2000'
+        $script:LiveResult.fields.footerLocation | Should -Be 'Shaw AFB, SC'
+        $script:LiveResult.fieldSources.footerLocation | Should -Be 'product:pid33:service680'
+    }
+
+    It 'fills the "(optional)" social URLs' {
+        $script:LiveResult.fields.instagramUrl | Should -Be 'https://www.instagram.com/brightfuture'
+        $script:LiveResult.fields.youtubeUrl | Should -Be 'https://www.youtube.com/@brightfuture'
+        $script:LiveResult.fields.xUrl | Should -Be 'https://x.com/brightfuture'
+    }
+
+    It 'decodes &#039; so the legal-name label matches' {
+        $script:LiveResult.fields.charityName | Should -Be 'Bright Future Fund'
+    }
+
+    It 'fills every allowlisted site-content field the live form asks for' {
+        foreach ($k in 'mission', 'ein', 'facebookUrl', 'candidProfileUrl', 'tagline', 'siteDescription', 'siteShortDescription',
+            'program1Title', 'program1Description', 'program2Title', 'program2Description', 'program3Title', 'program3Description',
+            'brandColor', 'logoUrl', 'donationUrl', 'volunteerUrl', 'foundingYear', 'alternateNames', 'seoKeywords',
+            'templateChoice', 'domainOwnership', 'domainRegistrar', 'currentWebsiteUrl', 'leadershipLines') {
+            $script:LiveResult.missing | Should -Not -Contain $k
+        }
+    }
+
+    It 'leaves the board / contact-labelled fields missing (the deny guard still holds)' {
+        foreach ($k in 'maintainerGithub', 'leader1Name', 'leader2Name', 'leader3Name') {
+            $script:LiveResult.missing | Should -Contain $k
+        }
+    }
+
+    It 'never prints a personal, board or contact value (<_>)' -ForEach @(
+        'janet.applicantson', '555-867-5309', 'linkedin.com/in/', 'tech.person', '555-000-1111', 'techperson',
+        'roberta.board', '217-555-0199', 'Boardwalker', 'Teamworth', '555-222-3333'
+    ) {
+        $script:LiveJson | Should -Not -BeLike "*$_*"
+    }
+
+    It 'a broad pattern still cannot reach a contact, board or mailing-address email' {
+        $c = Read-SiteFieldsConfig -ConfigObject (Copy-ConfigWith { param($c) ($c.fields | Where-Object { $_.key -eq 'publicEmail' }).productLabelPatterns = @('e-?mail') })
+        $set = New-Set -ProductPid 33 -Answers ([ordered]@{
+                'Primary Contact Individual Email'       = 'janet.applicantson@gmail.com'
+                'Board President/Chair Individual Email' = 'roberta.board@gmail.com'
+                'Your mailing address or email address'  = 'other@example.com'
+            })
+        $r = Resolve-SiteFields -Config $c -ClientValues @{} -ProductSets @($set) -ClientId 1
+        $r.missing | Should -Contain 'publicEmail'
+    }
+}
+
+Describe 'Label normalisation and the label deny guard' {
+    It '<raw> -> <want>' -ForEach @(
+        @{ raw = 'City &amp; state to show in your website footer'; want = 'City & state to show in your website footer' }
+        @{ raw = 'Organization&#039;s legal name'; want = "Organization's legal name" }
+        @{ raw = "Organization$([char]0x2019)s legal name"; want = "Organization's legal name" }
+        @{ raw = 'Instagram URL (optional)'; want = 'Instagram URL' }
+        @{ raw = 'YouTube URL  (Optional) '; want = 'YouTube URL' }
+        @{ raw = 'Program 2 - title (optional, if any)'; want = 'Program 2 - title (optional, if any)' }
+        @{ raw = "  Public   phone`tnumber "; want = 'Public phone number' }
+    ) {
+        Get-SiteFieldLabelText $raw | Should -Be $want
+    }
+
+    It 'lets "public email address" past the address fragment' {
+        Test-SiteFieldDeniedLabel -Label 'Public email address for your website footer' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeFalse
+        Test-SiteFieldDeniedLabel -Label 'Public e-mail address for your website footer' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeFalse
+    }
+
+    It 'still refuses <_>' -ForEach @(
+        'Your email address', 'Contact email address', 'Mailing address', 'Public email address and mailing address',
+        'Board Treasurer public email address', 'Public email address of the primary contact', 'Street address'
+    ) {
+        Test-SiteFieldDeniedLabel -Label $_ -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeTrue
+    }
+}
+
 Describe 'Validators' {
     Context 'email' {
         It 'accepts and lower-cases <_>' -ForEach @('Info@Charity.org', 'hello+web@sub.charity.org') {

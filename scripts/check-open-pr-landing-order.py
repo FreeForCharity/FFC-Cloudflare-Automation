@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import subprocess
 import sys
 
@@ -161,9 +162,42 @@ def landing_plan(prs, conflict_edges):
     return lands_free, needs_rebase
 
 
+# Identity for the merge commits `measure_conflicts` writes. A non-fast-forward
+# `git merge` creates a commit, and on a host with no `user.name`/`user.email`
+# git aborts it with **exit 128** (`Committer identity unknown`) -- which this
+# script reads as a merge that did not succeed, i.e. as a conflict that does not
+# exist. Measured: a fast-forward leg returns 0 with no identity, a real merge
+# returns 128, so the base sweep passes and then every pair's `second` leg fails
+# and is recorded as a CONFLICT edge. The output stays a plausible landing plan
+# with an entirely false conflict graph, which is this script's own failure class
+# -- a measurement that keeps answering after its precondition is gone.
+#
+# Two deliberate choices. It goes in the ENVIRONMENT, not at the `git merge`
+# call sites, so a merge site added later cannot forget it. And it is never
+# written to the worktree's config: `--worktree` is a tree this may reset, not
+# one it may reconfigure. These commits are discarded with the merge, so pinning
+# the identity rather than deferring to the host's also makes the measurement
+# identical everywhere, including on a host whose identity is half-configured.
+_MERGE_IDENTITY = {
+    "GIT_AUTHOR_NAME": "FFC landing-order probe",
+    "GIT_AUTHOR_EMAIL": "noreply@freeforcharity.org",
+    "GIT_COMMITTER_NAME": "FFC landing-order probe",
+    "GIT_COMMITTER_EMAIL": "noreply@freeforcharity.org",
+}
+
+
 def _run(cmd, cwd=None, check=True):
+    # `dict(os.environ)` plus overrides, never a scrubbed dict: a minimal `env`
+    # is what broke every node-spawning module in this suite on Windows (#943),
+    # where the interpreter cannot start without the inherited environment.
     proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, **_MERGE_IDENTITY},
     )
     if check and proc.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} failed ({proc.returncode}): {proc.stderr.strip()}")

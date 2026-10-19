@@ -35,7 +35,9 @@ non-zero exit.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
+import subprocess
 import sys
 
 _SCRIPT = (
@@ -594,6 +596,104 @@ def test_the_landing_plan_is_reported_NEXT_TO_the_base_it_was_computed_against()
     assert "measured against" in src, (
         "main() does not print which commit the plan was computed against"
     )
+
+
+def _capture_run_env(cmd):
+    """Drive `_mod._run(cmd)` with a stubbed `subprocess`, returning the `env`
+    it passed. Replaces the module's `subprocess` binding rather than patching
+    `subprocess.run` itself, which would reach every other importer of it."""
+
+    class _Stub:
+        CompletedProcess = subprocess.CompletedProcess
+
+        @staticmethod
+        def run(argv, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+    captured = {}
+    original = _mod.subprocess
+    _mod.subprocess = _Stub
+    try:
+        _mod._run(cmd)
+    finally:
+        _mod.subprocess = original
+    return captured
+
+
+def test_a_merge_COMMIT_cannot_fail_for_a_missing_git_identity():
+    """Copilot's fourth finding on this PR. `measure_conflicts` writes real merge
+    commits and configured no identity, so on a host with no `user.name`/
+    `user.email` git aborts the merge with exit 128 (`Committer identity
+    unknown`) and this script reads that as a merge that did not succeed.
+
+    Measured on a repo with `GIT_CONFIG_GLOBAL=/dev/null` and no local identity:
+    a fast-forward leg returns **0** (no commit is written, so no identity is
+    needed) and a real merge returns **128**. That asymmetry is what makes it a
+    wrong answer rather than an error -- the base sweep fast-forwards and passes,
+    then every pair's `second` leg fails and is recorded as a CONFLICT edge, so
+    the script prints a coherent landing plan over a fully fabricated conflict
+    graph. Supplying the identity through the environment took the same merge
+    from 128 to 0."""
+    env = _capture_run_env(["git", "merge", "--no-edit", "refs/ffc/pr1584"]).get("env")
+    assert env is not None, (
+        "_run passes no env, so git inherits whatever identity the host happens "
+        "to have -- and aborts the merge with 128 when it has none"
+    )
+    for var in (
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+    ):
+        assert env.get(var), (
+            f"{var} is unset in the merge environment; a non-fast-forward "
+            f"`git merge` exits 128 without it and is recorded as a conflict"
+        )
+
+
+def test_the_merge_environment_INHERITS_the_ambient_one():
+    """The other half, and the one with a price already paid: a *scrubbed* `env`
+    dict is what broke every node-spawning module in this suite on Windows
+    (#943), where the interpreter cannot start without the inherited
+    environment. Fixing the identity by passing only the identity would trade
+    this bug for that one, so pin the inheritance, not just the four vars."""
+    sentinel = "FFC_LANDING_ORDER_ENV_PROBE"
+    os.environ[sentinel] = "1"
+    try:
+        env = _capture_run_env(["git", "rev-parse", "HEAD"]).get("env") or {}
+    finally:
+        os.environ.pop(sentinel, None)
+    assert env.get(sentinel) == "1", (
+        "the merge env does not inherit os.environ, so it is a scrubbed dict -- "
+        "the #943 shape, where git/node cannot start for want of PATH, SYSTEMROOT "
+        "and friends"
+    )
+
+
+def test_EVERY_git_call_goes_THROUGH_the_identity_carrying_runner():
+    """Source-level, because the identity lives in `_run` and the merges are
+    only safe for as long as they keep going through it. A later `subprocess.run`
+    added beside a `git merge` would reintroduce the 128 silently, and the two
+    tests above would still pass."""
+    import inspect
+
+    src = inspect.getsource(_mod)
+    body = src.split("def _run(", 1)
+    assert len(body) == 2, "_run is gone; the merge identity has nowhere to live"
+    after = body[1].split("\ndef ", 1)
+    # Asserted rather than indexed: an IndexError here would escape the module's
+    # AssertionError handler and truncate the roster, which reads as "no
+    # failures" rather than as a failure (L194).
+    assert len(after) == 2, "could not find the end of _run; the slice below would be wrong"
+    outside = body[0] + after[1]
+    assert "subprocess.run(" not in outside, (
+        "a `subprocess.run(` call exists outside `_run`, so it carries neither "
+        "the committer identity nor the inherited environment"
+    )
+    merge_src = inspect.getsource(_mod.measure_conflicts)
+    strays = [ln.strip() for ln in merge_src.splitlines() if "subprocess" in ln]
+    assert not strays, f"measure_conflicts shells out directly: {strays}"
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

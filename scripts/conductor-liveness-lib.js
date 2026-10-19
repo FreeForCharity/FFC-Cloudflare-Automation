@@ -54,6 +54,18 @@ const LOG_REPO = 'FFC-Cloudflare-Automation';
 // makes their arrival the signal and their absence the outage.
 const LOG_ISSUE = 719;
 
+// The local Conductor was retired on this date (Clarke, 2026-10-19). Supervision
+// and landing moved to the FFC Cloudflare Automation Claude project, whose live
+// sessions post no heartbeat to #719. Once retired, `conductor-silence` is
+// reported as CONTEXT (verdict INFO) and never as a finding: a log nobody
+// writes to any more would otherwise hold the rolling issue open forever and
+// teach its reader to ignore it. `merge-silence` and `pr-growth` measure the
+// outcome directly and keep their verdicts. The workflow passes
+// `supervisorRetired: SUPERVISOR_RETIRED` to analyze(); the default stays false
+// so the classification under test is unchanged unless a caller opts in.
+const SUPERVISOR_RETIRED = true;
+const SUPERVISOR_RETIRED_ON = '2026-10-19';
+
 // Observed healthy cadence is ~3h, so 6h is one missed run and 12h is at least
 // three. #1339's discrimination bar is that the real window
 // (2026-09-14T10:20Z -> 2026-09-19T09:20Z) reports on DAY 1, not day 5 — a
@@ -358,6 +370,21 @@ function classifySilence(input, nowIso) {
 }
 
 /**
+ * `conductor-silence` once the local Conductor is retired: the same
+ * measurement, demoted to INFO so it is shown but never counted as a finding.
+ */
+function classifyRetiredSilence(input, nowIso) {
+  const measured = classifySilence(input, nowIso);
+  return _signal(
+    measured.name,
+    'INFO',
+    measured.measured,
+    `context only: the local Conductor was retired on ${SUPERVISOR_RETIRED_ON} and the Claude ` +
+      `project posts no heartbeat here (last reading: ${measured.verdict}, ${measured.detail})`,
+  );
+}
+
+/**
  * How long since an `agentic-os` PR last merged — the independent second signal.
  *
  * An empty merged set is UNKNOWN rather than OK: it means the query returned
@@ -563,8 +590,9 @@ function analyze(input) {
       ? prior
       : prior.concat([{ at: nowIso, openPRs: openSignal.measured }]);
 
+  const retired = Boolean(input && input.supervisorRetired === true);
   const signals = [
-    classifySilence(input, nowIso),
+    retired ? classifyRetiredSilence(input, nowIso) : classifySilence(input, nowIso),
     classifyMergeSilence(input, nowIso),
     openSignal,
     classifyGrowth(history),
@@ -577,6 +605,7 @@ function analyze(input) {
 
   return {
     logRef: `${LOG_OWNER}/${LOG_REPO}#${LOG_ISSUE}`,
+    supervisorRetired: retired,
     signals,
     unknown,
     alert,
@@ -626,7 +655,7 @@ function summary(a) {
   );
 }
 
-const _ICON = { OK: '✅', WARN: '⚠️', ALERT: '🚨', UNKNOWN: '❓' };
+const _ICON = { OK: '✅', WARN: '⚠️', ALERT: '🚨', UNKNOWN: '❓', INFO: 'ℹ️' };
 
 function _row(s) {
   return `| \`${s.name}\` | ${_ICON[s.verdict] || ''} ${s.verdict} | ${s.measured === null ? '—' : s.measured} | ${s.detail} |`;
@@ -641,10 +670,16 @@ function _row(s) {
 function renderBody(a, iso) {
   const lines = [MARKER, renderHistory(a.history), ''];
   lines.push(
-    'Liveness of the **Conductor** — the locally-run routine that is the only actor with ' +
-      `promotion and merge authority. Its only footprint in GitHub is the comments it posts to ` +
-      `${a.logRef}, so this workflow asserts the OUTCOME (are they still arriving, and is work ` +
-      'still landing) rather than the health of any Actions workflow.',
+    a.supervisorRetired
+      ? 'Landing liveness. The local **Conductor** was retired on ' +
+          `${SUPERVISOR_RETIRED_ON}; supervision and landing now run from the FFC Cloudflare ` +
+          'Automation Claude project, which posts no heartbeat to ' +
+          `${a.logRef}. So \`conductor-silence\` is shown as context only, and this workflow ` +
+          'asserts the OUTCOME that still matters: is work still landing.'
+      : 'Liveness of the **Conductor** — the locally-run routine that is the only actor with ' +
+          `promotion and merge authority. Its only footprint in GitHub is the comments it posts to ` +
+          `${a.logRef}, so this workflow asserts the OUTCOME (are they still arriving, and is work ` +
+          'still landing) rather than the health of any Actions workflow.',
     '',
     `- Generated: ${iso}`,
     `- Silence thresholds: warn ${SILENCE_WARN_HOURS}h, alert ${SILENCE_ALERT_HOURS}h ` +
@@ -671,7 +706,22 @@ function renderBody(a, iso) {
     );
   }
 
-  if (a.alert.length || a.warn.length) {
+  if ((a.alert.length || a.warn.length) && a.supervisorRetired) {
+    lines.push(
+      '## What to do',
+      '',
+      'Nothing has landed recently, or the open pile is growing. Landing is now done by a live ' +
+        'session in the FFC Cloudflare Automation Claude project (AGENTS.md § Who merges):',
+      '',
+      '1. Ask the project to run a landing sweep. It enqueues every PR that meets the merge ' +
+        'condition and lists the rest by reason.',
+      '2. Reserved-lane PRs (`.github/workflows/`, `.github/actions/`, `.claude/hooks/`, Tier 2, ' +
+        'policy) still wait for @clarkemoyer.',
+      '3. A worker run that finds 0 actionable PRs **and** this issue open should say so on the ' +
+        'issue rather than re-verify an unchanged cohort.',
+      '',
+    );
+  } else if (a.alert.length || a.warn.length) {
     lines.push(
       '## What to do',
       '',
@@ -708,6 +758,8 @@ module.exports = {
   LOG_OWNER,
   LOG_REPO,
   LOG_ISSUE,
+  SUPERVISOR_RETIRED,
+  SUPERVISOR_RETIRED_ON,
   SILENCE_WARN_HOURS,
   SILENCE_ALERT_HOURS,
   MERGE_WARN_HOURS,
@@ -725,6 +777,7 @@ module.exports = {
   ageInHours,
   parseConductorComments,
   classifySilence,
+  classifyRetiredSilence,
   classifyMergeSilence,
   classifyPrCap,
   classifyGrowth,

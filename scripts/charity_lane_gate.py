@@ -216,7 +216,8 @@ def post_audit(policy: dict, lines: list[str]) -> None:
 
 def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, audit: bool) -> int:
     repo, wf = policy["repo"], rule["workflow"]
-    live = live_site(inputs["domain"]) if rule.get("live_site_check") else None
+    # 103/701 name the input `domain`; 120 names it `domains` (one domain, by rule).
+    live = live_site(inputs.get("domain") or inputs["domains"]) if rule.get("live_site_check") else None
     login = gh(["user"])["login"]
     started = dt.datetime.now(dt.timezone.utc)
     gh([f"repos/{repo}/actions/workflows/{wf}/dispatches", "-X", "POST"], {"ref": policy["ref"], "inputs": inputs})

@@ -414,7 +414,7 @@ function renderBody(a, iso) {
         'cries wolf, and the morning it is real nobody looks.',
       '',
       'Fix by regenerating the feed (`scripts/generate-agentic-os-status.py`) and shipping it to ' +
-        '`FFC-IN-ffcadmin.org` — the Conductor can do this directly; it does not need 502. This ' +
+        '`FFC-IN-ffcadmin.org` — a live session in the Claude project can do this directly; it does not need 502. This ' +
         'reports **over**-reporting only: a gate opened *after* generation is absent from a feed ' +
         'that reads perfectly fresh, and that case needs a live gate read (#1547).',
       '',

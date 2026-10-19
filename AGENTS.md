@@ -205,16 +205,63 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
        While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
        has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
        that has started (Gemini, Codex, Claude) must also have finished.
+    - **An error body is recoverable, but only by RE-REQUESTING — and `requested_reviewers` is the
+      wrong field to confirm it with.** Measured end to end on #1589 in run 259, after runs 257 and
+      258 each spent a step guessing. Of the three things that look like remedies, exactly one
+      works:
+      - **Re-requesting works.** `gh api --method POST repos/<o>/<r>/pulls/<n>/requested_reviewers`
+        naming `copilot-pull-request-reviewer[bot]`. On #1589 the POST landed ~13:14Z; a
+        `copilot-pull-request-reviewer` check run appeared on the head at **13:18:43Z** and a real
+        `<!-- ccr-overview-v2 -->` review was delivered at **13:23:01Z** — about 5 minutes to the
+        check run and 9 to the verdict. **Allow ~10 minutes before concluding anything.**
+      - **A fresh push does NOT re-arm it.** #1589's `b8b480c1` was an empty chore commit pushed at
+        07:49:28Z purely to re-trigger: no check run was created for **5.5 hours**, until the
+        re-request produced one. So the branch CI re-running is not the reviewer re-arming.
+      - **Promoting out of draft does NOT re-arm it.** #1645 was promoted in run 258 and its error
+        body was still the only review on head 5h18m later.
+
+      **The trap, and it cost run 259 a wrong conclusion in a public escalation:
+      `requested_reviewers` is empty BOTH when the bot was never armed AND after it has delivered
+      its review.** Run 259 re-read that field at **13:22:40Z**, about 9 minutes after its own
+      successful POST, saw `[]`, and reported the re-request as a silent no-op — while the review
+      was **21 seconds** from completing (13:23:01Z). The field does not model the question.
+      **Confirm with the check run on the head SHA instead**, which distinguishes all three states
+      (`absent` = not armed, `queued`/`in_progress` = wait, `completed` = read the review):
+
+      ```bash
+      gh api "repos/<o>/<r>/commits/<head-sha>/check-runs?per_page=100" \
+        --jq '.check_runs[] | select(.name|test("copilot";"i")) | "\(.status)/\(.conclusion)"'
+      ```
+
+      This is the read-after-write rule in CLAUDE.md ("a negative read straight after a successful
+      GitHub write means _unknown_, not _failed_") reached through a field that looks authoritative
+      and is not — the same shape as `autoMergeRequest` reading `null` for both "never enabled" and
+      "already queued".
+
+      Do not read an error body as an outage. Copilot stays healthy throughout — during the 5h in
+      which 17 hub PRs sat error-bodied it posted real reviews on others at 09:17, 10:16, 10:59,
+      12:17, 12:33 and 13:01Z, and #1650 (opened in that window) was reviewed 8 minutes after its
+      push. PRs created _after_ the triggering event review normally; only the ones caught _in_ it
+      are stuck, which is why "is Copilot up?" is the wrong question and "does this head have a
+      `<!-- ccr-overview-v2 -->` review?" is the right one.
+
+      **Re-request in small batches and confirm each one.** The cohort is created by load — all 17
+      were stamped inside run 257's 22-minute `update-branch` sweep — so firing 17 re-requests at
+      once risks reproducing the burst that caused it. #1645 caps the batch at 3 for this reason;
+      apply the same cap here and confirm each check run before sending the next. And
+      `scripts/audit-open-pr-readiness.py` cannot see this condition at all (#1648), so its `ok`
+      bucket overstates the landable set by however many PRs are error-bodied.
     3. **No open question.** Every review thread is answered and resolved. Nothing in a review, a
        comment or the PR body asks for a decision that has not been made.
     4. **Coverage matches the change.** New or changed behaviour has a test that would fail without
        it, and that test runs in CI. A documentation-only PR needs only the repository's existing
        checks. A behaviour change with no covering test is not ready: add the test, or say why it
        cannot have one and leave the PR for Clarke.
+
   - **The local Conductor is retired (Clarke, 2026-10-19).** Supervision and landing moved to the
     FFC Cloudflare Automation Claude project. A thread session in that project which Clarke started
     or is working in is a **live session** under this rule: it may mark PRs ready and enqueue them
-    under the merge condition below. A **scheduled task** is a scheduled worker wherever it runs,
+    under the merge condition above. A **scheduled task** is a scheduled worker wherever it runs,
     the project included, so it never enqueues. Environment gates and the reserved lanes below stay
     with @clarkemoyer. Read "the Conductor" elsewhere in this file as history: #719 and #1608 are no
     longer written by a supervisor, and `747` reports `conductor-silence` as context only.
@@ -236,6 +283,7 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
   - **Promoting re-runs branch CI.** If Phantom Revert Guard then fails for being behind `main`,
     merge `main` into the branch and enqueue again. That is the documented fix, not a reason to
     wait.
+
 - **Copilot re-reviews every push and can file fresh threads.** After pushing fixes, re-poll
   `reviewThreads` before promoting or queueing — one resolution pass is not enough (a 2026-07-20 PR
   needed three rounds).
@@ -1066,6 +1114,39 @@ while hiding the one line that was actually emitted
 (`branch has untouched updates in critical paths`). A gate review is exactly where that matters: the
 rehearsal log is the evidence the approval rests on.
 
+**A failing-test count is not a problem count, and both documented counting rules report the test
+(run 245, 2026-10-10).** `CLAUDE.md` already says never to score a suite by grepping `FAIL`, and to
+read the `::error::workflow-logic tests failed:` line instead, because a truncated roster reports no
+`FAIL` at all (L194). That remedy is right about _which modules_ failed and still under-reports _how
+much is wrong_, because one failing test can carry any number of independent defects in its
+assertion message. Both counters agree, and both are the wrong unit:
+
+| signal on run 38068756569 (#1601) | said                     | actually |
+| --------------------------------- | ------------------------ | -------- |
+| `grep "  FAIL"`                   | 1 line                   | —        |
+| `##[error]failure breakdown:`     | `1 assertion failure(s)` | —        |
+| citations needing repair          | —                        | **2**    |
+
+`test_every_source_citation_in_the_ledger_resolves_and_points_at_content` asserts
+`not problems, "\n".join(problems)`, so every problem it found is in the message — the second one on
+the **line after** the `FAIL` line. Nothing truncated and nothing lied: one test failed, and it had
+two things to say. Reading the headline and fixing the anchor it named would have pushed a second
+red for the same cause.
+
+- **Read the assertion body, not the line that announces it.** `grep -A20 "  FAIL"` rather than
+  `grep "  FAIL"`; the problems are the payload and the `FAIL` line is the envelope.
+- **When a test aggregates over a population — citations, rows, workflows, files — assume more than
+  one member is broken until you have enumerated them.** The guards in
+  `tests/workflow-logic/test_lessons_ledger.py` are nearly all of this shape.
+- **Fix the class, not the instance the message happened to name.** The run that found this
+  enumerated every `run_all.py:` citation in the ledger instead of acting on the headline, which is
+  the only reason both were repaired in one push.
+
+Fifth member of the flattering-direction family `CLAUDE.md` tracks: the measurement is sound, the
+count is honest, and the inference — "one failure, one fix" — is the defect. It differs from its
+siblings in that following this repo's **own** documented remedy still lands on it, which is why it
+is written here rather than as a correction to L194.
+
 **A held gate also stops the schedule behind it, and `status=waiting` will not show you that
 (L212).** A run parked at a gate holds its `concurrency` slot for as long as it waits, so the next
 scheduled run is admitted to the group but gets **no job at all** until the older one is reaped.
@@ -1206,6 +1287,57 @@ change, the only correct verdict is **not yet evaluable** — log that as a resu
 so the run after you does not re-score it. When you need the answer sooner than the cron, measure
 directly (most audit scripts run locally with `GH_TOKEN="$(gh auth token)"`) rather than
 reinterpreting a stale run. Ledger **L267**.
+
+**A dependency-advisory red is dated by the advisory's publication, not by your last commit.** The
+sibling trap to L267: there, a scheduled workflow held a verdict that predated your fix. Here it
+holds a verdict that postdates nothing at all — no code changed, and the repo went red anyway.
+`pnpm audit --audit-level high` compares an unchanged lockfile against a database that moves without
+you, so the transition from green to red carries **no commit to blame**, and every instinct that
+says "find what broke it" is pointed at the wrong object.
+
+Measured on 2026-10-11 across two repos. `FFC-IN-ffcadmin.org` and `FFC-EX-canary` both ran their
+daily `Security Audit` green on **2026-09-30** and red on **2026-10-01**, and stayed red for 11
+consecutive scheduled runs. Neither repo's `next` pin moved. What moved was
+[`GHSA-vcvr-r3jv-pc5j`](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), published
+**2026-09-30T14:48:30Z** — after that day's cron, before the next one. Two independent repos
+flipping on the same tick is the signature: a code change cannot red-line repos that share no
+commit, but an advisory covering a version range they both satisfy does it to all of them at once.
+
+The same measurement produced the second half of the rule. `ffcadmin` **was** remediated — it moved
+to `16.3.6`, exactly the patch floor for the 09-30 critical — and it is still red today, because
+[`GHSA-cjq9-62q9-8jv4`](https://github.com/advisories/GHSA-cjq9-62q9-8jv4) published
+**2026-10-07T20:30:55Z** and moved the floor to `16.3.8`. So a repo can be correctly fixed and go
+red again a week later with no regression, and the rolling alert issue shows one unbroken 11-day
+failure streak across **two different causes**. Scoring that streak as a single outage — or as a fix
+that did not work — is wrong in both directions. (The mechanical half of this is #1152: 740 records
+the run conclusion and not the cause, so a failure that changes cause reads as the same outage
+continuing.)
+
+What to do instead, before you attribute a `Security Audit` or `audit`-class red to anything:
+
+1. **Read the repo's open Dependabot alerts and the newest `published_at` among them.** One call:
+   `gh api repos/OWNER/REPO/dependabot/alerts?state=open --jq '...'`, and
+   `gh api advisories/GHSA-xxxx --jq '.published_at, .severity'` for the dates. If the newest
+   publication falls between the last green tick and the first red one, the advisory is your cause
+   and **no commit is implicated**.
+2. **Date the streak by cause, not by colour.** Use the workflow endpoint
+   (`actions/workflows/<id>/runs?event=schedule`), not the repo run feed — the repo feed serves a
+   slice capped across all workflows, which under-reports a daily job's history to a day or two.
+3. **Separate inherent severity from reachability before escalating.** A `critical` from Dependabot
+   is the advisory's severity, not this deployment's exposure. Every FFC site builds
+   `output: 'export'` with `images.unoptimized: true` and ships static files to Pages — there is no
+   Next.js server, route handler or middleware in production, so the server-side RCE paths in these
+   advisories are **not reachable on the live sites**. Both templates carry that config and
+   reference `next/og` in zero files, so the whole FFC-EX fleet inherits it. These bumps are
+   CI-greening and build-runner hygiene. They are real work and they are **not** a production
+   incident, and paging a human as though they were spends credibility that the next real incident
+   needs.
+4. **Check whether an open issue already says all of this.** #1511's body carried the reachability
+   analysis in §"Severity: fix the CI, do not panic about production" from 2026-10-09; run 250's END
+   nonetheless escalated the same facts as an unqualified 🚨, and runs 251 and 252 carried the
+   escalation forward before run 252 re-derived the analysis from scratch and found it already
+   written. A security escalation whose premise contradicts an open `priority: high` issue in the
+   same repo is a regression against your own prior work, not a discovery.
 
 ## Key docs
 

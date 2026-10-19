@@ -301,6 +301,10 @@ Inject the FFC footer standard per the ffcadmin checklist:
 - **Never fabricate data.** EIN, legal name, and nonprofit status come from the charity's validated
   application (generate with ffcadmin's `scripts/generate-footer-config.mjs`); if the data is
   missing, that is an onboarding gap to send back — **do not guess or invent an EIN/status**.
+- **Six policy pages, one donation policy.** Privacy, Cookie, Terms of Service, the charity's own
+  Donation Policy, Vulnerability Disclosure Policy and Security Acknowledgements, each the charity's
+  document with its public email and city/state. There is no separate "Free For Charity Donation
+  Policy" page any more; do not add one or link it (`assets/ffc-footer.tsx` links the six).
 - Keep the site's own design; the standard fixes content, not look. Watch WCAG contrast when
   restyling footer links in brand colors (Catnip lesson).
 

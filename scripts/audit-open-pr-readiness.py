@@ -250,8 +250,9 @@ def classify(prs, threshold):
                         reason=(
                             "every check is green, but %s -- the guard's pass "
                             "was measured before main moved and will fail on "
-                            "the next run. Fix: PUT /pulls/%d/update-branch"
-                            % ("; and ".join(causes), pr["number"])
+                            "the next run. Remedy is capped and ordered: read "
+                            "it from the update-branch plan, not one PUT per "
+                            "row" % ("; and ".join(causes),)
                         ),
                     )
                 )
@@ -274,6 +275,86 @@ def classify(prs, threshold):
         if not flagged:
             out["ok"].append(pr)
     return out
+
+
+# A head that moves asks Copilot for a fresh review, and Copilot fails under a
+# burst of simultaneous requests -- returning
+# "Copilot encountered an error and was unable to review this pull request"
+# instead of a review. Measured on 2026-10-12 (Conductor run 257): this script
+# named 19 stale-green PRs, a Conductor swept `update-branch` across all 19 two
+# seconds apart, 14 heads moved, and **17 error bodies** landed in the 16 minutes
+# that followed. The control group came free -- #1584 and #1588 were the only two
+# PRs left holding a valid review, and they are exactly the two whose
+# `update-branch` CONFLICTED, so their heads never moved.
+#
+# That matters because AGENTS.md's merge condition requires a Copilot review on
+# the CURRENT head and says in terms that an error body is not one. So the sweep
+# took 14 PRs that were one `update-branch` from landing and made every one of
+# them unenqueueable -- the exact opposite of its purpose.
+#
+# It is also not repairable in place. Both re-trigger routes are dead:
+# `POST pulls/<n>/requested_reviewers` with that login is **422** ("Reviews may
+# only be requested from collaborators"), and `POST check-runs/<id>/rerequest` on
+# the `copilot-pull-request-reviewer` check-run is **404**. The only documented
+# re-trigger is another push, which re-runs that branch's whole CI (~17 min for
+# Validate Repository). One cheap mechanical sweep becomes N expensive ones.
+#
+# Hence a cap rather than a warning. The asymmetry is what settles the value: a
+# batch that is too small costs one extra run, a batch that is too large costs a
+# full CI cycle on every PR it touched. 3 is well under the smallest burst
+# observed to fail (14) and small enough that a run can confirm each PR drew a
+# real review before moving the next head.
+UPDATE_BRANCH_BATCH_CAP = 3
+
+
+def update_branch_batch(numbers, cap=UPDATE_BRANCH_BATCH_CAP):
+    """Split the stale-green PRs into (this run's batch, deferred).
+
+    Returns at most `cap` PR numbers to update now, and the rest to leave for a
+    later run. Order is preserved, so the caller's priority is respected.
+
+    A non-positive cap is a programming error rather than "update nothing": a
+    silently empty batch would read as "nothing is stale", which is the same
+    false-clean this script exists to avoid.
+    """
+    if cap <= 0:
+        raise ValueError(
+            "update_branch_batch cap must be positive; got %r -- an empty batch "
+            "would read as 'nothing needs updating'" % (cap,)
+        )
+    ordered = list(numbers)
+    return ordered[:cap], ordered[cap:]
+
+
+def json_payload(result, threshold):
+    """The `--json` body, including the capped update-branch plan.
+
+    The plan is part of the payload rather than a rendering detail. A machine
+    consumer that reads `stale_green` and issues one `update-branch` per row
+    reproduces the run-257 burst exactly, and the rows deliberately no longer
+    carry a per-row remedy for it to copy -- so the cap has to travel with the
+    data, not only with the prose report.
+    """
+    stale = [r["number"] for r in result["stale_green"]]
+    batch, deferred = update_branch_batch(stale)
+    return {
+        "threshold": threshold,
+        **result,
+        "update_branch_plan": {
+            "cap": UPDATE_BRANCH_BATCH_CAP,
+            "now": batch,
+            "deferred": deferred,
+            "instruction": (
+                "Issue these ONE AT A TIME, confirming each draws a real "
+                "Copilot review on its new head before moving the next. Moving "
+                "many heads at once makes Copilot return an error body instead "
+                "of a review, and an error body is not a review (AGENTS.md "
+                "merge condition). It cannot be repaired in place: requesting "
+                "the reviewer by login is 422 and re-requesting the check-run "
+                "is 404 -- only another push re-triggers it."
+            ),
+        },
+    }
 
 
 def has_findings(result):
@@ -545,6 +626,40 @@ def render(result, threshold, total, label):
             )
             lines.append("      %s" % r["reason"])
         lines.append("")
+
+    stale = [r["number"] for r in result["stale_green"]]
+    if stale:
+        batch, deferred = update_branch_batch(stale)
+        lines.append(
+            "## update-branch plan: %d now, %d deferred  (cap=%d per run)"
+            % (len(batch), len(deferred), UPDATE_BRANCH_BATCH_CAP)
+        )
+        lines.append(
+            "  Update these, ONE AT A TIME, confirming each draws a real Copilot "
+            "review on its new head before moving the next:"
+        )
+        for n in batch:
+            lines.append("    PUT /pulls/%d/update-branch" % n)
+        if deferred:
+            # Only warn when there is actually something to over-sweep. A
+            # "do not sweep all 2" line under a cap of 3 is a warning that
+            # cannot apply, and warnings that fire when they do not apply are
+            # how the ones that do apply stop being read.
+            lines.append(
+                "  Deferred to a later run: %s"
+                % ", ".join("#%d" % n for n in deferred)
+            )
+            lines.append(
+                "  Do NOT sweep all %d. Moving many heads at once makes Copilot "
+                "return an error body instead of a review on every one of them, "
+                "and an error body is not a review (AGENTS.md merge condition). "
+                "It cannot be repaired in place: requesting the reviewer by login "
+                "is 422 and re-requesting the check-run is 404 -- only another "
+                "push re-triggers it, which re-runs that branch's full CI."
+                % len(stale)
+            )
+        lines.append("")
+
     lines.append("## ok: %d" % len(result["ok"]))
     return "\n".join(lines)
 
@@ -595,7 +710,7 @@ def main(argv=None):
 
     result = classify(prs, threshold)
     if args.json:
-        print(json.dumps({"threshold": threshold, **result}, indent=2))
+        print(json.dumps(json_payload(result, threshold), indent=2))
     else:
         print(render(result, threshold, len(prs), args.label))
     return 1 if has_findings(result) else 0

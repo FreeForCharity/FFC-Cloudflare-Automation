@@ -457,6 +457,22 @@ Describe 'Get-ContentApplyAutoMergePlan' {
     }
 }
 
+Describe 'Get-ContentApplyMergeRoute' {
+    It 'routes through the queue when the branch has a merge_queue rule' {
+        $rules = @([pscustomobject]@{ type = 'pull_request' }, [pscustomobject]@{ type = 'merge_queue' })
+        (Get-ContentApplyMergeRoute -Rules $rules).Route | Should -Be 'queue'
+    }
+    It 'merges directly when the rules were read and none is merge_queue' {
+        (Get-ContentApplyMergeRoute -Rules @([pscustomobject]@{ type = 'pull_request' })).Route | Should -Be 'direct'
+        (Get-ContentApplyMergeRoute -Rules @()).Route | Should -Be 'direct'
+    }
+    It 'refuses to guess when the rules could not be read' {
+        $r = Get-ContentApplyMergeRoute -Rules @([pscustomobject]@{ type = 'merge_queue' }) -RulesKnown $false
+        $r.Route | Should -Be 'unknown'
+        $r.Reason | Should -Match 'could not be read'
+    }
+}
+
 Describe 'Get-ContentApplyLandDecision' {
     BeforeAll {
         $script:Sha = 'abc123'

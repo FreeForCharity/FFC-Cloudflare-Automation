@@ -1,0 +1,35 @@
+{
+  "result": "success",
+  "client": {
+    "id": 4242,
+    "firstname": "Janet",
+    "lastname": "Applicantson",
+    "fullname": "Janet Applicantson",
+    "companyname": "",
+    "email": "janet.applicantson@gmail.com",
+    "phonenumber": "555-867-5309",
+    "address1": "742 Evergreen Terrace",
+    "city": "Springfield",
+    "state": "IL",
+    "postcode": "62701",
+    "status": "Active"
+  },
+  "customfields": [
+    { "id": "11", "name": "Public email (website footer)", "value": "" },
+    { "id": "12", "name": "Public phone (website footer)", "value": "(555) 010-2000" },
+    {
+      "id": "13",
+      "name": "Brief mission statement",
+      "value": "<p>We feed <b>families</b> &amp; seniors in Sangamon County.</p><script>alert('x')</script>"
+    },
+    { "id": "14", "name": "Brand color (hex)", "value": "0567b1" },
+    { "id": "15", "name": "Logo image URL", "value": "http://insecure.example.org/logo.png" },
+    {
+      "id": "16",
+      "name": "Mailing address (full)",
+      "value": "742 Evergreen Terrace, Springfield, IL 62701"
+    },
+    { "id": "17", "name": "Team member 1 - name", "value": "Bobby Boardwalker" },
+    { "id": "18", "name": "SEO keywords", "value": "food,pantry,seniors" }
+  ]
+}

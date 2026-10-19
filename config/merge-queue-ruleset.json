@@ -1,0 +1,35 @@
+{
+  "_comment": "The repo-level ruleset workflow 752 adds to an FFC-EX repo that has no merge queue on its default branch. GitHub cannot put a merge queue in an organization ruleset, so it is per repo. Copied from the ruleset 44 FFC-EX repos already carried on 2026-10-12 (for example FFC-EX-3dmc2.org ruleset 19098640), field for field. merge_method MERGE needs the repo to allow merge commits; 752 checks that before applying. Bypass: the repository Admin role (id 5), as on those repos.",
+  "ruleset": {
+    "name": "Merge Queue + Branch Up-to-Date",
+    "target": "branch",
+    "enforcement": "active",
+    "conditions": {
+      "ref_name": {
+        "include": ["~DEFAULT_BRANCH"],
+        "exclude": []
+      }
+    },
+    "bypass_actors": [
+      {
+        "actor_id": 5,
+        "actor_type": "RepositoryRole",
+        "bypass_mode": "always"
+      }
+    ],
+    "rules": [
+      {
+        "type": "merge_queue",
+        "parameters": {
+          "check_response_timeout_minutes": 60,
+          "grouping_strategy": "ALLGREEN",
+          "max_entries_to_build": 5,
+          "max_entries_to_merge": 5,
+          "merge_method": "MERGE",
+          "min_entries_to_merge": 1,
+          "min_entries_to_merge_wait_minutes": 5
+        }
+      }
+    ]
+  }
+}

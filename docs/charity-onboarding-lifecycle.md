@@ -62,8 +62,10 @@ workflow. The relevant intake templates:
 - **Gate 1/2 verdicts for every Pending order:** **232. WHMCS - Charity-Lane Verdicts** (read-only,
   ungated `whmcs-prod-read`) checks each Pending pid 16 / 33 / 40 order against the
   machine-checkable inventory section 5 checks and reports `ACCEPT` / `NEED_INFO` / `ESCALATE` with
-  reason codes (catalog in its `charity-lane-verdicts.json` artifact). It accepts nothing;
-  acceptance stays with 211 / 226 under the `whmcs-prod` gate.
+  reason codes (catalog in its `charity-lane-verdicts.json` artifact). Every order is also screened
+  with FraudLabs Pro the way 228 does it; only a FraudLabs `APPROVE` status can leave an `ACCEPT`
+  (the score is reported, never decisive), and a failed lookup is `ESCALATE` (`FRAUD_CHECK_FAILED`).
+  It accepts nothing; acceptance stays with 211 / 226 under the `whmcs-prod` gate.
 - **Run:** **101. Domain - Status (All Sources)** — read-only across **Cloudflare + M365** (it is
   the `[CF+M365]` workflow and does not query WHMCS). To check for an existing **WHMCS**
   client/domain, run **104. Domain - Export Inventory** (which includes WHMCS) or a WHMCS export

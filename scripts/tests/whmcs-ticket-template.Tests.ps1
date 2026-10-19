@@ -42,6 +42,17 @@ Describe 'config/whmcs-ticket-templates.json' {
         $body | Should -Match 'changes'
     }
 
+    It 'ships onboarding_need_info as a client-visible template that can open a ticket and needs the gap list' {
+        $t = $script:Config.templates.onboarding_need_info
+        $t | Should -Not -BeNullOrEmpty
+        [bool]$t.internal | Should -BeFalse
+        [string]$t.subject | Should -Not -BeNullOrEmpty
+        [bool]$t.extra_message_required | Should -BeTrue
+        # An onboarding gap is not a support request: the support wording must not leak in.
+        [string]$t.body | Should -Not -Match 'what you expected'
+        [string]$t.body | Should -Match 'application'
+    }
+
     It 'keeps every client-visible body free of contact details (no PII)' {
         foreach ($p in $script:Config.templates.PSObject.Properties) {
             if ([bool]$p.Value.internal) { continue }
@@ -70,6 +81,16 @@ Describe 'Resolve-WhmcsOpenTicketTemplate (shipped config)' {
 
     It 'refuses preview_ready without the preview URL' {
         { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'preview_ready' -ExtraMessage '  ' } | Should -Throw '*requires extra_message*'
+    }
+
+    It 'builds onboarding_need_info with the missing items appended' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_need_info' -ExtraMessage 'Missing: organization LinkedIn page URL; desired domain'
+        $r.Subject | Should -Be '[Application] A few details are needed to continue your application'
+        $r.Message | Should -Match "`n`nMissing: organization LinkedIn page URL; desired domain$"
+    }
+
+    It 'refuses onboarding_need_info without the gap list' {
+        { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_need_info' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
     }
 
     It 'refuses a reply-only template (no subject)' {

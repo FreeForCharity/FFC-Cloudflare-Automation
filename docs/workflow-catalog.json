@@ -1183,6 +1183,7 @@
       "number": 232,
       "title": "WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only)",
       "apis": [
+        "FRAUDLABS",
         "WHMCS"
       ],
       "file": "232-whmcs-charity-lane-verdicts.yml",
@@ -1190,12 +1191,53 @@
         "workflow_dispatch"
       ],
       "environments": [
+        "fraudlabspro-prod-read",
         "whmcs-prod-read"
       ],
-      "description": "Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3)) and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE, with machine-readable reason codes, from the machine-checkable subset of the ffcadmin inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33: a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain, and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE. FraudLabs Pro is readable only through 228's own environment, so every row reports fraud_check: not_run. It accepts nothing and writes nothing to WHMCS.  Output is PII-free (this repo is public): order id, client id, pid, gate, org name, desired domain, verdict, reason codes, readiness score. Job summary table + the charity-lane-verdicts.json artifact; optionally the same table as a comment on `issue_number` (the 219 pattern).  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity.",
+      "description": "Read-only. Step G1.3 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Lists every Pending onboarding (pid 16 pre-501(c)(3), pid 33 501(c)(3)) and website (pid 40) order and gives each a verdict, ACCEPT / NEED_INFO / ESCALATE, with machine-readable reason codes, from the machine-checkable subset of the ffcadmin inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33: a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain, and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE. Every order is then screened with FraudLabs Pro exactly as 228 does it (G1.3b), on 228's own fraudlabspro-prod-read environment and key, deciding on the FraudLabs status alone: only an APPROVE can leave an ACCEPT standing; REJECT -> ESCALATE FRAUD_FLAGGED, REVIEW -> ESCALATE FRAUD_REVIEW, a failed, missing or skipped lookup -> ESCALATE FRAUD_CHECK_FAILED (fail closed). The score is reported, never decisive (a high score on a $0 onboarding order is the known false positive, #813). It accepts nothing and writes nothing to WHMCS.  Three jobs, because no one environment holds both credentials: charity_lane_verdicts (whmcs-prod-read) - the checks; every row leaves it UNSCREENED (FRAUD_CHECK_NOT_RUN, ESCALATE). Also writes the FraudLabs lookup keys (order id -> the order field 228 sends; no applicant data), kept 1 day. fraud_screen (fraudlabspro-prod-read) - one stored-verdict lookup per order; no WHMCS credential; writes only order id, status, score, error code. finalize (no environment, no credential) - applies the results; runs even when fraud_screen failed, and then marks every row FRAUD_CHECK_FAILED.  Output is PII-free (this repo is public): order id, client id, pid, gate, org name, desired domain, verdict, reason codes, readiness score, fraud check + score. The finalize job summary table + the charity-lane-verdicts.json artifact; optionally the same table as a comment on `issue_number` (the 219 pattern).  Both reads use the READ-scoped credential: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity, exactly as 219/221 (WHMCS) and 228 (FraudLabs).",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read + fraudlabspro-prod-read",
+      "guard": "read-only verdicts (`ACCEPT` / `NEED_INFO` / `ESCALATE` + reason codes) for Pending pid 16/33/40 orders; accepts nothing; every order screened with FraudLabs Pro exactly as 228 (its environment, key action and lookup), fail closed: only a FraudLabs `APPROVE` status leaves an `ACCEPT` standing (score never decisive), and a failed, missing or skipped lookup is `ESCALATE` `FRAUD_CHECK_FAILED`; no job holds both credentials and the merge/post job holds none; PII-free output (ids, org name, desired domain, verdict, codes, readiness, fraud check + score); public GETs to ProPublica and the org Facebook/LinkedIn pages; optional issue comment (issues:write, ambient token, `finalize` job only); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity for both reads",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 233,
+      "title": "WHMCS - Charity-Lane Ticket Reply (classify, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "233-whmcs-charity-lane-ticket-reply.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G3.6 of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). After 205 sends a charity the `preview_ready` ticket (\"[Website Preview] Your new website is ready to review\"), this finds that client's most recent ticket with the chosen subject prefix (GetTickets by clientid, then GetTicket), takes the client's latest reply after FFC's opening message (client vs admin by the API's `admin` field), and classifies it: APPROVED / CHANGES / UNCLEAR / NO_REPLY / TICKET_NOT_FOUND. It fails closed: anything unsure is UNCLEAR.  This repo is PUBLIC. The reply text is never written anywhere: the job summary and the optional issue comment (marker `<!-- charity-lane:ticket-reply -->`) carry only client id, ticket id, ticket status, reply date (UTC), classification and the matched signal LABELS from fixed word lists. No artifact is uploaded.  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/221/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. Every input reaches the script through env:, never the script text.",
       "safetyLevel": "Reads",
       "approvalEnv": "whmcs-prod-read",
-      "guard": "read-only verdicts (`ACCEPT` / `NEED_INFO` / `ESCALATE` + reason codes) for Pending pid 16/33/40 orders; accepts nothing; PII-free output (ids, org name, desired domain, verdict, codes, readiness); public GETs to ProPublica and the org Facebook/LinkedIn pages; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "guard": "read-only classification of a charity's latest reply on its most recent `[Website Preview]` / `[Application]` ticket (GetTickets by clientid + GetTicket): `APPROVED` / `CHANGES` / `UNCLEAR` / `NO_REPLY` / `TICKET_NOT_FOUND`, fail-closed toward `UNCLEAR`; the reply text is never written (output is client id, ticket id, status, reply date, classification and fixed-list signal labels only); no artifact; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
+      "number": 234,
+      "title": "WHMCS - Charity-Lane Site Content Fields (public, read-only)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "234-whmcs-charity-lane-site-fields.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod-read"
+      ],
+      "description": "Read-only. Step G3.3c of the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). Emits ONE charity's public website fields for the Cloud Worker that builds its site (.claude/routines/site-builder.md): the footer email / phone / city & state, mission, tagline, descriptions, programs, brand color, logo, social, donation and volunteer URLs, founding year, alternate names, EIN, Candid URL and template choice. The applicant gave these FOR PUBLICATION on the website, so they are printed in full; 219 masks contact data and is the wrong source for them.  The allowlist is config/charity-lane-site-fields.json: only its fields can appear, each cleaned (HTML, control characters) and validated by type. Never emitted: the mailing address, the client record's own name / email / phone, board / officer / team / contact fields, or anything else not listed. A value that fails validation is reported by reason code only, never printed. Source per field: the Custom Client Field, then the matching product answer on the client's pid 16/33/40 services.  Output: charity-lane-site-fields.json artifact, the same JSON in the job log and job summary, and the list of missing fields (the worker marks them `pending`); optionally a comment on `issue_number` carrying `<!-- charity-lane:site-fields -->`.  Ungated `whmcs-prod-read` lane with the READ-scoped credential, exactly as 219/232: `scope: read` on the READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity. WHMCS actions: GetClientsDetails and GetClientsProducts only.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "whmcs-prod-read",
+      "guard": "one client's PUBLIC website fields for the site builder (G3.3c); prints values in full by design, but only the allowlist in `config/charity-lane-site-fields.json` (footer email/phone/city & state, mission, tagline, descriptions, programs, brand color, logo/social/donation/volunteer URLs, founding year, alternate names, EIN, Candid URL, template choice), each HTML/control-stripped, length-capped and type-validated; the loader refuses any address/contact/board/team field; never the mailing address or the client record's own name/email/phone; a rejected value is reported by reason code only; WHMCS actions GetClientsDetails + GetClientsProducts only; `client_id` / `issue_number` digits-only, validated before the credential step; optional issue comment (issues:write, ambient token); `scope: read` on the `READ_ALL_FFC_AZURE_*` identity",
       "category": "WHMCS",
       "categoryCode": "WHMCS"
     },
@@ -1594,7 +1636,7 @@
       "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
-      "guard": "`repo` chained behind `dns` approval",
+      "guard": "`repo` chained behind `dns` approval; dispatch input `skip_dns` (default false) reports the zone as not controlled for the run, so `dns`/`dns_preview`/`verify` skip and the repo is built on the default Pages URL with no CNAME (for a domain already serving a live site)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -2259,7 +2301,7 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Two-hourly OUTCOME check on whether the Conductor \u2014 the locally-run routine that is the only actor with promotion and merge authority \u2014 is still working.  Why (#1339): the Conductor posted its run 174 END to the Conductor Log (#719) at 2026-09-14T10:20Z and then went quiet for about five days. Nothing noticed. This repo has 17 monitoring workflows (730-746) and every one of them watches something that happens INSIDE GitHub Actions \u2014 waiting runs (734), scheduled-workflow failures (740), board drift (745), feed freshness (744) \u2014 so a routine whose only GitHub footprint is a comment on an issue is invisible to the entire fleet by construction. All 17 were green while 0 agentic-os PRs merged, the open pile grew from 4 to 13, and about 39 consecutive cloud-worker runs each correctly computed \"0 worker-actionable PRs\" and filed it as a normal terminal state. A terminal state reached 39 times in a row is not a terminal state, it is an outage.  744's header already makes this argument one level down: #921 watches whether 502 succeeds, not whether its PR merged; #908 watches PRs hanging behind main, not the publisher never opening one. Same shape, one level up. This workflow asserts the outcome instead \u2014 are the Conductor's comments still arriving, and is work still landing.  Four signals, each reported BY NAME with its measured value and never averaged into a single verdict:  conductor-silence  age of the newest `Run N \u2014 START / END` comment on #719 merge-silence      age of the newest merged agentic-os PR (independent) open-pr-cap        open agentic-os PR count vs the worker cap of 3, CONTEXT pr-growth          monotonic growth in that count across consecutive runs  open-pr-cap is deliberately never a finding on its own. The pile stood at 4 \u2014 above the cap \u2014 throughout the healthy window before the outage, so a level-triggered rule reports every ordinary day and teaches its reader to ignore it. Sustained growth is the shape a stalled supervisor makes, and pr-growth is what reports it.  An unreadable log, an empty comment page, a pattern that no longer matches the log's format (ledger L215), or a timestamp that is absent, empty, non-ISO or in the future is a FINDING, never \"alive\". \"Could not check\" and \"checked, fine\" are different answers and collapsing them is the exact fail-open this workflow exists to close (ledger L02).  Credentials: NONE beyond the ambient GITHUB_TOKEN. The log is a public issue in this repository and so are the PRs. Using a Key Vault PAT here would be circular in 744's sense, carried up a level: a liveness check must not depend on a credential whose death it might need to report, and it must not sit behind an environment gate that only the absent supervisor can approve. No Key Vault access, no environment, no approval gate.  Classification + report logic lives in scripts/conductor-liveness-lib.js (unit-tested under tests/workflow-logic/).",
+      "description": "Two-hourly OUTCOME check on whether the Conductor \u2014 the locally-run routine that is the only actor with promotion and merge authority \u2014 is still working.  RETIRED 2026-10-19: the local Conductor was retired and supervision moved to the FFC Cloudflare Automation Claude project, which posts no heartbeat to the log (#719). `conductor-silence` is now reported as context (INFO) and never as a finding; `merge-silence` and `pr-growth` keep their verdicts, because whether work is landing is still the outcome this workflow exists to assert.  Why (#1339): the Conductor posted its run 174 END to the Conductor Log (#719) at 2026-09-14T10:20Z and then went quiet for about five days. Nothing noticed. This repo has 17 monitoring workflows (730-746) and every one of them watches something that happens INSIDE GitHub Actions \u2014 waiting runs (734), scheduled-workflow failures (740), board drift (745), feed freshness (744) \u2014 so a routine whose only GitHub footprint is a comment on an issue is invisible to the entire fleet by construction. All 17 were green while 0 agentic-os PRs merged, the open pile grew from 4 to 13, and about 39 consecutive cloud-worker runs each correctly computed \"0 worker-actionable PRs\" and filed it as a normal terminal state. A terminal state reached 39 times in a row is not a terminal state, it is an outage.  744's header already makes this argument one level down: #921 watches whether 502 succeeds, not whether its PR merged; #908 watches PRs hanging behind main, not the publisher never opening one. Same shape, one level up. This workflow asserts the outcome instead \u2014 are the Conductor's comments still arriving, and is work still landing.  Four signals, each reported BY NAME with its measured value and never averaged into a single verdict:  conductor-silence  age of the newest `Run N \u2014 START / END` comment on #719 merge-silence      age of the newest merged agentic-os PR (independent) open-pr-cap        open agentic-os PR count vs the worker cap of 3, CONTEXT pr-growth          monotonic growth in that count across consecutive runs  open-pr-cap is deliberately never a finding on its own. The pile stood at 4 \u2014 above the cap \u2014 throughout the healthy window before the outage, so a level-triggered rule reports every ordinary day and teaches its reader to ignore it. Sustained growth is the shape a stalled supervisor makes, and pr-growth is what reports it.  An unreadable log, an empty comment page, a pattern that no longer matches the log's format (ledger L215), or a timestamp that is absent, empty, non-ISO or in the future is a FINDING, never \"alive\". \"Could not check\" and \"checked, fine\" are different answers and collapsing them is the exact fail-open this workflow exists to close (ledger L02).  Credentials: NONE beyond the ambient GITHUB_TOKEN. The log is a public issue in this repository and so are the PRs. Using a Key Vault PAT here would be circular in 744's sense, carried up a level: a liveness check must not depend on a credential whose death it might need to report, and it must not sit behind an environment gate that only the absent supervisor can approve. No Key Vault access, no environment, no approval gate.  Classification + report logic lives in scripts/conductor-liveness-lib.js (unit-tested under tests/workflow-logic/).",
       "safetyLevel": "Reads",
       "approvalEnv": "\u2014",
       "guard": "two-hourly OUTCOME check on whether the Conductor \u2014 the locally-run routine that is the only actor with promotion and merge authority \u2014 is still working; it went quiet mid-run on 2026-09-14 for ~5 days and nothing noticed, because all 17 monitoring workflows (730-746) watch things that happen INSIDE Actions and the Conductor's only GitHub footprint is its comments on the Conductor Log (#719), so its absence is invisible to the fleet by construction (#1339); four signals reported BY NAME with measured values and never averaged \u2014 `conductor-silence` (age of the newest `Run N \u2014 START / END` comment, warn 6h / alert 12h against an observed ~3h cadence), `merge-silence` (age of the newest merged `agentic-os` PR, the independent second signal, warn 24h / alert 48h), `open-pr-cap` (count vs the worker cap of 3, CONTEXT ONLY \u2014 the pile stood at 4 all through the healthy window, so a level-triggered rule reports every ordinary day) and `pr-growth` (strict monotonic growth across 3 consecutive runs, which is the shape a stalled supervisor actually makes); an unreadable log, an empty comment page, a START/END pattern that matches nothing (ledger L215) or an absent/empty/non-ISO/future timestamp is a finding and never \"alive\"; history carried forward in the rolling issue body; rolling issue upsert/close; **deliberately holds no Key Vault credential and no environment** \u2014 ambient GITHUB_TOKEN only, since a liveness check must not be blocked by a gate only the absent supervisor can approve, nor die with a PAT it might need to report; ungated",
@@ -2305,6 +2347,64 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 github-prod (invite job only)",
       "guard": "dry_run default true; ungated `preflight` on `github-prod-read` plans first (user exists, current membership, invitation already pending); the gated `invite` job is skipped at job level on a dry run (#983 shape); `PUT /orgs/{org}/memberships/{user}` is idempotent (re-run safe, never re-sends a pending invite); org membership only \u2014 pair with 729 for a repo write grant",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 750,
+      "title": "Repo - Charity-Lane Duplicate Lookup (read-only)",
+      "apis": [
+        "GH"
+      ],
+      "file": "750-charity-lane-lookup.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Where does this charity already exist? Run by the Onboarding Conductor before it queues a [CHARITY-LANE] item or provisions a repo (epic #1618), so the pipeline never builds a second site for a charity already in flight or live. A cloud session cannot search the whole org (its GitHub proxy serves only attached repos), so the search runs here.  SAFETY. No environment and no credential beyond the job token: it reads public data only (FreeForCharity repo names, org-wide issue/PR search, ffcadmin's docs/sites_list.csv, ProPublica for an EIN). The only write is the optional comment on a hub issue. Free-text inputs reach the script through env, never through ${{ }} in a run body.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "\u2014",
+      "guard": "no environment, no credential beyond the job token; public data only (FreeForCharity repo names, org-wide issue/PR search with a whole-phrase filter, ffcadmin `docs/sites_list.csv`, ProPublica by EIN); the only write is the optional result comment on a hub issue; free-text inputs reach scripts/charity_lane_lookup.py through env",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 751,
+      "title": "Website - Security Overrides Sync (FFC-EX)",
+      "apis": [
+        "GH"
+      ],
+      "file": "751-website-security-overrides-sync.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Brings named FFC-EX sites up to the dependency security floor of the template each one was made from, as one pull request per repo. Never merges.  Why this exists (#1640, epic #1618): the charity lane's Gate 3 CI row counts the site's Security Audit, and on most FFC-EX repos that audit is red in a way Dependabot cannot fix. The open advisory is transitive (`source-map-js` via `postcss`), and Dependabot bumps direct dependencies only. The templates fix it with a `pnpm.overrides` block that older sites lack. Measured 2026-10-12: about 90 open Dependabot PRs, nearly all still failing `pnpm audit (production)`; the same change made by hand turned five in-flight sites green.  What it changes, per repo, and nothing else: - `package.json`: the template's `pnpm.overrides` (template value wins on a shared key, repo-only keys kept, scoped keys a bare pin makes dead dropped), and `next` / `postcss` raised to the template's floor (scripts/fleet-overrides-sync.js); - `pnpm-lock.yaml`, regenerated with the repo's own pinned pnpm; - `types/*.d.ts` copied from the template, only when the build fails without them (Next 16.3 type-checks the test files; the template's matcher types are what fixed that there); - in `package.json`, the template's `@jest/globals` devDependency, only when the build fails on TS2307 for it (allowlisted, scripts/fleet-overrides-sync.js add-dev); - an allowlisted test file (`TEMPLATE_TEST_FILES`) the site already has, replaced with the template's version, only when the build log names it.  Two jobs, the 742 shape: - plan  \u2014 ungated, job token, read-only. Clones each repo anonymously, makes the change, installs, audits and builds. A repo is READY only when its high-level audit passes and it builds. dry_run=true (the default) stops here; the patches are uploaded as an artifact. - apply \u2014 dry_run=false only, gated `github-prod`. Applies exactly the patches the plan produced (the gate approver reviews that plan), pushes one branch per repo and opens a PR. It never merges, never approves and never enables auto-merge: landing is the target repo's merge condition.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only, no environment) clones each repo anonymously, detects its template from the drift-guard banner (refuses a repo matching neither), merges that template's `pnpm.overrides` and the `next`/`postcss` floor (scripts/fleet-overrides-sync.js), regenerates `pnpm-lock.yaml`, and marks a repo ready only when `pnpm audit --prod --audit-level high` and the build pass; the charity's own build runs with no token in its environment; the gated `apply` job applies exactly the planned patches, refuses any path outside `package.json`, `pnpm-lock.yaml` and `types/*.d.ts`, and opens one PR per repo; never merges, approves or enables auto-merge (#1640)",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 752,
+      "title": "Repo - Merge Queue Backfill (FFC-EX)",
+      "apis": [
+        "GH"
+      ],
+      "file": "752-repo-merge-queue-backfill.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod"
+      ],
+      "description": "Adds the repo-level \"Merge Queue + Branch Up-to-Date\" ruleset to named FFC-EX repos whose default branch has no merge queue. Never changes a repo that already has one, and never touches any other ruleset or setting.  Why this exists (epic #1618, 2026-10-12): GitHub cannot put a merge queue in an organization ruleset, so the queue exists per repo. 44 of 116 FFC-EX repos carried it and 72 did not: 701 never created it, and nothing backfilled it. With a queue on every site, `gh pr merge --auto` always means \"enqueue\", and 707 lands content PRs through the queue (#1654, #1655).  The ruleset body is config/merge-queue-ruleset.json, copied field for field from the one the 44 repos carry (merge method MERGE, ALLGREEN, 5-minute wait, repository-admin bypass).  Two jobs, the 742/751 shape: - plan  - ungated, job token, read-only. Per repo: public, not archived, merge commits not disabled (merge_method MERGE needs them; the job token usually cannot see the setting, so apply re-checks it), and no merge_queue rule on the default branch yet. Prints one `752-plan: <repo> <status> - <reason>` line each to the log. - apply - only when dry_run=false, on `github-prod` (Clarke approves the plan). Creates the ruleset on each ready repo, then re-reads the branch rules to confirm the queue is in force. Prints one `752-apply: <repo> <result>` line each. A 403 here means the PAT lacks Administration write on the repo; it is reported per repo.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only: public, not archived, merge commits allowed, no `merge_queue` rule yet); `apply` creates only the `config/merge-queue-ruleset.json` ruleset (the one 44 FFC-EX repos already carry), never edits or deletes another ruleset or setting, and re-reads the branch rules to confirm",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

@@ -1193,6 +1193,60 @@ def test_agents_md_gives_the_worker_the_escalation_trigger():
     assert "747" in section, "the escalation trigger belongs in the landing-sweep section"
 
 
+# --- retirement of the local Conductor (2026-10-19) -------------------------
+
+
+def test_a_retired_supervisors_silence_is_context_not_a_finding():
+    """Once the Conductor is retired, its silent log must not hold the issue open."""
+    a = _healthy(
+        now=DAY_FIVE,
+        mergedPRs=[{"number": 1317, "merged_at": "2026-09-19T08:00:00Z"}],
+        supervisorRetired=True,
+    )
+    s = _sig(a, "conductor-silence")
+    assert s["verdict"] == "INFO", s
+    assert "retired" in s["detail"], s
+    # The same inputs without the flag are an ALERT, so the flag is what demotes it.
+    assert _sig(_healthy(now=DAY_FIVE, mergedPRs=[{"number": 1317, "merged_at": "2026-09-19T08:00:00Z"}]),
+                "conductor-silence")["verdict"] == "ALERT"
+    assert not a["hasFinding"], a["signals"]
+    assert a["supervisorRetired"] is True
+
+
+def test_a_retired_supervisor_still_reports_merge_silence():
+    """Retiring the heartbeat must not retire the outcome: no merges is still a finding."""
+    a = _outage(DAY_FIVE, 6, [{"at": LAST_CONDUCTOR, "openPRs": 4}])
+    retired = analyze(
+        comments=[_comment(LAST_CONDUCTOR, "## Run 174 — END")],
+        mergedPRs=[{"number": 1317, "merged_at": LAST_MERGE}],
+        openPRs=6,
+        now=DAY_FIVE,
+        supervisorRetired=True,
+    )
+    assert _sig(retired, "merge-silence")["verdict"] == _sig(a, "merge-silence")["verdict"] == "ALERT"
+    assert retired["hasFinding"], retired["signals"]
+    body = render(retired)
+    assert "landing sweep" in body, body
+    assert "restart it" not in body, "a retired supervisor must not be sent to a workstation restart"
+
+
+def test_an_unreadable_log_is_not_a_finding_once_retired():
+    a = _healthy(commentsError="boom", supervisorRetired=True)
+    assert _sig(a, "conductor-silence")["verdict"] == "INFO"
+    assert not a["hasFinding"], a["signals"]
+
+
+def test_the_flag_must_be_exactly_true():
+    """A truthy string must not silently retire the primary signal."""
+    a = _healthy(now=DAY_FIVE, supervisorRetired="yes")
+    assert _sig(a, "conductor-silence")["verdict"] == "ALERT", a["signals"]
+
+
+def test_the_workflow_passes_the_retirement_flag_from_the_library():
+    assert "supervisorRetired: lib.SUPERVISOR_RETIRED" in WF_RAW
+    assert const("SUPERVISOR_RETIRED") is True
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

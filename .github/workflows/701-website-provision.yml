@@ -43,6 +43,14 @@ on:
         options:
           - FreeForCharity/FFC-IN-Footer_Only_Template
           - FreeForCharity/FFC-IN-FFC_Single_Page_Template
+      skip_dns:
+        description: >-
+          Build on the default GitHub Pages URL only: never touch DNS and never set a custom domain,
+          even when the zone is in FFC Cloudflare. For a domain that already serves a live site (the
+          charity lane's "ready for cutover" path); the cutover itself stays a separate step.
+        required: false
+        type: boolean
+        default: false
       charity_name:
         description:
           'Organization display name (optional; required only to apply the React template footer).'
@@ -928,6 +936,9 @@ jobs:
         # makes every parsed field attacker-authored. See ledger L28.
         env:
           DOMAIN: ${{ needs.resolve.outputs.domain }}
+          # Dispatch-only; null on the issues / repository_dispatch paths, which
+          # therefore behave exactly as before.
+          SKIP_DNS: ${{ inputs.skip_dns }}
         run: |
           $ErrorActionPreference = 'Stop'
           $domain = [string]$env:DOMAIN
@@ -948,6 +959,14 @@ jobs:
           $existsFfc = [bool]$ffc.exists
           $existsCm  = [bool]$cm.exists
           $controlled = ($existsFfc -or $existsCm)
+
+          # skip_dns: report the zone as not controlled for THIS run, so dns_preview,
+          # dns and verify skip and the repo job builds on the default Pages URL
+          # (no CNAME). The zone_exists_* flags still tell the truth.
+          if ([string]$env:SKIP_DNS -eq 'true' -and $controlled) {
+            Write-Host "::notice::skip_dns=true: $domain is in FFC Cloudflare ($(if ($existsFfc) { 'FFC' } else { 'CM' })), but this run leaves DNS alone and builds on the default Pages URL."
+            $controlled = $false
+          }
 
           $account = ''
           if ($existsFfc) { $account = 'FFC' }
@@ -1808,6 +1827,71 @@ jobs:
           "content_pending_issue_url=$pendingIssueUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           # The runner appends `exit $LASTEXITCODE`; a failed gh call above is
           # already reported as a warning and must not fail the step (L303).
+          exit 0
+
+      # The maintainer's first issue (Clarke, 2026-10-14). The application cannot take a
+      # logo upload (WHMCS custom fields hold text only), so every new site opens "Add
+      # your logo" for its technical POC. It is also a worked example of answering an
+      # issue: acknowledge, do the work, close it. Best-effort: content is
+      # continue-on-error, and this step reports problems as warnings and exits 0.
+      - name: Open the maintainer's first issue (add your logo)
+        id: first_issue
+        if: inputs.dry_run != true && steps.apply.outputs.content_status == 'applied'
+        shell: pwsh
+        env:
+          REPO_FULL: ${{ needs.resolve.outputs.repo_full }}
+          DOMAIN: ${{ needs.resolve.outputs.domain }}
+          CHARITY_NAME: ${{ needs.resolve.outputs.charity_name }}
+          TECHNICAL_POC: ${{ needs.resolve.outputs.technical_poc_github_username }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $repoFull = [string]$env:REPO_FULL
+          $poc = ([string]$env:TECHNICAL_POC).Trim().TrimStart('@')
+          $charity = [string]$env:CHARITY_NAME
+          if ($repoFull -notmatch '^FreeForCharity/FFC-EX-[A-Za-z0-9.-]+$') { Write-Warning "Unexpected repo '$repoFull'; no first issue."; exit 0 }
+          $pocValid = $poc -match '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$'
+          $title = 'Add your logo (your first maintainer task)'
+          try {
+            $existing = gh issue list -R $repoFull --state all --search 'in:title "Add your logo"' --limit 10 --json number,title | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "gh issue list failed (exit $LASTEXITCODE)." }
+            if (@($existing | Where-Object { $_.title -eq $title }).Count -gt 0) { Write-Host 'First issue already exists.'; exit 0 }
+            gh label create 'maintainer-onboarding' -R $repoFull --color '0E8A16' --description 'First tasks for the site maintainer' --force | Out-Null
+            gh label create 'good first issue' -R $repoFull --color '7057FF' --description 'Good for newcomers' --force | Out-Null
+            $hello = if ($pocValid) { "Hi @$poc, welcome! You are the maintainer of" } else { 'Welcome! This is the first task for the maintainer of' }
+            $lines = @(
+              '<!-- ffc-maintainer-first-issue -->',
+              "$hello the **$charity** website. This first issue is a real task and a short practice run in answering an issue.",
+              '',
+              '### The task: add your logo',
+              'The site shows a placeholder logo until you add yours. The logo file is `public/Images/logo.webp`.',
+              '',
+              '### How to answer an issue (do these in order)',
+              '1. **Say you are on it.** Comment below, for example "I will add our logo this week", and click **Assignees, then assign yourself** on the right.',
+              '2. **Do the work.** Pick one:',
+              '   - **Easiest:** drag your logo file (PNG, JPG, SVG or WebP) into a comment box below and press **Comment**. Free For Charity puts it in place for you.',
+              '   - **Hands-on:** open `public/Images`, choose **Add file, then Upload files**, upload your logo named `logo.webp` (or another format, and say so), choose **Create a new branch** and **Propose changes**, then open the pull request with `Closes #` and this issue number in its description.',
+              '3. **Close the loop.** When the logo shows on the site, comment "Done" and close this issue (a merged pull request with `Closes #` closes it for you).',
+              '',
+              '### Learn more',
+              '- Accepting your repository invitation: https://ffcadmin.org/site-owner/accept-invitation/',
+              '- Site-owner training track: https://ffcadmin.org/site-owner/training/',
+              '- Common edits cookbook: https://ffcadmin.org/site-owner/common-edits/'
+            )
+            $bodyFile = Join-Path $env:RUNNER_TEMP 'first-issue.md'
+            ($lines -join "`n") | Out-File -FilePath $bodyFile -Encoding utf8
+            $args = @('issue', 'create', '-R', $repoFull, '--title', $title, '--body-file', $bodyFile, '--label', 'maintainer-onboarding', '--label', 'good first issue')
+            if ($pocValid) { $args += @('--assignee', $poc) }
+            $url = gh @args
+            if ($LASTEXITCODE -ne 0 -and $pocValid) {
+              # The POC may not have accepted the repo invitation yet, which makes the
+              # assignee invalid; open it unassigned rather than not at all.
+              $url = gh @($args[0..($args.Count - 3)])
+            }
+            if ($LASTEXITCODE -ne 0) { throw "gh issue create failed (exit $LASTEXITCODE)." }
+            Write-Host "First maintainer issue: $(([string]($url | Select-Object -Last 1)).Trim())"
+          } catch {
+            Write-Warning "Could not open the first maintainer issue (non-fatal): $_"
+          }
           exit 0
 
   verify:

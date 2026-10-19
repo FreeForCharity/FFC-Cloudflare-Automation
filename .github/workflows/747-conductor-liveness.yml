@@ -4,6 +4,12 @@ run-name: 'Conductor liveness (supervisor heartbeat)'
 # Two-hourly OUTCOME check on whether the Conductor — the locally-run routine
 # that is the only actor with promotion and merge authority — is still working.
 #
+# RETIRED 2026-10-19: the local Conductor was retired and supervision moved to
+# the FFC Cloudflare Automation Claude project, which posts no heartbeat to the
+# log (#719). `conductor-silence` is now reported as context (INFO) and never as a
+# finding; `merge-silence` and `pr-growth` keep their verdicts, because whether
+# work is landing is still the outcome this workflow exists to assert.
+#
 # Why (#1339): the Conductor posted its run 174 END to the Conductor Log (#719)
 # at 2026-09-14T10:20Z and then went quiet for about five days. Nothing
 # noticed. This repo has 17 monitoring workflows (730-746) and every one of them
@@ -281,6 +287,9 @@ jobs:
               openError,
               priorBody: existing ? existing.body : null,
               now: nowIso,
+              // The local Conductor is retired (2026-10-19); its silence is
+              // context, not a finding. See SUPERVISOR_RETIRED in the library.
+              supervisorRetired: lib.SUPERVISOR_RETIRED,
             });
             core.notice(lib.summary(analysis));
 
@@ -297,7 +306,7 @@ jobs:
                   owner,
                   repo,
                   issue_number: existing.number,
-                  body: `✅ Recovered: the Conductor is posting again and work is landing (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
+                  body: `✅ Recovered: ${analysis.supervisorRetired ? 'work is landing again' : 'the Conductor is posting again and work is landing'} (${lib.summary(analysis)}) ([run](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId})). Auto-closing.`,
                 });
                 await github.rest.issues.update({
                   owner,

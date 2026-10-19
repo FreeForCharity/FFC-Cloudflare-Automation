@@ -20,6 +20,7 @@ distinguished by **subject prefix + priority + GitHub label**.
 | Open a ticket                | `OpenTicket`                       | `whmcs-ticket-open.ps1`                |
 | Reply / internal note        | `AddTicketReply` / `AddTicketNote` | `whmcs-ticket-reply.ps1`               |
 | Export tickets (report)      | `GetTickets`                       | `whmcs-tickets-export.ps1`             |
+| Classify a charity's reply   | `GetTickets` + `GetTicket`         | `whmcs-charity-lane-ticket-reply.ps1`  |
 
 All write scripts support `-DryRun` (preview, secrets/customfields redacted) and emit JSON on
 stdout. Log **break/fix remediation steps** as internal notes:
@@ -56,6 +57,38 @@ credential is minted, so a refused template costs no Key Vault read; the resolve
   summary, uploads CSV artifacts, and can upsert **one** rolling tracking issue labeled
   `whmcs:triage` (`open_tracking_issue: true`). This only _surfaces_ tickets — it performs no ticket
   writes — so the integration remains **one-way** (GitHub→WHMCS); replies are not synced back.
+- **233. WHMCS - Charity-Lane Ticket Reply (classify, read-only)**
+  (`233-whmcs-charity-lane-ticket-reply.yml`) — **read-only**, ungated `whmcs-prod-read` with the
+  read-scoped credential. Answers one question for the charity lane (epic #1618, item G3.6): did the
+  charity approve its website preview, or ask for changes? Inputs: `client_id`, `subject_prefix`
+  (`[Website Preview]`, the `preview_ready` template, or `[Application]`) and an optional
+  `issue_number`. It reads the client's most recent ticket whose subject starts with that prefix
+  (`GetTickets` by `clientid`, then `GetTicket`), sets FFC's opening message aside (205 opens
+  tickets as the client, so the opening is recognized by position, not by the `admin` field), and
+  takes the client's latest turn: the latest reply with an empty `admin` field plus any client
+  replies directly before it with no admin reply in between. HTML, quoted earlier messages ("On …
+  wrote:", Outlook header blocks, `>` lines, `<blockquote>`) and signatures are stripped, then a
+  fixed-word classifier decides:
+
+  | Classification     | When                                                                                                                                                   |
+  | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `APPROVED`         | an approval phrase ("approved", "looks good/great", "go ahead", "perfect", "no changes", …) and **no** change or hold signal, in a reply of ≤ 60 words |
+  | `CHANGES`          | change signals (change, update, fix, wrong, replace, add, remove, missing, instead, but, typo, `?`, …) and no approval phrase                          |
+  | `UNCLEAR`          | both, neither, or only hold signals (negation or hesitation: "not", "n't", "if", "yet", "need", "wait", …)                                             |
+  | `NO_REPLY`         | no client reply after FFC's opening message                                                                                                            |
+  | `TICKET_NOT_FOUND` | the client has no ticket with that subject prefix                                                                                                      |
+
+  It fails closed: when in doubt the answer is `UNCLEAR`, never `APPROVED`, and a quoted copy of the
+  `preview_ready` body that slips past the stripping carries "changes" and "instead", so it cannot
+  produce `APPROVED` either. **The reply text is never written** — not to the log, the job summary,
+  an artifact (none is uploaded) or the issue comment. The output is the client id, the fixed
+  prefix, the ticket id, ticket status, reply date (UTC, assuming the WHMCS system time zone is
+  UTC), the classification and the matched signal labels, which come from the fixed lists in the
+  script, never from the reply. With `issue_number`, the same table is commented on that hub issue
+  under the marker `<!-- charity-lane:ticket-reply -->`. Tests:
+  `tests/whmcs-charity-lane-ticket-reply.Tests.ps1` (classifier and reply selection on fixture
+  payloads) and `tests/workflow-logic/test_233_charity_lane_ticket_reply_wiring.py`.
+
 - **207. WHMCS - Ticket Respond** (`207-whmcs-ticket-respond.yml`) — posts a templated reply or
   internal note to one ticket using `scripts/whmcs-ticket-reply.ps1`. Template bodies live in
   `config/whmcs-ticket-templates.json` (its dispatch choice lists `ack_new_request`,

@@ -36,8 +36,10 @@ line and an `expect` block.
    `check_provisioned_build.py`, because a template's own checks can pass over a wrong site (#1391:
    they were green while a charity's Donate section embedded Free For Charity's endowment form).
    That check fails unless the pages link the charity's own donation and volunteer pages (or, when
-   it gave none, a `mailto:` to its contact address), and fails if any page other than FFC's own
-   donation policy links one of FFC's donation, volunteer, Facebook or application-form targets.
+   it gave none, a `mailto:` to its contact address), and fails if any page links one of FFC's
+   donation, volunteer, Facebook or application-form targets, or if the site ships or links the
+   retired "Free For Charity Donation Policy" page (the footer standard is one donation policy, the
+   charity's own `/donation-policy`).
 
    A red cell means that charity would get a site whose own CI fails (and so never deploys), one
    that still carries Free For Charity's identity, or one that sends its donors or volunteers to

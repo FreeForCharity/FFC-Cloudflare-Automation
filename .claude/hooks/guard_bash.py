@@ -1247,7 +1247,11 @@ def echo_secret_violation(cmd):
     return None
 
 
-_TEE_RE = re.compile(r"(?:^|\s)tee\b(?!\s*-?-?a)")
+# The append exclusion needs at least one DASH before the `a` (`--?a`, not
+# `-?-?a`): with both dashes optional the lookahead also swallows every
+# TARGET beginning with `a`, so `tee aos.txt | head` -- the unquoted
+# spelling of the run-255 incident itself -- went silent.
+_TEE_RE = re.compile(r"(?:^|\s)tee\b(?!\s*--?a)")
 _HEAD_RE = re.compile(r"^\s*(?:\S*/)?head\b")
 
 

@@ -696,6 +696,182 @@ def test_EVERY_git_call_goes_THROUGH_the_identity_carrying_runner():
     assert not strays, f"measure_conflicts shells out directly: {strays}"
 
 
+
+# --------------------------------------------------------------------------
+# Reading the open-PR SET at all
+#
+# The deliverable's first step, and it was dead on arrival: `read_open_prs`
+# called `gh pr list --json`, which is a GraphQL client call, and GraphQL is
+# refused from a Claude Code session with `403 Forbidden`. `gh` exits 1 with
+# empty stdout, `_run` raises, and the tool measures nothing. Measured on head
+# `49ba3316` two ways -- the raw invocation and `read_open_prs` itself -- and
+# with the Conductor retired (411e879) every surviving caller is a session it
+# 403s in.
+#
+# Every test below asserts the COMMAND rather than the response, because the
+# command is what a stubbed `_run` still shows. That is the gap that let the
+# defect ship green: a stub answers whatever it is asked, so a module that only
+# checks the parsed result cannot tell a working call from a refused one.
+# --------------------------------------------------------------------------
+
+
+def _capture_open_pr_read(
+    stdout,
+    label="agentic-os",
+    repo="FreeForCharity/FFC-Cloudflare-Automation",
+    allow_raise=False,
+):
+    """Drive `read_open_prs` with a stubbed `_run`, returning `(cmd, result)`.
+
+    A `RuntimeError` out of `read_open_prs` is converted to an `AssertionError`
+    unless the caller is testing for one. That is not cosmetic: the module
+    runner below catches `AssertionError` and nothing else, so a reader that
+    raises anything else aborts the module mid-roster -- which prints no `FAIL`
+    line at all and reads as "no failures" to anything grepping for one (L194).
+    Measured: with the GraphQL `gh pr list` restored, `json.loads` on a row of
+    text raises `RuntimeError` here and the module reported 27 of its 44 tests.
+    """
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        result = _mod.read_open_prs(repo, label)
+    except RuntimeError as e:
+        if allow_raise:
+            raise
+        raise AssertionError(
+            f"read_open_prs could not read a well-formed REST row: {e} -- the "
+            f"`<created_at> <number> <sha>` rows the REST read emits are not "
+            f"what this reader parses (a GraphQL JSON reader sees them as text)"
+        ) from None
+    finally:
+        _mod._run = original
+    assert len(calls) == 1, f"expected exactly one call to read the open-PR list, got {calls}"
+    return calls[0], result
+
+
+def test_the_open_PR_list_is_read_over_REST_not_GRAPHQL():
+    """The fix. `gh pr list --json` 403s in every session that can still run
+    this script, so the tool's first step raises before it measures anything."""
+    cmd, _ = _capture_open_pr_read("2026-10-09T16:32:05Z 1584 dd16ff6a\n")
+    assert cmd[:2] == ["gh", "api"], (
+        f"the open-PR list is not read over REST: {cmd} -- `gh pr list --json` "
+        f"is a GraphQL call and is refused with 403 from a Claude Code session"
+    )
+    joined = " ".join(cmd)
+    assert "pr list" not in joined, f"the GraphQL spelling is still in the call: {cmd}"
+    assert "/pulls?" in joined, f"the REST read does not name the pulls endpoint: {cmd}"
+    assert "state=open" in joined, f"the REST read does not ask for OPEN PRs: {cmd}"
+
+
+def test_the_open_PR_read_PAGINATES_so_a_truncated_SET_is_not_a_wrong_plan():
+    """A short SET is not a smaller answer, it is a wrong landing plan: the PR
+    left off page 1 is measured against nothing and reported as landing free.
+    The expression stays streaming -- one row per item -- because `--paginate`
+    evaluates `--jq` once per page, so an aggregate would be computed per page
+    and concatenated."""
+    cmd, _ = _capture_open_pr_read("2026-10-09T16:32:05Z 1584 dd16ff6a\n")
+    assert "--paginate" in cmd, f"the open-PR read does not paginate: {cmd}"
+    jq = cmd[cmd.index("--jq") + 1]
+    for aggregate in ("| length", "| last", "| first", "add", "max_by", "min_by"):
+        assert aggregate not in jq, (
+            f"the jq expression uses the whole-set aggregate {aggregate!r} under "
+            f"--paginate, which is evaluated once PER PAGE: {jq}"
+        )
+    assert jq.lstrip().startswith(".[]"), (
+        f"the jq expression is not streaming, so its output will not concatenate "
+        f"cleanly across pages: {jq}"
+    )
+
+
+def test_the_LABEL_is_filtered_client_side_because_REST_drops_an_unknown_parameter():
+    """`labels=` is an *issues* parameter. `GET /pulls` drops an unrecognised
+    query parameter in silence and returns every open PR, so a URL-side filter
+    would read as working and quietly admit unrelated PRs into the measured
+    SET."""
+    cmd, _ = _capture_open_pr_read("2026-10-09T16:32:05Z 1584 dd16ff6a\n", label="agentic-os")
+    url = next(a for a in cmd if "/pulls?" in a)
+    assert "label" not in url, (
+        f"the label is passed as a query parameter: {url} -- `GET /pulls` has no "
+        f"label filter and drops it silently, returning every open PR"
+    )
+    jq = cmd[cmd.index("--jq") + 1]
+    assert "agentic-os" in jq and "labels" in jq, (
+        f"the label is not filtered client-side either, so the SET is unfiltered: {jq}"
+    )
+
+
+def test_the_open_PR_list_is_ordered_OLDEST_first_whatever_order_REST_returns():
+    """`GET /pulls` defaults to newest-first -- the reverse of the landing order
+    the caller wants -- and the default is not part of the contract. Sorting
+    here is what makes the plan reproducible rather than endpoint-dependent."""
+    newest_first = (
+        "2026-10-12T10:47:36Z 1647 e048cf74\n"
+        "2026-10-11T19:22:18Z 1615 64071b5d\n"
+        "2026-10-09T16:32:05Z 1584 dd16ff6a\n"
+    )
+    _, prs = _capture_open_pr_read(newest_first)
+    assert [n for n, _ in prs] == [1584, 1615, 1647], (
+        f"the open-PR list is not oldest-first: {prs} -- the landing order would "
+        f"be the reverse of the one the caller asked for"
+    )
+    assert [sha for _, sha in prs] == ["dd16ff6a", "64071b5d", "e048cf74"], (
+        f"a SHA was reordered away from its PR number: {prs}"
+    )
+
+
+def test_a_label_that_would_break_OUT_of_the_jq_string_RAISES():
+    """`gh api --jq` has no `--arg`, so the label is interpolated into a jq
+    string literal. A quote or a backslash would change the expression rather
+    than the value compared -- a filter nobody wrote, selecting the wrong SET.
+    Fail closed: a raise is recoverable, a silently different SET is not."""
+    import subprocess
+
+    def fake_run(cmd, cwd=None, check=True):
+        raise AssertionError(f"a dangerous label reached the command line: {cmd}")
+
+    original = _mod._run
+    _mod._run = fake_run
+    try:
+        for bad in ['agentic-os"', "agentic\\os", 'x" or true or "', ""]:
+            try:
+                _mod.read_open_prs("o/r", bad)
+            except RuntimeError as e:
+                assert "label" in str(e), f"the raise must name what it refused: {e}"
+            else:
+                raise AssertionError(f"label {bad!r} was accepted into the jq expression")
+    finally:
+        _mod._run = original
+
+
+def test_the_ordinary_LABEL_shapes_are_still_accepted():
+    """The polarity check on the guard above. Refusing too much trades a wrong
+    SET for no SET at all, and the labels this repo actually uses must pass."""
+    for good in ("agentic-os", "testing", "security", "good first issue", "area/dns", "P1:high"):
+        cmd, _ = _capture_open_pr_read("", label=good)
+        jq = cmd[cmd.index("--jq") + 1]
+        assert good in jq, f"label {good!r} was accepted but not filtered on: {jq}"
+
+
+def test_an_unparseable_REST_row_RAISES_rather_than_being_skipped():
+    """Same polarity as `parse_open_prs`: dropping a row it cannot read is the
+    quiet direction -- one fewer PR in the SET, no error, and a landing plan
+    that omits the PR most likely to collide."""
+    try:
+        _capture_open_pr_read("2026-10-09T16:32:05Z 1584\n", allow_raise=True)
+    except RuntimeError as e:
+        assert "1584" in str(e), f"the raise must quote the row it could not read: {e}"
+    else:
+        raise AssertionError("a two-field REST row was accepted; the SET is short by one PR")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

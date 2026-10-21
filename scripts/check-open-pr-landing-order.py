@@ -66,8 +66,8 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
 import os
+import re
 import subprocess
 import sys
 
@@ -204,20 +204,81 @@ def _run(cmd, cwd=None, check=True):
     return proc
 
 
+# The label is interpolated into a jq string literal below, because `gh api
+# --jq` has no `--arg`. A label carrying a quote or a backslash would therefore
+# change the expression rather than the value it compares against, and jq would
+# either fail or -- worse -- match something else. Refuse it instead of
+# shipping a filter nobody wrote: GitHub label names are far more permissive
+# than this, so a legitimate label this rejects is a raise, never a wrong set.
+_LABEL_RE = re.compile(r"\A[A-Za-z0-9 ._:/-]+\Z")
+
+
 def read_open_prs(repo, label):
-    """Ask `gh` for the open PRs carrying `label`, oldest first."""
+    """Ask `gh` for the open PRs carrying `label`, oldest first.
+
+    REST, never `gh pr list --json`. That spelling is a GraphQL client call, and
+    GraphQL is refused outright from a Claude Code session:
+
+        non-200 OK status code: 403 Forbidden
+        {"message":"GitHub GraphQL is not available from Claude Code sessions;
+                    use the REST API (gh api repos/{owner}/{repo}/...)"}
+
+    `gh` exits 1 with empty stdout, so `_run` raises and the whole tool dies at
+    its first step. Measured on this branch's head `49ba3316`: the raw
+    invocation, and `read_open_prs` itself. Nothing in `.github/` runs this
+    script and the local Conductor that documented it was retired on 2026-10-19
+    (`411e879`), so every surviving caller is a session the GraphQL call 403s
+    in -- the tool was unrunnable as written, by every operator it has.
+
+    The unit tests could not see it: they stub `_run` by design, so the one
+    network call the tool depends on was never exercised. The tests added with
+    this change assert the *command*, which is the part a stub still shows.
+
+    Two REST properties this has to carry itself, because `gh pr list` did them:
+
+    * **No label filter.** `labels=` is an *issues* parameter; `GET /pulls`
+      drops an unrecognised query parameter in silence and returns every open
+      PR, which would land unrelated work in the measured SET. So the label is
+      filtered client-side, in the jq expression.
+    * **`--paginate`, with a streaming expression.** A truncated set is a wrong
+      landing plan, not a short one. Streaming `"\\(..) \\(..)"` rows
+      concatenate cleanly across pages; an array-building or aggregate
+      expression would be evaluated once per page and is the shape CLAUDE.md
+      warns about.
+
+    Sorted here rather than trusted from the endpoint: `GET /pulls` defaults to
+    newest-first, the opposite of the landing order the caller wants, and the
+    default is not part of the contract. `number` breaks a tie so the order is
+    total and the plan reproducible.
+    """
+    if not _LABEL_RE.match(label):
+        raise RuntimeError(
+            f"refusing to filter on label {label!r}: it carries a character that "
+            f"would change the jq expression it is interpolated into rather than "
+            f"the value compared, and a filter nobody wrote selects the wrong set"
+        )
     proc = _run(
         [
-            "gh", "pr", "list", "--repo", repo, "--label", label, "--state", "open",
-            "--limit", "100", "--json", "number,headRefOid,createdAt",
+            "gh", "api", "--paginate",
+            f"repos/{repo}/pulls?state=open&per_page=100",
+            "--jq",
+            '.[] | select(any(.labels[].name; . == "'
+            + label
+            + '")) | "\\(.created_at) \\(.number) \\(.head.sha)"',
         ]
     )
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"could not parse the open-PR list as JSON: {exc}") from None
-    data.sort(key=lambda p: p["createdAt"])
-    return parse_open_prs(f"{p['number']} {p['headRefOid']}" for p in data)
+    rows = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) != 3:
+            raise RuntimeError(f"unparseable open-PR row from the REST list: {line!r}")
+        created, number, sha = parts
+        rows.append((created, int(number), sha))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return parse_open_prs(f"{number} {sha}" for _, number, sha in rows)
 
 
 def pr_ref(number):

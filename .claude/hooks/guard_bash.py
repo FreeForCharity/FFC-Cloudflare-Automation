@@ -1813,6 +1813,97 @@ def git_branch_remote_count_violation(cmd):
     return None
 
 
+RAW_FIELD_AT_RE = re.compile(
+    r"(?:^|\s)(?:-f|--raw-field)[\s=]+([A-Za-z_][A-Za-z0-9_.\[\]-]*)=@(\S+)"
+)
+# Path-ish shapes for the value after `@`. A GitHub @-mention (`@clarkemoyer`)
+# has no separator and no extension, which is the whole discriminator.
+#
+# The first branch MUST keep both backslashes. Written `[/\]`, the `\]` is an
+# escaped `]`, so the class does not close there -- it runs on to the `]` of
+# `[\w.-]` and swallows the alternation, leaving `<chars>+\.(?:md|...)$` as the
+# only shape. The separator branch then stops being independent: a path with
+# no whitelisted extension (`@/tmp/add719`, `@/var/log/out.log`) is let through,
+# which is the bug this rule exists to catch. Copilot caught this on #1592;
+# the firing cases below cover all three shapes so it cannot come back.
+#
+# Backslash is in the class, but do not read that as Windows-path coverage:
+# `_strip_quoted` blanks escape sequences, so unquoted `@C:\tmp\x` reaches the
+# regex as `@C: tmp x` -- and bash agrees, resolving it to `C:tmpx`, not a path.
+# A quoted backslash path is exempt for the reason in the docstring below.
+AT_VALUE_PATHISH_RE = re.compile(
+    r"[/\\]|^[\w.-]+\.(?:md|txt|json|ya?ml|html|csv|patch|diff)$|^-$"
+)
+
+
+def gh_raw_field_at_path_violation(cmd):
+    """`gh api -f key=@file` posts the literal string `@file`, not the file.
+
+    `@`-dereference is a feature of `-F/--field` only. `-f/--raw-field` is
+    documented as adding "a static string parameter", and it does exactly that:
+    the value travels verbatim. So the request is well-formed, the API accepts
+    it, `gh` exits 0 and prints a 201 with a real comment URL -- and the comment
+    body is a filesystem path.
+
+    Conductor run 240 published its entire public log this way. All three #719
+    comments -- START, END and an addendum -- posted as, respectively, 140, 141
+    and 44 bytes of `@C:/Users/clark/AppData/Local/Temp/...`. The run's actual
+    output (a five-way merge verification, a landing order, a reconciliation
+    against #1278) stayed private, and the next run found it only by reading the
+    comment bodies back. Nothing in the failing path reports anything: there is
+    no error, no warning, and the success line contains a working URL.
+
+    That is the reason this blocks rather than warns. Every other outcome of
+    this spelling is indistinguishable from success at the call site, so the
+    only place it can be caught is before the call.
+
+    Scope and known false negative, stated rather than implied:
+
+    * Fires on the statement with quoted spans already blanked, so prose about
+      this bug inside a `-f body='...'` value does NOT trip it. That exemption
+      is deliberate -- three existing rules scan whole payloads and refuse
+      commands that merely *discuss* a blocked call, and a guard against a
+      publishing bug must not block the write-up of the publishing bug.
+    * The cost of that choice is that a *quoted* `-f "body=@notes.md"` is
+      missed. Accepted: a path containing no whitespace needs no quotes, which
+      is why run 240's three instances were all unquoted, and `#989` rates a
+      false positive on a common idiom as worse than a false negative on a rare
+      one.
+    * `@-` is matched too. With `-f` it is not stdin, just a two-character body.
+
+    `-F key=@file` is the correct spelling and is left alone, as is
+    `gh issue comment --body-file`, which is what the Conductor's log steps
+    should use.
+    """
+    for stmt in _statements(cmd):
+        bare = _strip_quoted(stmt)
+        toks = bare.split()
+        if not any(
+            GH_TOKEN_RE.match(t) for t in toks
+        ) or "api" not in toks:
+            continue
+        m = RAW_FIELD_AT_RE.search(bare)
+        if not m:
+            continue
+        key, value = m.group(1), m.group(2)
+        if not AT_VALUE_PATHISH_RE.search(value):
+            continue
+        return (
+            "[#1591] `gh api -f {k}=@{v}` sends the literal string `@{v}` as the value. "
+            "`@`-dereference belongs to `-F/--field`; `-f/--raw-field` is a static string "
+            "parameter and passes it through verbatim.\n"
+            "  statement: {s}\n"
+            "This fails completely silently: the API accepts it, `gh` exits 0 and prints a "
+            "real comment URL, and the body is a filesystem path. Conductor run 240 published "
+            "all three of its #719 log comments this way (140, 141 and 44 bytes of "
+            "`@C:/Users/...`) and the whole run's output was lost to the public log.\n"
+            "  to post a file as a comment:  gh issue comment N --repo O/R --body-file {v}\n"
+            "  to send a file as a field:    gh api ... -F {k}=@{v}\n"
+            "Then READ BACK what you posted -- a 201 is not evidence the body arrived."
+        ).format(k=key, v=value, s=stmt.strip()[:140])
+    return None
+
+
 def main():
     raw = sys.stdin.read()
     try:
@@ -1868,7 +1959,7 @@ def main():
     #     time it is rediscovered belongs in a hook, not in a file someone is
     #     expected to have remembered.
     for reason in (pipeline_exit_code_violation(cmd), inline_python_encoding_violation(cmd),
-                   gh_edit_label_violation(cmd)):
+                   gh_edit_label_violation(cmd), gh_raw_field_at_path_violation(cmd)):
         if reason:
             block(reason)
 

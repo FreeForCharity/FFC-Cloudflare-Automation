@@ -100,28 +100,115 @@ jobs:
             const cancellationInstant = (createdAt) =>
               nextTickAfter(new Date(createdAt).getTime() + maxAgeDays * DAY);
 
-            // Collect waiting runs across the repo (paginated), bucketed into those
-            // to reap now and those to warn about.
+            // Collect waiting runs across the repo as the UNION OF TWO REDUNDANT QUERY
+            // SHAPES, deduped by run id. `?status=waiting` is not reliable and its
+            // failure mode is to UNDER-REPORT rather than to error: measured on this
+            // repo 2026-10-07T13:14Z, the unqualified shape returned `total_count: 0`
+            // on two consecutive reads while four runs were provably waiting, and
+            // adding `branch: main` to the same call returned all four (L341).
+            //
+            // That zero is silent in every direction that matters here. This step is a
+            // JANITOR: an empty list is indistinguishable from "the queue is clean", so
+            // it posts nothing, cancels nothing and exits green — and the warning a
+            // human relies on to answer a gate BEFORE it is reaped never arrives. The
+            // union can only ever be too long, never too short, which is the correct
+            // direction for a step whose job is to notice runs.
+            //
+            // Client-side filtering over an unfiltered page is NOT the alternative and
+            // was measured too: a held gate is routinely days old and falls off the
+            // newest-100 page entirely, so that shape returns zero for the very runs
+            // this janitor exists to find. `scripts/generate-agentic-os-status.py`
+            // carries the same union for the same reason; keep the two in step.
+            const listShapes = [{}, { branch: 'main' }];
+            const byId = new Map();
+            const perShape = [];
+            // Each shape is isolated. The union is a FLOOR, and it can only be one
+            // if a transient failure of either shape does not take the other down
+            // with it -- an octokit call throws on a 403 or a timeout, so without
+            // this try/catch a rate-limit blip on the first shape would discard a
+            // perfectly good answer from the second and hand the janitor the empty
+            // list it is documented above as being unable to distinguish from a
+            // clean queue.
+            for (const shape of listShapes) {
+              let seen = 0;
+              let page = 1;
+              try {
+                for (;;) {
+                  const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    status: 'waiting', per_page: 100, page, ...shape,
+                  });
+                  for (const r of data.workflow_runs) {
+                    seen++;
+                    if (!byId.has(r.id)) byId.set(r.id, r);
+                  }
+                  if (data.workflow_runs.length < 100) break;
+                  page++;
+                }
+                perShape.push(seen);
+              } catch (err) {
+                core.warning(
+                  `waiting-run query shape ${JSON.stringify(shape)} failed: ${err.message}. ` +
+                    'Continuing with the remaining shape(s); the union is a floor, not a ' +
+                    'single source.',
+                );
+                perShape.push(null);
+              }
+            }
+
+            // Zero surviving shapes is a read failure, not a clean queue. Failing
+            // loudly is the whole point: this janitor CANCELS runs, and an empty
+            // union would also suppress the warning a human relies on to answer a
+            // gate before it is reaped.
+            if (perShape.every((count) => count === null)) {
+              throw new Error(
+                'every waiting-run query shape failed; refusing to treat that as an ' +
+                  'empty queue. Nothing was cancelled and nothing was reported.',
+              );
+            }
+            // A disagreement is reported rather than silently repaired: the next person
+            // diagnosing a short count needs to see that the upstream defect is live.
+            // But RAW INEQUALITY is the wrong trigger, because the two shapes are not
+            // symmetric: the unqualified shape (`{}`) returns waiting runs across ALL
+            // branches, while the branch-qualified one is a strict SUBSET pinned to
+            // main. So `perShape[0] > perShape[1]` is the EXPECTED reading whenever a
+            // gate waits off the default branch -- a dispatch of a gated workflow on a
+            // `claude/*` branch is routine here -- and calling that the L341 defect
+            // sends the next reader hunting something that is not there. L341's
+            // signature is the impossible direction: a SUPERSET answering shorter.
+            const [unqualified, branchQualified] = perShape;
+            const bothRead = unqualified !== null && branchQualified !== null;
+            if (bothRead && unqualified < branchQualified) {
+              core.warning(
+                `the unqualified waiting-run shape returned FEWER runs (${unqualified}) ` +
+                  `than the branch-qualified subset (main:${branchQualified}); using the ` +
+                  `union of ${byId.size}. A superset cannot be short: this is the known ` +
+                  'upstream ?status=waiting defect (L341).',
+              );
+            } else if (!bothRead) {
+              const shown = perShape.map((c) => (c === null ? 'err' : String(c)));
+              core.warning(
+                `a waiting-run query shape could not be read (unqualified=${shown[0]}, ` +
+                  `branch=main:${shown[1]}); using the union of ${byId.size} from the ` +
+                  'shape(s) that answered. The per-shape failure is reported above.',
+              );
+            }
+            // `unqualified > branchQualified` is deliberately silent: that is the normal
+            // superset relationship, and a warning that fires in normal operation is the
+            // one nobody reads when it finally matters.
+
+            // Bucket the union into those to reap now and those to warn about.
             const stale = [];
             const expiring = [];
-            let page = 1;
-            for (;;) {
-              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
-                owner: context.repo.owner, repo: context.repo.repo,
-                status: 'waiting', per_page: 100, page,
-              });
-              for (const r of data.workflow_runs) {
-                const created = new Date(r.created_at).getTime();
-                const rec = { id: r.id, name: r.name, created: r.created_at, url: r.html_url };
-                if (created < cutoff) {
-                  stale.push(rec);
-                } else if (created < warnCutoff) {
-                  rec.cancelAt = cancellationInstant(r.created_at).toISOString();
-                  expiring.push(rec);
-                }
+            for (const r of byId.values()) {
+              const created = new Date(r.created_at).getTime();
+              const rec = { id: r.id, name: r.name, created: r.created_at, url: r.html_url };
+              if (created < cutoff) {
+                stale.push(rec);
+              } else if (created < warnCutoff) {
+                rec.cancelAt = cancellationInstant(r.created_at).toISOString();
+                expiring.push(rec);
               }
-              if (data.workflow_runs.length < 100) break;
-              page++;
             }
 
             const rows = [];

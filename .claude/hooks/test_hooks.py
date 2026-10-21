@@ -1749,6 +1749,59 @@ RULES = [
         ("global flag + issue edit without a label flag allowed",
          "gh --repo O/R issue edit 788 --title 'a new title'", ALLOW),
     ], label="guard_bash / L193 gh edit label read-modify-write:"),
+
+    Rule("gh-api-raw-field-at-path", '[#1591]', BLOCK_TIER, [
+        # `@`-dereference belongs to `-F/--field`. `-f/--raw-field` is a static
+        # string parameter, so the path travels verbatim -- and the API accepts
+        # it, returns 201, and `gh` exits 0 printing a working comment URL.
+        # Conductor run 240 published all three of its #719 log comments this
+        # way (140, 141 and 44 bytes of `@C:/Users/...`), losing the run's whole
+        # output from the public log. Nothing at the call site reported anything.
+        ("gh api -f body at absolute path",
+         "gh api repos/o/r/issues/719/comments -f body=@/tmp/end240.md", BLOCK),
+        ("gh api -f body at windows path",
+         "gh api repos/o/r/issues/719/comments -f body=@C:/tmp/start.md", BLOCK),
+        ("gh api --raw-field body at bare filename",
+         "gh api repos/o/r/issues/1/comments --raw-field body=@notes.md", BLOCK),
+        # `@-` is stdin for `-F` only; under `-f` it is a two-character body.
+        ("gh api -f body at dash is not stdin",
+         "gh api repos/o/r/issues/1/comments -f body=@-", BLOCK),
+        # Any field, not just body -- the failure does not depend on the key.
+        ("gh api -f non-body field at path",
+         "gh api repos/o/r/releases -f notes=@/tmp/changelog.md", BLOCK),
+        # Regression cases for the character-class escape (Copilot on #1592).
+        # Written `[/\]` the class does not close at that bracket, the separator
+        # branch merges into the extension branch, and a path without a
+        # whitelisted extension is allowed through. All three of run 240's real
+        # instances ended in `.md`, so only these cases can see the defect.
+        ("separator with no extension",
+         "gh api repos/o/r/issues/1/comments -f body=@/tmp/add719", BLOCK),
+        ("separator with an unlisted extension",
+         "gh api repos/o/r/issues/1/comments -f body=@/var/log/out.log", BLOCK),
+        ("windows path with no extension",
+         "gh api repos/o/r/issues/1/comments -f body=@C:/Users/clark/draft", BLOCK),
+        # The two correct spellings must stay quiet. These are the near-misses
+        # that decide whether the rule is usable at all.
+        ("gh api -F field at path allowed",
+         "gh api repos/o/r/issues/719/comments -F body=@C:/tmp/start.md", ALLOW),
+        ("gh issue comment --body-file allowed",
+         "gh issue comment 719 --repo O/R --body-file C:/tmp/start.md", ALLOW),
+        # A GitHub @-mention is the legitimate reason a body starts with `@`.
+        # It has no path separator and no file extension -- the discriminator.
+        ("gh api -f body with a mention allowed",
+         "gh api repos/o/r/issues/1/comments -f body='@clarkemoyer please review'", ALLOW),
+        # Already committed as an ALLOW for gh-api-leading-slash: a path as a
+        # field VALUE with no `@` is ordinary data. Must not regress.
+        ("gh api -f body=path without at allowed",
+         "gh api repos/o/r/issues -f body=/tmp/note.md", ALLOW),
+        # Not a `gh api` call at all.
+        ("curl -f flag allowed", "curl -X POST -f body=@/tmp/x.md https://e.com", ALLOW),
+        # Prose ABOUT the bug, inside a quoted body, must stay postable. Three
+        # existing rules refuse commands that merely discuss a blocked call;
+        # a guard against a publishing failure must not block its own write-up.
+        ("prose about the bug in a quoted body allowed",
+         "gh pr create --body 'run 240 used -f body=@path.md and lost its log'", ALLOW),
+    ], label="guard_bash / #1591 gh api -f key at path posts the literal path:"),
 ]
 
 

@@ -2366,9 +2366,105 @@ def main():
     check("session_start", "session_start.py", {}, False)
 
     test_git_precommit()
+    test_post_edit_ledger_citation_nudge()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
+
+
+def test_post_edit_ledger_citation_nudge():
+    """`post_edit.ledger_citing_rows` / `ledger_hint`.
+
+    Driven over PLANTED ledger text, not only over the real ledger: a check
+    that can only be exercised against the ledger's current contents is
+    enforced by those contents, which is not enforcement. The real tree is
+    asserted separately, at the end, so a rule that silently stops seeing it
+    still fails.
+    """
+    global PASS, FAIL
+    print("post_edit ledger-citation nudge:")
+
+    sys.path.insert(0, HOOKS)
+    import post_edit  # noqa: E402
+
+    def ok(name, cond, got=""):
+        global PASS, FAIL
+        PASS, FAIL = (PASS + 1, FAIL) if cond else (PASS, FAIL + 1)
+        print(f"  [{'ok  ' if cond else 'FAIL'}] {name}" + (f": {got}" if not cond else ""))
+
+    # Two rows: one pins an anchor with `:LINE`, one only NAMES the same kind
+    # of file. That pair is the whole discrimination -- without the second row
+    # this suite passes just as well for a rule that matches any mention, and a
+    # nudge that fires on every edit is one agents learn to ignore.
+    planted = "\n".join([
+        "| id | lesson | source | enforcement |",
+        "| --- | --- | --- | --- |",
+        "| L901 | a thing | `740-scheduled-workflow-failure-alert.yml:637` (`run.run_number`) | doc |",
+        "| L902 | another | `tests/workflow-logic/test_740_scheduled_failure_alert.py:2229` | doc |",
+        "| L903 | prose only | rewritten by `scripts/only-mentioned.py` last week | doc |",
+        "| L904 | bare base | `guard_bash.py:1003` names the insertion point | doc |",
+        "not a row: `740-scheduled-workflow-failure-alert.yml:1` outside the table",
+    ])
+
+    rows = post_edit.ledger_citing_rows(
+        ".github/workflows/740-scheduled-workflow-failure-alert.yml", planted)
+    ok("a cited workflow names its row", rows == ["L901"], rows)
+
+    rows = post_edit.ledger_citing_rows(
+        "tests/workflow-logic/test_740_scheduled_failure_alert.py", planted)
+    ok("a cited test module names its row", rows == ["L902"], rows)
+
+    # The discriminating case. L903 names the file and pins no line, so editing
+    # it cannot move an anchor and must not nudge.
+    rows = post_edit.ledger_citing_rows("scripts/only-mentioned.py", planted)
+    ok("a file MENTIONED without `:LINE` is silent", rows == [], rows)
+
+    # The ledger cites bare basenames too, and the guard resolves them against
+    # the tracked tree -- so matching on the full path only would miss them.
+    rows = post_edit.ledger_citing_rows(".claude/hooks/guard_bash.py", planted)
+    ok("a bare-basename citation is matched", rows == ["L904"], rows)
+
+    rows = post_edit.ledger_citing_rows("scripts/never-mentioned.py", planted)
+    ok("an uncited file is silent", rows == [], rows)
+
+    # A citation outside the table is not a row and has no id to report.
+    ok("a citation outside a table row yields no id",
+       "L901" in post_edit.ledger_citing_rows(
+           ".github/workflows/740-scheduled-workflow-failure-alert.yml", planted)
+       and len(post_edit.ledger_citing_rows(
+           ".github/workflows/740-scheduled-workflow-failure-alert.yml", planted)) == 1)
+
+    # ledger_hint's repo-boundary rule: the Conductor edits five clones with
+    # the hub's hooks loaded, so a basename match in another repo would be a
+    # confident hint about the wrong ledger.
+    #
+    # The sibling path must carry a basename this ledger DOES cite. An
+    # uncited basename (`package.json`) passes whether or not the boundary
+    # check exists, because ledger_citing_rows returns [] either way -- the
+    # first draft of this case used one, and dropping the check flipped
+    # nothing. A case that cannot fail is measuring its own construction.
+    outside = post_edit.ledger_hint(
+        os.path.join(os.path.dirname(REPO), "FFC-IN-freeforcharity.org",
+                     ".github", "workflows",
+                     "740-scheduled-workflow-failure-alert.yml"), REPO)
+    ok("a cited basename in a SIBLING clone is silent", outside is None, repr(outside))
+
+    hint = post_edit.ledger_hint(os.path.join(REPO, "docs", "lessons-ledger.md"), REPO)
+    ok("editing the ledger itself nudges",
+       hint is not None and "ledger itself" in hint, repr(hint))
+
+    # The real tree, last: the rule above is only worth having if it still sees
+    # the two files whose line shift it exists to catch (#1611 / L222 / L318).
+    for rel in (".github/workflows/740-scheduled-workflow-failure-alert.yml",
+                "tests/workflow-logic/test_740_scheduled_failure_alert.py"):
+        hint = post_edit.ledger_hint(os.path.join(REPO, rel), REPO)
+        ok(f"the real ledger still cites {os.path.basename(rel)}",
+           hint is not None and "cites this file by line" in hint, repr(hint))
+
+    # And it must stay advisory. A nudge that can block is a rule, and this one
+    # cannot know whether an anchor actually moved.
+    check("post_edit on a ledger-cited file still allows", "post_edit.py",
+          edit(".github/workflows/740-scheduled-workflow-failure-alert.yml", ""), False)
 
 
 def test_git_precommit():

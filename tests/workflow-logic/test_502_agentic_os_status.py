@@ -860,8 +860,9 @@ def main():
         "the second query shape must actually be issued — one shape cannot floor itself",
     )
     check(
-        "disagreed" in err.getvalue(),
-        f"a disagreement must be reported, not silently repaired, got: {err.getvalue()!r}",
+        "FEWER" in err.getvalue() and "defect" in err.getvalue(),
+        "a SHORT unqualified shape must be reported as the upstream defect, not "
+        f"silently repaired, got: {err.getvalue()!r}",
     )
 
     # Discrimination, not permissiveness: the union must not invent gates when
@@ -876,8 +877,9 @@ def main():
             "two shapes agreeing on zero must publish zero gates, not a phantom row",
         )
     check(
-        "disagreed" not in err.getvalue(),
-        "agreement must stay quiet — a warning on every run is a warning nobody reads",
+        err.getvalue() == "",
+        "agreement must stay quiet — a warning on every run is a warning nobody "
+        f"reads, got: {err.getvalue()!r}",
     )
 
     # And the reverse asymmetry: whichever shape is the poisoned one varies, so

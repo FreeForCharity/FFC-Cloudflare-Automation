@@ -26,6 +26,7 @@ Run: python3 tests/workflow-logic/test_run_all_roster.py
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import pathlib
@@ -496,6 +497,56 @@ def test_every_module_in_the_suite_either_reports_a_roster_or_declares_why_not()
     assert offenders == [], (
         "these modules declare no tests and no RUN_ALL_ROSTER_EXEMPT reason, so "
         f"run_all.py cannot tell a full run from a truncated one: {offenders}"
+    )
+
+
+# Third-party test frameworks that are NOT installed on the CI runner. The
+# suite is run as `[sys.executable, <module>]` with no test framework and no
+# requirements install, so importing one of these is a `ModuleNotFoundError`
+# at import time rather than a test failure.
+UNAVAILABLE_TEST_FRAMEWORKS = ("pytest", "nose", "unittest2", "hypothesis")
+
+
+def test_no_module_imports_a_test_framework_the_runner_does_not_have():
+    """A module that imports `pytest` dies at import and reports no failing test.
+
+    This is the worst-behaved failure shape the roster guards above are built
+    around, because it defeats all of them at once. The module never reaches
+    its runner, so it prints no `PASS`, no `FAIL` and no roster, and the
+    silence guard does not fire either (the import raises, so the exit code is
+    non-zero rather than a silent 0). `classify_failure` finds no `  FAIL`
+    line, no `AssertionError` and no environmental signature, so it correctly
+    falls toward "real bug" — and the only thing a reader sees is
+    `##[error]workflow-logic tests failed: <module>` above a traceback whose
+    message is about a missing package. Nothing in the log names an assertion,
+    because none ran.
+
+    It is also invisible locally, which is why it needs a guard rather than
+    care: pytest IS installed on the Conductor's Windows host, so
+    `python -m pytest <module>` passes there while CI cannot even import it.
+    Measured on #1584 — one module out of 132 imported pytest, it was green
+    locally under `-m pytest`, and `Validate Repository` failed on it.
+    `ast`-based rather than a grep, for L48's reason: a grep matches the word
+    inside the docstring that explains why the import is absent.
+    """
+    offenders = []
+    for module in sorted(HERE.glob("test_*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            for name in names:
+                if name in UNAVAILABLE_TEST_FRAMEWORKS:
+                    offenders.append(f"{module.name}:{node.lineno} imports {name}")
+    assert offenders == [], (
+        "the suite runs each module as a plain script with no test framework "
+        "installed, so these imports are a ModuleNotFoundError at import time "
+        "and the module reports no tests at all. Use the hand-rolled `main()` "
+        f"runner every other module uses: {offenders}"
     )
 
 

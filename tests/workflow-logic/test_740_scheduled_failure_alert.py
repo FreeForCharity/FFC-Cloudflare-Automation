@@ -1285,6 +1285,10 @@ CORE_SATELLITES = [
     "FreeForCharity/FFC-IN-ffcadmin.org",
     "FreeForCharity/FFC-IN-freeforcharity.org",
 ]
+# The fifth, added by #1533. Kept separate from CORE_SATELLITES on purpose: it is
+# not part of #1296's cohort, and the reason it was missing is that the cohort was
+# enumerated by the `FFC-IN-` prefix while canary is `FFC-EX-`.
+CANARY = "FreeForCharity/FFC-EX-canary"
 
 
 def _satellites() -> list:
@@ -1641,6 +1645,52 @@ def test_the_shipped_satellite_list_covers_the_four_core_repos():
     # only the hub. Growing past them is deliberate, a cohort at a time.
     swept = {line.partition(" :: ")[0] for line in _satellites()}
     assert set(CORE_SATELLITES) <= swept, sorted(swept)
+
+
+def test_the_canary_repo_is_watched():
+    # #1533's acceptance criterion 1. FFC-EX-canary runs the byte-identical
+    # `Security Audit` on the same daily cron as the templates and failed nine
+    # consecutive scheduled runs (2026-10-01 -> 2026-10-09, last green 09-30) on
+    # a critical `next/og` RCE with no alert of any kind, because it was not in
+    # this list. It is the repo that exists to fail FIRST for the ~78-repo
+    # FFC-EX fleet (#755), so an unwatched canary is not a canary.
+    swept = {line.partition(" :: ")[0] for line in _satellites()}
+    assert CANARY in swept, sorted(swept)
+
+
+def test_the_satellite_list_is_not_bound_to_the_FFC_IN_prefix():
+    # The LESSON rather than the literal. #1296's cohort was four `FFC-IN-*`
+    # repos, and #1533's finding is that the list had silently become an
+    # allowlist enumerated by that prefix -- so the one satellite outside it was
+    # invisible for nine days while reporting healthy. A list that watches only
+    # `FFC-IN-*` again would pass every other guard in this file, including the
+    # four-core-repos one, because that assertion is a subset check.
+    #
+    # Asserting the shape, not canary's name, so the guard survives canary being
+    # renamed or retired and still fails if the fleet-facing half is dropped.
+    swept = {line.partition(" :: ")[0] for line in _satellites()}
+    off_prefix = {s for s in swept if not s.startswith("FreeForCharity/FFC-IN-")}
+    assert off_prefix, (
+        "every watched satellite is an FFC-IN-* repo; the fleet the alerting "
+        "exists for is FFC-EX-* (#1533)"
+    )
+
+
+def test_every_satellite_watches_a_workflow_name_this_repo_can_resolve():
+    # A satellite entry is matched byte-exactly against the target repo's
+    # workflow list, and an unresolvable name FAILS THE SWEEP rather than being
+    # skipped (`test_an_unresolvable_satellite_name_names_the_repo_it_was_looked_
+    # for_in`). So a typo in a line added here does not degrade coverage by one
+    # repo, it takes the whole monitor down -- including the four repos that were
+    # already watched. That asymmetry is why the shipped names are pinned: every
+    # satellite line today targets `Security Audit`, which is the display name
+    # `security-audit.yml` declares in all five repos.
+    for line in _satellites():
+        _, _, name = line.partition(" :: ")
+        assert name == SATELLITE_WF, (
+            f"{line!r} watches {name!r}; add it to this guard deliberately and "
+            f"verify the name byte-exactly against that repo's workflow list"
+        )
 
 
 def test_no_satellite_entry_targets_the_hub():

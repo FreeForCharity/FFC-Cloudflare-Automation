@@ -120,7 +120,7 @@ const ISSUE_LABELS = ['bug', 'agentic-os'];
  *   What the workflow observed: the HTTP status, a transport/API error message,
  *   and the raw file text when one was returned.
  * @param {string} nowIso generation timestamp of this run
- * @returns {{path:string, verdict:'FRESH'|'STALE'|'MISSING'|'UNREADABLE'|'INVALID',
+ * @returns {{path:string, verdict:'FRESH'|'STALE'|'MISSING'|'UNREADABLE'|'INVALID'|'ACTIONABLE_STALE',
  *            generatedAt:string|null, ageHours:number|null, detail:string}}
  *
  * MISSING    — the file is not there (404). The publisher never wrote it, or a

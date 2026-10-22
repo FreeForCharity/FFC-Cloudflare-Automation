@@ -2324,7 +2324,7 @@ def main():
             iterating = fexpr is not None and (
                 fexpr.lstrip().startswith(".[") or ".[]" in fexpr
             )
-            if "--paginate" in cmd:
+            if "--paginate" in bare:
                 block(
                     f"`-f`/`-F` with no `-X`/`--method` makes this a POST, not a read -- so "
                     f"`gh api {fpath}` is a CREATE against that collection, while the "

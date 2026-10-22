@@ -1536,6 +1536,11 @@ RULES = [
          "gh api 'repos/O/R/issues?state=open&per_page=100' --paginate --jq '.[] | .number'", SILENT),
         ("non-gh text mentioning the flags is silent",
          "echo 'gh api repos/O/R/issues -f state=open is a POST'", SILENT),
+        # The check reads the quote-stripped command, as rule 9 does: a create
+        # whose quoted body merely mentions --paginate is a correct POST.
+        ("a create whose quoted body mentions --paginate is silent",
+         "gh api repos/O/R/issues/5/comments -f body='the fix is to drop --paginate from the read'",
+         SILENT),
     ]),
 
     Rule("gh-api-field-iterating-jq", '[#1647]', WARN_TIER,

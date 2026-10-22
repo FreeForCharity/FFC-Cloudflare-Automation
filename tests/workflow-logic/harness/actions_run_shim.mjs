@@ -17,10 +17,27 @@
 //                      returned (paginated, 100/page) by listWorkflowRunsForRepo
 //   TEST_CANCEL_FAIL_IDS  comma-separated run ids whose cancel call throws (409)
 //   TEST_COMMENT_FAILS    '1' to make createComment throw (503)
+//   TEST_UNQUALIFIED_RETURNS_EMPTY '1' to serve [] to any list call WITHOUT a
+//                      `branch` argument, while branch-qualified calls still see
+//                      the fixture — the L341 defect, where `?status=waiting`
+//                      under-reports to zero and adding `branch` returns the truth
+//   TEST_LIST_THROW_SHAPES  which shapes raise a transport error instead of
+//                      answering: 'unqualified', 'branch', or 'all' (comma-
+//                      separated). This is the OTHER half of the redundancy
+//                      promise — a union is only a floor if one shape failing
+//                      does not take the other down, and an octokit call throws
+//                      on a 403 or a timeout rather than returning short
+//   TEST_BRANCH_SHAPE_DROPS_IDS  comma-separated run ids the BRANCH-qualified
+//                      shape omits, which is what the real API does: that shape
+//                      is pinned to one branch, so a run waiting on any other
+//                      branch is legitimately absent from it. Models the
+//                      shapes' ASYMMETRY — unqualified is a superset — so a
+//                      test can show `unqualified > branch` is not a defect
+
 //   plus whatever env the step itself reads (MAX_AGE_DAYS, WARN_DAYS, DRY_RUN, …)
 //
 // Emits one JSON result line:
-//   { failed, threw, notices, logs, listCalls, cancelAttempts, cancelledIds,
+//   { failed, threw, notices, warnings, logs, listCalls, cancelAttempts, cancelledIds,
 //     summaryText, comments }
 
 import { readFileSync } from 'node:fs';
@@ -38,6 +55,9 @@ const commentFails = process.env.TEST_COMMENT_FAILS === '1';
 
 const PER_PAGE = 100;
 const notices = [];
+// Captured rather than discarded: a no-op stub makes it impossible for any
+// test to assert that a step warned, which is the only signal some steps emit.
+const warnings = [];
 const logs = [];
 const listCalls = [];
 const cancelAttempts = [];
@@ -68,7 +88,7 @@ const core = {
     failed = String(m);
   },
   notice: (m) => notices.push(String(m)),
-  warning: () => {},
+  warning: (m) => warnings.push(String(m)),
   info: () => {},
   error: () => {},
   debug: () => {},
@@ -79,14 +99,51 @@ const github = {
   rest: {
     actions: {
       listWorkflowRunsForRepo: async (args) => {
-        listCalls.push({ status: args.status, per_page: args.per_page, page: args.page });
+        listCalls.push({
+          status: args.status,
+          per_page: args.per_page,
+          page: args.page,
+          // Recorded so a test can assert the caller issued the redundant
+          // branch-qualified shape as well as the unqualified one (L341).
+          branch: args.branch,
+        });
+        // Which fixture this shape is served depends on whether it carries a
+        // `branch`, so a test can reproduce the L341 defect: the unqualified
+        // shape under-reporting (down to an empty list) while the
+        // branch-qualified one returns the truth. Unset env = both shapes see
+        // the same `runs`, which is every pre-existing test's behaviour.
+        // A shape told to throw does so before serving anything, which is how
+        // octokit reports a rate-limit 403 or a timeout. Distinct from
+        // TEST_UNQUALIFIED_RETURNS_EMPTY, which is the shape ANSWERING short.
+        const throwShapes = new Set(
+          (process.env.TEST_LIST_THROW_SHAPES || '').split(',').filter(Boolean),
+        );
+        const shapeName = args.branch ? 'branch' : 'unqualified';
+        if (throwShapes.has('all') || throwShapes.has(shapeName)) {
+          const e = new Error(`API rate limit exceeded for shape ${shapeName}`);
+          e.status = 403;
+          throw e;
+        }
+        const unqualifiedEmpty = process.env.TEST_UNQUALIFIED_RETURNS_EMPTY === '1' && !args.branch;
+        // The branch-qualified shape is a strict SUBSET of the unqualified one in
+        // the real API, because it is pinned to a single branch. Modelling that is
+        // what lets a test assert `unqualified > branch` is normal rather than the
+        // L341 defect; without it every fixture makes the two shapes identical and
+        // the asymmetry is invisible to the suite.
+        const branchDrops = new Set(
+          (process.env.TEST_BRANCH_SHAPE_DROPS_IDS || '').split(',').filter(Boolean).map(Number),
+        );
+        let source = unqualifiedEmpty ? [] : runs;
+        if (args.branch && branchDrops.size) {
+          source = source.filter((r) => !branchDrops.has(Number(r.id)));
+        }
         // Honor the caller's requested page size (fall back to the API default)
         // so pagination tests stay faithful if the script changes per_page.
         const perPage = Number(args.per_page) || PER_PAGE;
         const page = args.page || 1;
         const start = (page - 1) * perPage;
-        const slice = runs.slice(start, start + perPage);
-        return { data: { total_count: runs.length, workflow_runs: slice } };
+        const slice = source.slice(start, start + perPage);
+        return { data: { total_count: source.length, workflow_runs: slice } };
       },
       cancelWorkflowRun: async (args) => {
         cancelAttempts.push(args.run_id);
@@ -133,6 +190,7 @@ console.log(
     failed,
     threw,
     notices,
+    warnings,
     logs,
     listCalls,
     cancelAttempts,

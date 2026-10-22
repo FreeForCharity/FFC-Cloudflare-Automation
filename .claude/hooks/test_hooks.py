@@ -1502,6 +1502,47 @@ RULES = [
         ("warned list read is still allowed", "gh api repos/o/r/issues/719/comments", ALLOW),
     ]),
 
+    Rule("tee-into-head-truncates", '[#255]', WARN_TIER,
+         label='guard_bash / run-255 `tee FILE | head` truncation:', cases=[
+        # The exact pipeline run 255 issued, which reported a backlog of 79
+        # against a true 183 and published the 79.
+        ("the run-255 command warns",
+         "gh api --paginate \"repos/o/r/issues?labels=agentic-os\" --jq '.[]|.number' "
+         "| tee \"$SP/aos.txt\" | head -25", WARN),
+        ("bare head with no count warns", "cmd | tee out.txt | head", WARN),
+        ("head further downstream still warns",
+         "cmd | tee out.txt | grep -E foo | head -5", WARN),
+        ("an absolute head path warns", "cmd | tee out.txt | /usr/bin/head -3", WARN),
+        # An `a`-prefixed TARGET is not `tee -a`. Every fixture above writes
+        # `out.txt` or the QUOTED "$SP/aos.txt", so both spellings of the
+        # motivating incident looked covered while the unquoted one -- the
+        # likelier one to type -- was silently excluded as an append flag.
+        ("an unquoted a-prefixed target warns", "cmd | tee aos.txt | head -25", WARN),
+        ("an a-prefixed path warns", "cmd | tee alpha/run.log | head -3", WARN),
+        ("an option cluster before an a-target warns",
+         "cmd | tee -i aos.txt | head -5", WARN),
+        # Allows. `tail` reads its whole input, so it cannot cut tee short --
+        # this is the discriminator that proves the rule is about head, not
+        # about `tee` appearing in a pipeline at all.
+        ("tee into tail is silent", "cmd | tee out.txt | tail -25", SILENT),
+        ("tee with no later stage is silent", "cmd | tee out.txt", SILENT),
+        ("head BEFORE tee is silent -- nothing downstream to truncate",
+         "cmd | head -25 | tee out.txt", SILENT),
+        ("head alone is silent", "cmd | head -25", SILENT),
+        ("tee -a is deliberately excluded", "cmd | tee -a out.txt | head -5", SILENT),
+        ("tee --append is excluded too", "cmd | tee --append out.txt | head -5", SILENT),
+        ("a clustered -ai is excluded", "cmd | tee -ai out.txt | head -5", SILENT),
+        ("tee -a with an a-prefixed target is still excluded",
+         "cmd | tee -a aos.txt | head -5", SILENT),
+        ("a separate statement is not the same pipeline",
+         "cmd > out.txt; head -25 out.txt", SILENT),
+        ("the word tee inside a quoted string is silent",
+         "echo 'pipe tee into head' | head -2", SILENT),
+        ("|| is not a pipe", "cmd | tee out.txt || head -1 fallback.txt", SILENT),
+        # The tier itself: a warned command must still be ALLOWED to run.
+        ("warned pipeline is still allowed", "cmd | tee out.txt | head -25", ALLOW),
+    ]),
+
     Rule("gh-api-classic-branch-protection", '[#1518]', WARN_TIER,
          label='guard_bash / #1518 classic branch-protection read:', cases=[
         ("the canonical call warns",

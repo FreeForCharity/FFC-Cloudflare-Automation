@@ -15,16 +15,23 @@ but "the docs exist in a repo this one never names."
 
 ## The constellation
 
-| Repo                                 | What it is                                                    | Authoritative for                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **FFC-Cloudflare-Automation** (here) | 105 Actions workflows driving CF, WHMCS, M365, Google, GitHub | Infrastructure automation, workflow catalog + numbering, the gate/approval model, the lessons ledger                        |
-| **FFC-IN-ffcadmin.org**              | The admin portal (Next.js → Pages, live at `ffcadmin.org`)    | **Org development process and standards**, the agent issue→PR workflow, the four-gate intake journey, agentic-OS governance |
-| **FFC-IN-Footer_Only_Template**      | The default charity site template (workflow 701)              | What a provisioned charity site **is** — `site.config.ts`, the footer standard, CI guards, and its own onboarding docs      |
-| **FFC-IN-FFC_Single_Page_Template**  | The full single-page charity site template                    | The richer layout (programs, events, embeds), still selectable in 720 / 732                                                 |
-| **FFC-EX-`<domain>`**                | One per charity, created from the template by workflow 701    | That charity's content and config                                                                                           |
-| **FFC-IN-`<name>`**                  | FFC's own internal sites                                      | Their own content                                                                                                           |
+| Repo                                 | What it is                                                    | Authoritative for                                                                                                              |
+| ------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **FFC-Cloudflare-Automation** (here) | 105 Actions workflows driving CF, WHMCS, M365, Google, GitHub | Infrastructure automation, workflow catalog + numbering, the gate/approval model, the lessons ledger                           |
+| **FFC-IN-ffcadmin.org**              | The admin portal (Next.js → Pages, live at `ffcadmin.org`)    | **Org development process and standards**, the agent issue→PR workflow, the four-gate intake journey, agentic-OS governance    |
+| **FFC-IN-Footer_Only_Template**      | The default charity site template (workflow 701)              | What a provisioned charity site **is** — `site.config.ts`, the footer standard, CI guards, and its own onboarding docs         |
+| **FFC-IN-FFC_Single_Page_Template**  | The full single-page charity site template                    | The richer layout (programs, events, embeds), still selectable in 720 / 732                                                    |
+| **FFC-IN-Claude-Plugins**            | FFC's public Claude plugin marketplace (`free-for-charity`)   | The `ffc-site-owner` plugin: skills that coach charity applicants and site owners. They restate FFCadmin policy, not define it |
+| **FFC-EX-`<domain>`**                | One per charity, created from the template by workflow 701    | That charity's content and config                                                                                              |
+| **FFC-IN-`<name>`**                  | FFC's own internal projects: sites, templates, tooling        | Their own content                                                                                                              |
 
 Note the naming convention it encodes: **`-IN-` is internal to FFC, `-EX-` is an external charity.**
+Who owns the repo decides the prefix, not who uses it. The templates and the Claude plugin exist to
+serve charities, but FFC owns them, so they are `FFC-IN-`. `FFC-EX-` is only ever one repo per
+charity site. A few older repos predate the convention and have no prefix (this one,
+`FFC-Static-Site-Capture-Tools`, `FFC-MicrosoftBot`, `FFC-Technology-Directory`, `FFC-Discussions`).
+They are legacy names, not precedent: **every new repo takes `FFC-IN-` or `FFC-EX-`.** The rule
+itself lives in FFCadmin's `.claude/rules/00-ffc-mission.md` (Naming Conventions).
 
 > **701 provisions from `FFC-IN-Footer_Only_Template` by default** (since 2026-09). Its footer
 > carries the charity name with a one-sentence mission under it, plus Donate and Volunteer links

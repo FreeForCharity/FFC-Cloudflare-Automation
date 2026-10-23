@@ -118,6 +118,15 @@ jobs:
           }
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
+          # Same table in the job log, without the masked-name column. A reader that
+          # can fetch job logs but not the step summary or artifacts (a cloud
+          # session) needs order id, client id and products to identify a new
+          # application; a masked first name must never be used for that.
+          Write-Host "Pending orders: $(@($pending).Count)"
+          foreach ($o in $pending) {
+            Write-Host "PENDING order=$($o.id) num=$($o.ordernum) client=$($o.userid) date=$($o.date) products=$([string]$o.products)"
+          }
+
           if ($env:OPEN_ISSUE -eq 'true') {
             $title = 'WHMCS Orders: pending orders needing triage'
             $bodyLines = [System.Collections.Generic.List[string]]::new()

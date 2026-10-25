@@ -36,6 +36,11 @@ Pinned here:
     read as "review works" -- refusals are already happening at today's share;
   * `MAX_PROMPT_TOKENS` still matches the provenance recorded in the docstring,
     so the budget cannot be raised without the evidence being updated with it;
+  * a corpus the CLI cannot find is an ERROR, not a 0 B corpus scoring 0.0% of
+    budget -- a missing `--root`, a root holding no instruction file, and an
+    unreadable candidate all exit non-zero, with the error exit kept distinct
+    from the OVER exit so a caller can tell "the corpus overflowed" from "the
+    corpus was never read";
   * and the live tree is within the hard threshold. That last test is how this
     reaches CI at all: `run_all.py` picks the module up by name, with no
     `.github/workflows/` edit -- a reserved lane this work must not enter.
@@ -243,6 +248,61 @@ def test_the_live_tree_is_within_the_recorded_hard_threshold():
         % (report["total_bytes"], 100 * report["share_of_budget"],
            report["budget_tokens"], 100 * M.HARD_SHARE),
     )
+
+
+def _cli(argv):
+    """Run `main(argv)`, returning (rc, stdout, stderr).
+
+    Both streams are swallowed: `run_all.py` parses the roster from this
+    module's output, and an error line printed mid-run would make a module that
+    reports 16 tests look like one that reported 15 and then said something
+    else (L194).
+    """
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = M.main(argv)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_a_root_that_does_not_exist_is_an_error_not_an_empty_corpus():
+    missing = pathlib.Path(tempfile.mkdtemp()) / "no-such-checkout"
+    rc, out, err = _cli(["--root", str(missing)])
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("does not render a verdict", "VERDICT" not in out, out[:200])
+    check("says what went wrong on stderr", "ERROR" in err, err[:200])
+
+
+def test_a_root_holding_no_instruction_file_is_an_error_not_a_zero_byte_corpus():
+    # The directory exists and is readable; the corpus has simply been renamed,
+    # moved, or never existed. 0 B scored 0.0% of budget and exited 0 before
+    # this check, which is the one failure direction this guard must not make.
+    empty = fixture({"README.md": b"not an instruction file"})
+    rc, out, err = _cli(["--root", str(empty)])
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("not reported as OK", "VERDICT: OK" not in out, out[:300])
+    check("names the empty corpus", "no instruction file" in err, err[:200])
+
+
+def test_an_unreadable_candidate_exits_non_zero_from_the_cli_too():
+    # `measure()` already refuses this (see the sibling test); before the
+    # CorpusError handler in `main()` it escaped the CLI as a traceback, whose
+    # status is indistinguishable from the OVER verdict's exit 1.
+    root = fixture({"AGENTS.md": b"a" * 10, "CLAUDE.md": b"c" * 10})
+    real = pathlib.Path.read_bytes
+
+    def refuse(self):
+        if self.name == "CLAUDE.md":
+            raise OSError("simulated unreadable file")
+        return real(self)
+
+    pathlib.Path.read_bytes = refuse
+    try:
+        rc, out, err = _cli(["--root", str(root)])
+    finally:
+        pathlib.Path.read_bytes = real
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("distinguishable from OVER", rc != 1, "rc=%d collides with the OVER exit" % rc)
+    check("names the unreadable file", "CLAUDE.md" in err, err[:200])
 
 
 def main():

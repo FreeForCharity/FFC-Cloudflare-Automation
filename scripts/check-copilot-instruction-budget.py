@@ -66,6 +66,17 @@ Usage:
     python3 scripts/check-copilot-instruction-budget.py
     python3 scripts/check-copilot-instruction-budget.py --json
     python3 scripts/check-copilot-instruction-budget.py --root /path/to/checkout
+
+Exit codes: 0 within the thresholds (OK or WARN), 1 over the hard threshold,
+2 the corpus could not be measured. The third one exists because the second
+reading of this script found the one remaining fail-open: a `--root` that does
+not exist, or one where the corpus has been renamed or moved, measured 0 B,
+scored 0.0% and exited 0, so "I could not find the corpus" and "the corpus is
+comfortably small" were the same output. That is the direction of error the
+whole module is written against, so `main()` now refuses a root that is not a
+directory and one where no candidate is present, and reports a `CorpusError`
+from anywhere as exit 2 rather than letting it surface as a traceback whose
+status is indistinguishable from OVER.
 """
 
 from __future__ import annotations
@@ -236,7 +247,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.root
         else pathlib.Path(__file__).resolve().parents[1]
     )
-    report = measure(root)
+
+    try:
+        if not root.is_dir():
+            raise CorpusError("not a directory: %s" % root)
+        if not any(present for _, present in discover(root)):
+            raise CorpusError(
+                "no instruction file found under %s -- an empty corpus is "
+                "'the corpus could not be found', never 'the corpus is small'"
+                % root
+            )
+        report = measure(root)
+    except CorpusError as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
+
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

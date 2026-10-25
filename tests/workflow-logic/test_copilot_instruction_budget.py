@@ -270,6 +270,12 @@ def test_a_root_that_does_not_exist_is_an_error_not_an_empty_corpus():
     check("exits non-zero", rc != 0, "rc=%d" % rc)
     check("does not render a verdict", "VERDICT" not in out, out[:200])
     check("says what went wrong on stderr", "ERROR" in err, err[:200])
+    # Name the cause, not just the failure. A root that does not exist also
+    # holds no candidate, so the empty-corpus guard catches this case too --
+    # which means "exits non-zero" passes with the `is_dir()` check deleted.
+    # Measured: removing it leaves this module 17/17 green. Asserting the
+    # message is what makes the two guards distinguishable.
+    check("names the missing directory", "not a directory" in err, err[:200])
 
 
 def test_a_root_holding_no_instruction_file_is_an_error_not_a_zero_byte_corpus():

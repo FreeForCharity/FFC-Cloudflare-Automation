@@ -21,7 +21,11 @@
          field can never be matched, so it is never emitted;
       2. the product custom-field answer on the client's pid 16 / 33 / 40
          services (GetClientsProducts), matched by machine-name, then by the
-         legacy label patterns. Active services first, then newest first;
+         label patterns. The live install returns these answers under their
+         display label only (HTML-encoded, no "machine|" prefix), so the
+         label patterns are what match a real pid 33 answer; labels are
+         entity-decoded and lose a trailing "(optional)" before matching.
+         Active services first, then newest first;
          Cancelled / Terminated / Fraud services are not read.
 
     Every value is cleaned (HTML and control characters stripped, length
@@ -64,7 +68,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:SiteFieldsMarker = '<!-- charity-lane:site-fields -->'
-$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice')
+$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice', 'githubUser')
 
 # --- pure, testable helpers (dot-source stops below) -----------------------
 
@@ -90,6 +94,29 @@ function Test-SiteFieldDeniedName {
         if ($d -and $lower.Contains($d.ToLowerInvariant())) { return $true }
     }
     return $false
+}
+
+function Get-SiteFieldLabelText {
+    # A product answer's label as the label patterns see it. GetClientsProducts
+    # returns the display label (the part after "machine|", HTML-encoded:
+    # "City &amp; state ...", "Organization&#039;s ..."), so decode entities,
+    # straighten curly apostrophes, collapse whitespace and drop a trailing
+    # "(optional)" hint before matching.
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    $t = [System.Net.WebUtility]::HtmlDecode([string]$Name)
+    $t = $t -replace '[\u2018\u2019]', "'"
+    $t = [regex]::Replace($t, '\s+', ' ').Trim()
+    return [regex]::Replace($t, '(?i)\s*\(optional\)$', '')
+}
+
+function Test-SiteFieldDeniedLabel {
+    # The denied-name guard for a legacy LABEL match. "Public email address"
+    # (the footer email question) is the one phrase let past the `address`
+    # fragment; any other denied fragment in the label still refuses it, so
+    # "Contact email address" or a mailing address stays out.
+    param([AllowEmptyString()][string]$Label, [string[]]$DeniedPatterns)
+    $l = [regex]::Replace([string]$Label, '(?i)\bpublic e-?mail address\b', 'public email')
+    return Test-SiteFieldDeniedName -Name $l -DeniedPatterns $DeniedPatterns
 }
 
 function Read-SiteFieldsConfig {
@@ -269,6 +296,13 @@ function Test-SiteFieldValue {
             if ($y -lt 1700 -or $y -gt ((Get-Date).ToUniversalTime().Year)) { return @{ ok = $false; reason = 'year_out_of_range' } }
             return @{ ok = $true; value = $clean }
         }
+        'githubUser' {
+            # A GitHub username (public by design): the site's maintainer, granted
+            # access by 701/729. Accepts 'name', '@name' or a github.com profile URL.
+            $u = $clean -replace '^(?i)https?://(www\.)?github\.com/', '' -replace '^@', '' -replace '/+$', ''
+            if ($u -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$') { return @{ ok = $false; reason = 'not_a_github_user' } }
+            return @{ ok = $true; value = $u }
+        }
         'ein' {
             if ($clean -notmatch '^(\d{2})-?(\d{7})$') { return @{ ok = $false; reason = 'not_an_ein' } }
             return @{ ok = $true; value = "$($Matches[1])-$($Matches[2])" }
@@ -371,8 +405,9 @@ function Get-SiteFieldProductSets {
 function Get-SiteFieldProductCandidates {
     # Ordered candidate raw values for one field from one service: exact
     # machine-name matches first (in config order), then legacy label-pattern
-    # matches. A label-pattern match on a field whose name carries a denied
-    # fragment (board, contact, ...) is never a candidate.
+    # matches against the decoded label (Get-SiteFieldLabelText). A
+    # label-pattern match on a field whose label carries a denied fragment
+    # (board, contact, ...) is never a candidate.
     param($Field, $Set, [string[]]$DeniedPatterns)
     $out = [System.Collections.Generic.List[string]]::new()
     foreach ($slug in $Field.productFields) {
@@ -383,8 +418,9 @@ function Get-SiteFieldProductCandidates {
     }
     foreach ($pat in $Field.productLabelPatterns) {
         foreach ($a in $Set.answers) {
-            if ($a.name -notmatch "(?i)$pat") { continue }
-            if (Test-SiteFieldDeniedName -Name $a.name -DeniedPatterns $DeniedPatterns) { continue }
+            $label = Get-SiteFieldLabelText $a.name
+            if ($label -notmatch "(?i)$pat") { continue }
+            if (Test-SiteFieldDeniedLabel -Label $label -DeniedPatterns $DeniedPatterns) { continue }
             $out.Add($a.value)
         }
     }

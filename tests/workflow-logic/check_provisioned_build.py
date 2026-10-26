@@ -12,8 +12,13 @@ fails when:
   sample gives one (`expect` "url"), else a mailto: to its contact address
   with the donate / volunteer subject (`expect` "mailto");
 - any page links or embeds one of Free For Charity's own donation, volunteer,
-  Facebook or application-form targets. FFC's own donation-policy page is
-  exempt: it is FFC's document, published on every site by design.
+  Facebook or application-form targets;
+- the site ships, or links, the retired "Free For Charity Donation Policy"
+  page. The FFC footer standard is ONE donation policy per site, the
+  charity's own `/donation-policy`; both templates dropped the second page.
+  This reads only a freshly provisioned build of a template's `main`, so it
+  enforces the new standard on new sites without touching existing FFC-EX
+  sites, which keep both pages until they are migrated.
 """
 
 from __future__ import annotations
@@ -36,8 +41,11 @@ FFC_TARGETS = (
     "facebook.com/freeforcharity",
     "forms.office.com/r/vePxGq6JqG",
 )
-# Pages that are FFC's own documents, published on every site by design.
-EXEMPT_PAGE = re.compile(r"(^|/)free-for-charity-donation-policy(/|\.html$)")
+# The retired second donation policy: a built page at this path, or any link
+# to it, is a finding. Matches `free-for-charity-donation-policy.html` and
+# `free-for-charity-donation-policy/index.html` (with or without trailingSlash).
+RETIRED_PAGE = re.compile(r"(^|/)free-for-charity-donation-policy(/|\.html$)")
+RETIRED_HREF = re.compile(r"/free-for-charity-donation-policy(/|\.html)?(?=$|[?#])")
 ATTR_RE = re.compile(r"""\b(?:href|src)\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
 
 
@@ -68,12 +76,17 @@ def findings(charity: dict, out: pathlib.Path) -> list[str]:
         return [f"no built HTML pages under {out}"]
     problems: list[str] = []
     for page, urls in pages.items():
-        if EXEMPT_PAGE.search(page):
-            continue
+        if RETIRED_PAGE.search(page):
+            problems.append(
+                f"{page}: ships the retired Free For Charity donation policy page "
+                "(the standard is one donation policy, the charity's own /donation-policy)"
+            )
         for u in urls:
             for target in FFC_TARGETS:
                 if target in u:
                     problems.append(f"{page}: links Free For Charity's own target {u}")
+            if RETIRED_HREF.search(u):
+                problems.append(f"{page}: links the retired Free For Charity donation policy {u}")
     every = [u for urls in pages.values() for u in urls]
     inputs, expect = charity["inputs"], charity["expect"]
     email = inputs["footer_email"].strip()

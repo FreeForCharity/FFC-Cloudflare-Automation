@@ -1,5 +1,5 @@
 {
-  "_comment": "Allowlist for workflow 234 (scripts/whmcs-charity-lane-site-fields.ps1): the ONLY WHMCS fields it may emit, each one a field the charity's application collects FOR PUBLICATION on its website. Output is printed to a public job log and issue, so a field not listed here is never emitted, whatever WHMCS holds. Per field: `key` (output name), `clientField` (Custom Client Field name, as in config/whmcs-client-field-populate-map.json values), `productFields` (product custom-field machine-names on pid 16/33/40, as in that map's keys; tried when the client field is empty or invalid), optional `productLabelPatterns` (case-insensitive regexes for the legacy plain-label pid 16/33 questions, tried after the machine-names), and `type` (the validator). The loader refuses any entry that names a personal or board field (see `deniedNamePatterns`), so adding one is a reviewed change that fails its own tests. Never add: the mailing address, the applicant's or any contact's name/email/phone, board/officer/team-member fields, testimonial attributions.",
+  "_comment": "Allowlist for workflow 234 (scripts/whmcs-charity-lane-site-fields.ps1): the ONLY WHMCS fields it may emit, each one a field the charity's application collects FOR PUBLICATION on its website. Output is printed to a public job log and issue, so a field not listed here is never emitted, whatever WHMCS holds. Per field: `key` (output name), `clientField` (Custom Client Field name, as in config/whmcs-client-field-populate-map.json values), `productFields` (product custom-field machine-names on pid 16/33/40, as in that map's keys; tried when the client field is empty or invalid), optional `productLabelPatterns` (case-insensitive regexes over the answer's display label, which is what GetClientsProducts actually returns for pid 16/33 questions; the label is HTML-decoded and loses a trailing \"(optional)\" first; tried after the machine-names), and `type` (the validator). The loader refuses any entry that names a personal or board field (see `deniedNamePatterns`), so adding one is a reviewed change that fails its own tests. Never add: the mailing address, the applicant's or any contact's name/email/phone, board/officer/team-member fields, testimonial attributions.",
   "version": 1,
   "productIds": [16, 33, 40],
   "excludedServiceStatuses": ["Cancelled", "Terminated", "Fraud"],
@@ -28,6 +28,7 @@
       "key": "publicEmail",
       "clientField": "Public email (website footer)",
       "productFields": ["public-email"],
+      "productLabelPatterns": ["^public e-?mail( address)? for your website footer$"],
       "type": "email",
       "maxLength": 254
     },
@@ -35,6 +36,7 @@
       "key": "publicPhone",
       "clientField": "Public phone (website footer)",
       "productFields": ["public-phone"],
+      "productLabelPatterns": ["^public phone( number)? for your website footer$"],
       "type": "phone",
       "maxLength": 30
     },
@@ -42,6 +44,7 @@
       "key": "footerLocation",
       "clientField": "Public city & state (website footer)",
       "productFields": ["footer-location"],
+      "productLabelPatterns": ["^city (&|and) state to show in your website footer$"],
       "type": "location",
       "maxLength": 80
     },
@@ -58,6 +61,7 @@
       "key": "tagline",
       "clientField": "Site tagline",
       "productFields": ["tagline"],
+      "productLabelPatterns": ["^site tagline\\b"],
       "type": "text",
       "maxLength": 150
     },
@@ -65,6 +69,7 @@
       "key": "siteDescription",
       "clientField": "Site description",
       "productFields": ["site-description"],
+      "productLabelPatterns": ["^site description\\b"],
       "type": "text",
       "maxLength": 500,
       "multiline": true
@@ -73,6 +78,7 @@
       "key": "siteShortDescription",
       "clientField": "Site short description",
       "productFields": ["site-short-description"],
+      "productLabelPatterns": ["^short description\\b"],
       "type": "text",
       "maxLength": 200
     },
@@ -80,6 +86,7 @@
       "key": "program1Title",
       "clientField": "Program 1 - title",
       "productFields": ["program-1-title"],
+      "productLabelPatterns": ["^program 1 [-\u2013] title$"],
       "type": "text",
       "maxLength": 100
     },
@@ -87,6 +94,7 @@
       "key": "program1Description",
       "clientField": "Program 1 - description",
       "productFields": ["program-1-desc"],
+      "productLabelPatterns": ["^program 1 [-\u2013] description$"],
       "type": "text",
       "maxLength": 1000,
       "multiline": true
@@ -95,6 +103,7 @@
       "key": "program2Title",
       "clientField": "Program 2 - title",
       "productFields": ["program-2-title"],
+      "productLabelPatterns": ["^program 2 [-\u2013] title$"],
       "type": "text",
       "maxLength": 100
     },
@@ -102,6 +111,7 @@
       "key": "program2Description",
       "clientField": "Program 2 - description",
       "productFields": ["program-2-desc"],
+      "productLabelPatterns": ["^program 2 [-\u2013] description$"],
       "type": "text",
       "maxLength": 1000,
       "multiline": true
@@ -110,6 +120,7 @@
       "key": "program3Title",
       "clientField": "Program 3 - title",
       "productFields": ["program-3-title"],
+      "productLabelPatterns": ["^program 3 [-\u2013] title$"],
       "type": "text",
       "maxLength": 100
     },
@@ -117,6 +128,7 @@
       "key": "program3Description",
       "clientField": "Program 3 - description",
       "productFields": ["program-3-desc"],
+      "productLabelPatterns": ["^program 3 [-\u2013] description$"],
       "type": "text",
       "maxLength": 1000,
       "multiline": true
@@ -125,12 +137,14 @@
       "key": "brandColor",
       "clientField": "Brand color (hex)",
       "productFields": ["brand-color"],
+      "productLabelPatterns": ["^brand colou?r\\b"],
       "type": "hexColor"
     },
     {
       "key": "logoUrl",
       "clientField": "Logo image URL",
       "productFields": ["logo-url"],
+      "productLabelPatterns": ["^logo image url$"],
       "type": "url",
       "maxLength": 500
     },
@@ -157,6 +171,7 @@
       "key": "instagramUrl",
       "clientField": "Instagram URL",
       "productFields": ["social-instagram", "instagram-url"],
+      "productLabelPatterns": ["^instagram url$"],
       "type": "url",
       "maxLength": 500,
       "hosts": ["instagram.com"]
@@ -165,6 +180,7 @@
       "key": "xUrl",
       "clientField": "X (Twitter) URL",
       "productFields": ["social-x", "x-url"],
+      "productLabelPatterns": ["^x \\(twitter\\) url$"],
       "type": "url",
       "maxLength": 500,
       "hosts": ["x.com", "twitter.com"]
@@ -173,6 +189,7 @@
       "key": "youtubeUrl",
       "clientField": "YouTube URL",
       "productFields": ["social-youtube", "youtube-url"],
+      "productLabelPatterns": ["^youtube url$"],
       "type": "url",
       "maxLength": 500,
       "hosts": ["youtube.com", "youtu.be"]
@@ -181,6 +198,7 @@
       "key": "donationUrl",
       "clientField": "Zeffy donation URL",
       "productFields": ["zeffy-donation-url"],
+      "productLabelPatterns": ["^zeffy donation form url$"],
       "type": "url",
       "maxLength": 500,
       "hosts": ["zeffy.com"]
@@ -189,6 +207,7 @@
       "key": "volunteerUrl",
       "clientField": "Idealist volunteer URL",
       "productFields": ["idealist-url"],
+      "productLabelPatterns": ["^idealist volunteer page url$"],
       "type": "url",
       "maxLength": 500,
       "hosts": ["idealist.org"]
@@ -197,12 +216,14 @@
       "key": "foundingYear",
       "clientField": "Year founded",
       "productFields": ["founding-year"],
+      "productLabelPatterns": ["^year founded$"],
       "type": "year"
     },
     {
       "key": "alternateNames",
       "clientField": "Also known as / abbreviations",
       "productFields": ["alternate-names"],
+      "productLabelPatterns": ["^also known as / abbreviations$"],
       "type": "nameList",
       "maxLength": 80,
       "maxItems": 5
@@ -227,8 +248,77 @@
       "key": "templateChoice",
       "clientField": "Website template choice",
       "productFields": ["template-choice"],
+      "productLabelPatterns": ["^which starting point fits your charity\\?$"],
       "type": "choice",
       "maxLength": 60
+    },
+    {
+      "key": "charityName",
+      "productFields": ["org-name"],
+      "productLabelPatterns": ["organi[sz]ation'?s legal name"],
+      "type": "text",
+      "maxLength": 120
+    },
+    {
+      "key": "maintainerGithub",
+      "productFields": ["technical-github"],
+      "type": "githubUser"
+    },
+    {
+      "key": "domainOwnership",
+      "productFields": ["domain-owned"],
+      "productLabelPatterns": ["^do you have a domain name", "^do you already own this domain\\?$"],
+      "type": "choice",
+      "maxLength": 60
+    },
+    {
+      "key": "domainRegistrar",
+      "productFields": ["domain-registrar"],
+      "productLabelPatterns": ["^where is your domain registered\\?"],
+      "type": "text",
+      "maxLength": 80
+    },
+    {
+      "key": "seoKeywords",
+      "productFields": ["seo-keywords"],
+      "productLabelPatterns": ["^seo keywords\\b"],
+      "type": "nameList",
+      "maxLength": 40,
+      "maxItems": 15,
+      "clientField": "SEO keywords"
+    },
+    {
+      "key": "leadershipLines",
+      "productFields": ["leadership-public"],
+      "productLabelPatterns": ["^other leaders to show on your website\\b"],
+      "type": "text",
+      "maxLength": 1000,
+      "multiline": true
+    },
+    {
+      "key": "currentWebsiteUrl",
+      "productFields": ["current-site-url"],
+      "productLabelPatterns": ["^current public website or page\\b"],
+      "type": "url",
+      "maxLength": 300
+    },
+    {
+      "key": "leader1Name",
+      "productFields": ["site-leader-1"],
+      "type": "text",
+      "maxLength": 100
+    },
+    {
+      "key": "leader2Name",
+      "productFields": ["site-leader-2"],
+      "type": "text",
+      "maxLength": 100
+    },
+    {
+      "key": "leader3Name",
+      "productFields": ["site-leader-3"],
+      "type": "text",
+      "maxLength": 100
     }
   ]
 }

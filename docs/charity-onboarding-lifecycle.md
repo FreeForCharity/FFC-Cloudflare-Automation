@@ -168,10 +168,11 @@ and the domain is new or newly in FFC Cloudflare. Validated end to end on 2026-1
    the template URL.
 5. **Bind and merge back to back.** Once `public/CNAME` is on `main`, the build uses an empty
    basePath, so the `freeforcharity.github.io/<repo>/` URL breaks until Pages has the custom domain.
-   Run **120** with `domains=<domain>` (never blank, which means the whole fleet list),
-   `skip_cname=true` (the PR carries the CNAME), `dry_run=false`, and DNS left on. On a zone 103
-   already set, its DNS step reports `Already correct` and changes nothing. It must still succeed,
-   because the bind + smoke job only runs after it. Then merge the PR.
+   Run **120** with `domains=<domain>` (never blank, which means every domain in
+   `config/ffc-ex-cutover-domains.json`), `skip_cname=true` (the PR carries the CNAME),
+   `dry_run=false`, and DNS left on. On a zone 103 already set, its DNS step reports
+   `Already correct` and changes nothing. It must still succeed, because the bind + smoke job only
+   runs after it. Then merge the PR.
    - If the PR merges first, that deploy's own smoke check targets the `github.io` URL and fails on
      the manifest icons ("resolves outside the deployment base"). That is a timing artefact, not a
      site bug. Re-run the deploy after 120 has bound the domain.

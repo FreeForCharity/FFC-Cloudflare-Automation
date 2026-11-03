@@ -76,8 +76,9 @@ file names — the two differ. Map display→file via
   `mode=execute-register` **and** a typed `confirm_domain` exact match.
 - **Existing domain:** **`102. Domain - Add to FFC Cloudflare + WHMCS Nameservers`**.
 - After registrar purchase, the zone auto-creates. Verify with a **public DNS lookup** (NS reads
-  `ns1/ns2.freeforcharity.org`), **not** `101`: 101's `m365` job has no skip input and always
-  queries the FFC tenant under `m365-prod`, and external charity domains never go through it.
+  `ns1.freeforcharity.org` and `ns2.freeforcharity.org`), **not** `101`: 101's `m365` job has no
+  skip input and always queries the FFC tenant under `m365-prod`, and external charity domains never
+  go through it.
 - `113 mode=check` also waits on `cloudflare-prod-write`. To spend one approval instead of two, go
   straight to `execute-register`; the script re-checks availability and enforces the cost cap.
 
@@ -129,8 +130,8 @@ Full runbook: **Phase 3b** in `docs/charity-onboarding-lifecycle.md`. The traps,
   for another domain left at its gate blocks yours.
 - `120` derives the repo as `FFC-EX-<domain>`. **Rename the repo first** if its name differs (a
   human step; the sandbox proxy can't rename repos or touch Pages settings). Dispatch with explicit
-  `domains=` (blank = whole fleet), `skip_cname=true` when the site PR carries `public/CNAME`, and
-  DNS left on (its success gates the bind + smoke job).
+  `domains=` (blank = every domain in `config/ffc-ex-cutover-domains.json`), `skip_cname=true` when
+  the site PR carries `public/CNAME`, and DNS left on (its success gates the bind + smoke job).
 - Merging the CNAME PR before 120 binds the domain breaks the `github.io/<repo>/` URL and fails that
   deploy's smoke check. Bind and merge back to back, then re-run the deploy if it went red.
 - **No workflow sets Enforce HTTPS.** A human ticks it in Settings → Pages after the cert issues.

@@ -1306,8 +1306,19 @@ def tee_into_head_truncation(cmd):
     """
     for stmt in _statements(cmd):
         bare = _strip_quoted(stmt)
-        # Split on real pipes only: not `||`, not `|&`.
-        stages = re.split(r"(?<!\|)\|(?![|&])", bare)
+        # Split on real pipes: `|` and `|&`, but never `||`.
+        #
+        # `|&` IS a pipe -- bash shorthand for `2>&1 |` -- so it truncates
+        # exactly like `|` does, and excluding it merged the stages either
+        # side into one. `cmd | tee f |& head -5` was therefore silent, and
+        # so was `cmd |& tee f |& head -5`. `cmd |& tee f | head -5` did
+        # warn, but only ACCIDENTALLY: the unsplit stage `cmd |& tee f`
+        # still contained the word `tee`, which the pattern used to match
+        # anywhere in a stage. Anchoring `tee` to the command position
+        # removed that accident and exposed all three as the same defect.
+        # Caught by the reviewer on #1634; `||` stays excluded because it is
+        # a control operator and pipes nothing.
+        stages = re.split(r"(?<!\|)\|&?(?!\|)", bare)
         if len(stages) < 2:
             continue
         for i, stage in enumerate(stages):

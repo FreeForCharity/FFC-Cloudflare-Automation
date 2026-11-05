@@ -1531,6 +1531,14 @@ RULES = [
         ("sudo tee in a later stage warns", "cmd | sudo tee /etc/f | head -3", WARN),
         ("an env-prefixed tee warns", "cmd | env FOO=1 tee f | head -3", WARN),
         ("an stdbuf-prefixed tee warns", "cmd | stdbuf -o0 tee f | head -3", WARN),
+        # `|&` is a real pipe (bash shorthand for `2>&1 |`), so it truncates
+        # exactly like `|`. The splitter used to exclude it, which merged the
+        # stages either side into one: the middle case below was silent, and
+        # the first warned only because the unsplit stage still contained the
+        # WORD `tee`. These three pin `|&` as a pipe in its own right.
+        ("|& into tee then | head warns", "cmd |& tee out.txt | head -5", WARN),
+        ("| into tee then |& head warns", "cmd | tee out.txt |& head -5", WARN),
+        ("|& on both sides warns", "cmd |& tee out.txt |& head -5", WARN),
         # Allows. `tail` reads its whole input, so it cannot cut tee short --
         # this is the discriminator that proves the rule is about head, not
         # about `tee` appearing in a pipeline at all.
@@ -1558,6 +1566,12 @@ RULES = [
         ("the unquoted word tee is silent", "echo pipe tee into head | head -2", SILENT),
         ("tee inside a filename is silent", "cat notes-tee.txt | head -5", SILENT),
         ("|| is not a pipe", "cmd | tee out.txt || head -1 fallback.txt", SILENT),
+        # ...and `||` stays excluded now that `|&` splits: it is a control
+        # operator and pipes nothing, so this is the discriminator proving
+        # the `&?` did not simply loosen the splitter.
+        ("|| after an a-target is still not a pipe",
+         "cmd | tee aos.txt || head -1 fallback.txt", SILENT),
+        ("tee -a with |& is still excluded", "cmd | tee -a out.txt |& head -5", SILENT),
         # The tier itself: a warned command must still be ALLOWED to run.
         ("warned pipeline is still allowed", "cmd | tee out.txt | head -25", ALLOW),
     ]),

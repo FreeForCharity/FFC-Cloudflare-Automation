@@ -1521,6 +1521,16 @@ RULES = [
         ("an a-prefixed path warns", "cmd | tee alpha/run.log | head -3", WARN),
         ("an option cluster before an a-target warns",
          "cmd | tee -i aos.txt | head -5", WARN),
+        # `tee` is anchored to the COMMAND position, so these pin the half of
+        # that change which ADDS coverage: an unanchored pattern carried no
+        # path alternative, so a `tee` invoked by path was missed outright --
+        # a real truncation, silently unflagged.
+        ("an absolute tee path warns", "cmd | /usr/bin/tee out.txt | head -5", WARN),
+        # ...and these pin the prefixes that anchoring would otherwise cost.
+        ("sudo tee in the first stage warns", "sudo tee FILE | head -3", WARN),
+        ("sudo tee in a later stage warns", "cmd | sudo tee /etc/f | head -3", WARN),
+        ("an env-prefixed tee warns", "cmd | env FOO=1 tee f | head -3", WARN),
+        ("an stdbuf-prefixed tee warns", "cmd | stdbuf -o0 tee f | head -3", WARN),
         # Allows. `tail` reads its whole input, so it cannot cut tee short --
         # this is the discriminator that proves the rule is about head, not
         # about `tee` appearing in a pipeline at all.
@@ -1538,6 +1548,15 @@ RULES = [
          "cmd > out.txt; head -25 out.txt", SILENT),
         ("the word tee inside a quoted string is silent",
          "echo 'pipe tee into head' | head -2", SILENT),
+        # The UNQUOTED spelling of the case above. `_strip_quoted` neutralises
+        # only the quoted form, so the suite's single guard against this class
+        # was testing the one spelling that was never at risk; the unquoted
+        # word -- `tee` as an ARGUMENT to another command -- warned although
+        # no `tee` runs at all. These are the regression pins for the
+        # command-position anchor.
+        ("tee as an argument to grep is silent", "cmd | grep tee | head -5", SILENT),
+        ("the unquoted word tee is silent", "echo pipe tee into head | head -2", SILENT),
+        ("tee inside a filename is silent", "cat notes-tee.txt | head -5", SILENT),
         ("|| is not a pipe", "cmd | tee out.txt || head -1 fallback.txt", SILENT),
         # The tier itself: a warned command must still be ALLOWED to run.
         ("warned pipeline is still allowed", "cmd | tee out.txt | head -25", ALLOW),

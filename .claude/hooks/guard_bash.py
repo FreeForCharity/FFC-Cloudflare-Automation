@@ -1251,7 +1251,23 @@ def echo_secret_violation(cmd):
 # `-?-?a`): with both dashes optional the lookahead also swallows every
 # TARGET beginning with `a`, so `tee aos.txt | head` -- the unquoted
 # spelling of the run-255 incident itself -- went silent.
-_TEE_RE = re.compile(r"(?:^|\s)tee\b(?!\s*--?a)")
+#
+# `tee` is anchored to the stage's COMMAND position, the same way `_HEAD_RE`
+# already is. Matching it anywhere in the stage was wrong in both directions
+# at once, which is why the asymmetry is worth a comment rather than a
+# one-liner: `cmd | grep tee | head -5` warned although no `tee` runs (the
+# word was an argument), while `cmd | /usr/bin/tee out.txt | head -5` was
+# MISSED, because the unanchored pattern carried no path alternative. The
+# false positive is only noise -- this rule warns -- but the false negative is
+# a real truncation going unflagged, which is the whole point of the rule.
+#
+# The `sudo|command|env|stdbuf` prefix is enumerated so anchoring does not
+# cost the true positives that need it: `sudo tee FILE | head`,
+# `env FOO=1 tee f | head` and `stdbuf -o0 tee f | head` all still warn.
+_TEE_RE = re.compile(
+    r"^\s*(?:(?:sudo|command|env|stdbuf)\s+(?:-\S+\s+|\w+=\S+\s+)*)?"
+    r"(?:\S*/)?tee\b(?!\s*--?a)"
+)
 _HEAD_RE = re.compile(r"^\s*(?:\S*/)?head\b")
 
 

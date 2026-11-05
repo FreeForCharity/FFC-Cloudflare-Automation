@@ -936,7 +936,7 @@ KNOWN_UNGUARDED: dict[str, tuple[str, ...]] = {
     # `domain`, not as a courtesy: `number` is NOT in CONSTRAINED_TYPES because
     # GitHub does not validate it — the dispatch form renders a free text box and
     # substitutes the value verbatim. `dry_run`, `github_pages_only`,
-    # `skip_m365` and `dmarc_mgmt_debug` remain interpolated and are NOT findings:
+    # `manage_m365` and `dmarc_mgmt_debug` remain interpolated and are NOT findings:
     # all four are `type: boolean`.
     "107-audit-compliance.yml": ("domain",),
     "109-dns-export-all-records.yml": ("domain",),

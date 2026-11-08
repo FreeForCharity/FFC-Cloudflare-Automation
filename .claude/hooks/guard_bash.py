@@ -1329,8 +1329,9 @@ def tee_into_head_truncation(cmd):
                 return (
                     "[#255] `tee FILE` piped into `head` leaves FILE TRUNCATED. `head` exits "
                     "after its line count, `tee` dies on EPIPE, and the file keeps only what "
-                    "it had flushed -- while the terminal shows exactly what you asked for "
-                    "and the exit status is 0.\n"
+                    "it had flushed -- while the terminal shows exactly what you asked for. "
+                    "The exit status never names the truncation: it is 0 by default, and 141 "
+                    "(SIGPIPE) under `set -o pipefail`, which reads as an unrelated failure.\n"
                     f"  pipeline: {stmt.strip()[:140]}\n"
                     "  Write the file first, then look at it:\n"
                     "    cmd > FILE; head -25 FILE        # and `wc -l < FILE` is now true\n"

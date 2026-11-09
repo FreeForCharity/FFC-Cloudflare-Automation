@@ -190,6 +190,13 @@ def measure(
         "files": files,
         "total_bytes": total,
         "estimated_tokens": est_tokens,
+        # Carried, not assumed. `render()` used to label the estimate with the
+        # module constant while `measure()` had computed it with whatever the
+        # caller passed, so a non-default `bytes_per_token` produced a report
+        # that contradicted its own arithmetic -- 86944 tokens under a label
+        # reading "4 B/token". A guard whose output misstates what it computed
+        # is the failure this module is written against.
+        "bytes_per_token": bytes_per_token,
         "budget_tokens": budget_tokens,
         "budget_bytes": budget_bytes,
         "share_of_budget": share,
@@ -224,7 +231,7 @@ def render(report: dict) -> str:
             "",
             "  total                                         %9d B" % report["total_bytes"],
             "  estimated tokens (%d B/token)                  %9d"
-            % (BYTES_PER_TOKEN, report["estimated_tokens"]),
+            % (report["bytes_per_token"], report["estimated_tokens"]),
             "  reviewer budget (MaxPromptTokens)             %9d tokens"
             % report["budget_tokens"],
             "  share of budget consumed before the PR is read  %5.1f%%"

@@ -200,6 +200,30 @@ def test_the_token_estimate_rounds_up_so_the_corpus_is_never_under_reported():
           exact["estimated_tokens"] == 1000, str(exact["estimated_tokens"]))
 
 
+def test_the_report_states_the_bytes_per_token_it_actually_used():
+    # `render()` used to label the estimate with the module constant while
+    # `measure()` computed it from the caller's argument, so a non-default
+    # `bytes_per_token` printed a figure under a label contradicting it.
+    # Raised in Copilot's review summary on #1706 (not filed as an issue) and
+    # confirmed reachable: 260,832 B at 3 B/token reported 86,944 tokens under
+    # a label reading "4 B/token".
+    report = M.measure(fixture({"AGENTS.md": b"a" * 3000}), bytes_per_token=3)
+    check("the value is carried in the report", report.get("bytes_per_token") == 3,
+          str(report.get("bytes_per_token")))
+    check("the estimate used it", report["estimated_tokens"] == 1000,
+          str(report["estimated_tokens"]))
+    check("the rendered label states it, not the constant",
+          "(3 B/token)" in M.render(report),
+          [l for l in M.render(report).splitlines() if "B/token" in l])
+    # The default must still read 4, so carrying the value cannot be faked by
+    # hardcoding the other number.
+    default = M.measure(fixture({"AGENTS.md": b"a" * 3000}))
+    check("the default is unchanged", default["bytes_per_token"] == M.BYTES_PER_TOKEN,
+          str(default["bytes_per_token"]))
+    check("the default label states 4", "(4 B/token)" in M.render(default),
+          [l for l in M.render(default).splitlines() if "B/token" in l])
+
+
 def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
     eps = 1e-6
     check("below advisory is OK", M.verdict(M.ADVISORY_SHARE - eps) == "OK")

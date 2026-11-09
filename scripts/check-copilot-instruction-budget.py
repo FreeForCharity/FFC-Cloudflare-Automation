@@ -172,7 +172,14 @@ def measure(
             total += size
         files.append({"path": name, "present": present, "bytes": size})
 
-    est_tokens = total // bytes_per_token
+    # Round UP. This guard's contract is to never under-report the corpus, and
+    # flooring silently discards up to `bytes_per_token - 1` bytes of it. The
+    # effect is under one token, so it cannot change a verdict while both
+    # thresholds land on exact token multiples (0.60 and 0.70 of 110000 are
+    # 66000 and 77000) and the comparison is `>=` -- but a threshold that is
+    # not such a multiple, or a different `bytes_per_token`, makes it reachable,
+    # and erring high costs nothing here.
+    est_tokens = -(-total // bytes_per_token)
     budget_bytes = budget_tokens * bytes_per_token
     share = est_tokens / budget_tokens if budget_tokens else 0.0
     for entry in files:

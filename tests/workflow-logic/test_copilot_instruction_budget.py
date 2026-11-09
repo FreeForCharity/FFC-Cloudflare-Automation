@@ -182,6 +182,24 @@ def test_the_share_follows_the_injected_budget_not_a_hardcoded_number():
     check("budget echoed", narrow["budget_tokens"] == 2000, str(narrow["budget_tokens"]))
 
 
+def test_the_token_estimate_rounds_up_so_the_corpus_is_never_under_reported():
+    # 4001 B is 1000.25 tokens. Flooring reports 1000 and drops the remainder,
+    # which is the one direction this guard must not err in. Found by Copilot on
+    # #1706 (discussion_r4512782481) and marked high severity; the under-report
+    # is below one token, so it could not flip a verdict at thresholds that are
+    # exact token multiples, but the stated contract said conservative and the
+    # arithmetic said otherwise.
+    over = M.measure(fixture({"AGENTS.md": b"a" * 4001}), budget_tokens=10000)
+    check("rounds up", over["estimated_tokens"] == 1001, str(over["estimated_tokens"]))
+    check("the share follows the rounded-up count",
+          abs(over["share_of_budget"] - 0.1001) < 1e-9, str(over["share_of_budget"]))
+    # Discrimination against the plausible wrong fix, `total // bpt + 1`: an
+    # exact multiple must not be inflated.
+    exact = M.measure(fixture({"AGENTS.md": b"a" * 4000}), budget_tokens=10000)
+    check("an exact multiple is not inflated",
+          exact["estimated_tokens"] == 1000, str(exact["estimated_tokens"]))
+
+
 def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
     eps = 1e-6
     check("below advisory is OK", M.verdict(M.ADVISORY_SHARE - eps) == "OK")

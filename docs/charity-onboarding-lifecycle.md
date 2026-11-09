@@ -70,6 +70,11 @@ workflow. The relevant intake templates:
   the `[CF+M365]` workflow and does not query WHMCS). To check for an existing **WHMCS**
   client/domain, run **104. Domain - Export Inventory** (which includes WHMCS) or a WHMCS export
   (30).
+- **⚠️ Do not run 101 for an external charity's domain.** Its `m365` job has no skip input and
+  always runs against the **FFC tenant** under the `m365-prod` gate, and external domains do not go
+  through FFC's M365. For a charity domain, check the zone with a public DNS lookup instead: after
+  purchase the nameservers read `ns1.freeforcharity.org` / `ns2.freeforcharity.org`. If a 101 run is
+  already waiting, cancel it or reject its `m365-prod` gate.
 - **Why:** establishes the starting state so you don't re-create a zone, double-onboard, or process
   the wrong charity's application.
 - **Done when:** you have the confirmed WHMCS client id for the domain, and you know whether the
@@ -138,6 +143,49 @@ Pick the path that matches the domain's origin:
   [fidelity audit](ffc-ex-clone-fidelity-audit.md) before cutover.
 - **Done when:** the repo exists, Pages serves the apex over HTTPS, and the maintainer has access.
 
+## Phase 3b — Custom-domain cutover for an existing site ⏸ waits for approval
+
+Use this when the `FFC-EX-<repo>` site is already live on its default `freeforcharity.github.io` URL
+and the domain is new or newly in FFC Cloudflare. Validated end to end on 2026-11-03 for
+`shawspousesclub.org`. Buy the domain **after** the site works on the default URL.
+
+1. **Register** with **113**. Even `mode=check` waits on `cloudflare-prod-write`, so to avoid a
+   second approval go straight to `mode=execute-register` with `confirm_domain`, `auto_renew=true`
+   and the default `max_registration_cost` cap. The script still checks availability and refuses
+   anything over the cap before it buys. The zone appears with FFC's nameservers within a minute.
+2. **Point DNS** with **103**, `github_pages_only=true`, `skip_m365=true`, dry run first. A clean
+   preview for a fresh zone is exactly 9 creates (4 A, 4 AAAA, `www` CNAME to
+   `freeforcharity.github.io`, all DNS-only). Then re-run with `dry_run=false`.
+   - **103 runs one at a time.** A forgotten dry run for another domain sitting at its gate blocks
+     every later 103 run (`status: pending`). Look for an older waiting 103 run before assuming the
+     new one is stuck.
+3. **Make the repo name match the domain.** **120** derives the repo as `FFC-EX-<domain>`. If the
+   site lives in a repo named for another domain (e.g. `FFC-EX-shawspousesclub.com` serving `.org`),
+   rename it in Settings → General first. GitHub redirects the old name. The sandbox proxy cannot
+   rename repos or touch Pages settings, so this is a human step.
+4. **Open the site PR**: add `public/CNAME`, set `siteConfig.url` to `https://<domain>`, and update
+   both `security.txt` copies and `public/site-profile.json`. `check:drift` flags any copy still on
+   the template URL.
+5. **Bind and merge back to back.** Once `public/CNAME` is on `main`, the build uses an empty
+   basePath, so the `freeforcharity.github.io/<repo>/` URL breaks until Pages has the custom domain.
+   Run **120** with `domains=<domain>` (never blank, which means every domain in
+   `config/ffc-ex-cutover-domains.json`), `skip_cname=true` (the PR carries the CNAME),
+   `dry_run=false`, and DNS left on. On a zone 103 already set, its DNS step reports
+   `Already correct` and changes nothing. It must still succeed, because the bind + smoke job only
+   runs after it. Then merge the PR.
+   - If the PR merges first, that deploy's own smoke check targets the `github.io` URL and fails on
+     the manifest icons ("resolves outside the deployment base"). That is a timing artefact, not a
+     site bug. Re-run the deploy after 120 has bound the domain.
+6. **Enforce HTTPS** in the repo's Settings → Pages once the certificate is issued (usually minutes
+   after the bind). No workflow sets `https_enforced`, and until it is on, `http://` serves 200
+   instead of redirecting.
+7. **Verify**: **121** with `domains=<domain>` and `marker=<charity name>`. Then check that
+   `http://` and `www` both 301 to `https://<domain>/`, that every sitemap URL returns 200, and that
+   canonical / og:url are on the domain. Finally, a green deploy smoke check on `main`.
+
+- **Done when:** the deploy smoke check on `main` is green against the custom domain, 121 passes,
+  and Settings → Pages shows "DNS check successful" with Enforce HTTPS ticked.
+
 ## Phase 4 — WHMCS account + onboarding order ⏸ waits for approval
 
 - **Run (dry-run first):** **204. WHMCS - Charity Onboard** — creates one WHMCS client, adds the
@@ -181,7 +229,7 @@ Pick the path that matches the domain's origin:
   Phase 2 enforce-standard to true-up the records. Don't re-run 02/09 against an existing zone.
 - **Email domain verification pending** (Phase 2): the charity's own Microsoft 365 or Google
   Workspace admin console shows the domain unverified until the records FFC added with **105**
-  propagate. Check the records with **101. Domain - Status (All Sources)** (or a public DNS lookup)
+  propagate. Check the records with a public DNS lookup (not **101**, which queries the FFC tenant)
   and have the charity re-run verification in _their_ admin console; they enable DKIM there once the
   domain verifies. Do **not** use **301**/**304** here — those act on the FFC tenant, which is for
   FFC's internal projects only.
@@ -209,8 +257,8 @@ Pick the path that matches the domain's origin:
 
 Bringing `examplecharity.org` online from scratch:
 
-1. **101. Domain - Status** confirms no Cloudflare zone or M365 presence; **04. Export Inventory**
-   confirms no WHMCS client. Clear to onboard.
+1. A public DNS lookup confirms no existing zone for the domain (not **101**, whose `m365` job
+   queries the FFC tenant); **104. Export Inventory** confirms no WHMCS client. Clear to onboard.
 2. File **template 01** to buy the domain → **12. Registrar Register** with `mode=execute-register`
    and `confirm_domain=examplecharity.org` → ⏸ approve `cloudflare-prod-write` → zone created.
 3. **03. Enforce Standard** with `skip_m365=true`, dry-run → review the planned GitHub Pages records

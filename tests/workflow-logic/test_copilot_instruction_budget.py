@@ -53,10 +53,12 @@ Run: python3 tests/workflow-logic/test_copilot_instruction_budget.py
 from __future__ import annotations
 
 import contextlib
+import atexit
 import importlib.util
 import io
 import json
 import pathlib
+import shutil
 import sys
 import tempfile
 
@@ -81,9 +83,30 @@ def check(name, cond, detail=""):
         _CURRENT.append("%s%s" % (name, " -- " + detail if detail else ""))
 
 
+# Fixture roots, removed at interpreter exit. 19 of them leaked per run before
+# this, measured -- small, but this suite runs 148 modules and the repo already
+# tracks a module that litters (#1023).
+#
+# Deliberately NOT `TemporaryDirectory`: CLAUDE.md records
+# `PermissionError [WinError 32]` / `[WinError 5]` tearing one down on the
+# Windows host, where a raising teardown turns a passing module red. Only
+# `ignore_errors=True` cannot raise, so a directory another process holds is
+# left to the OS rather than failing the suite.
+_FIXTURES: list[pathlib.Path] = []
+
+
+def _cleanup_fixtures():
+    while _FIXTURES:
+        shutil.rmtree(_FIXTURES.pop(), ignore_errors=True)
+
+
+atexit.register(_cleanup_fixtures)
+
+
 def fixture(files: dict) -> pathlib.Path:
     """Write a throwaway checkout. Values are bytes, written verbatim."""
     tmp = pathlib.Path(tempfile.mkdtemp())
+    _FIXTURES.append(tmp)
     for rel, blob in files.items():
         path = tmp / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +247,23 @@ def test_the_report_states_the_bytes_per_token_it_actually_used():
           [l for l in M.render(default).splitlines() if "B/token" in l])
 
 
+def test_every_fixture_root_is_registered_for_cleanup_and_cleanup_cannot_raise():
+    # Raised in Copilot's review summary on #1706, not filed. Measured at 19
+    # leaked directories per run before the registry existed.
+    root = fixture({"AGENTS.md": b"a" * 8})
+    check("registered for cleanup", root in _FIXTURES, str(root))
+    # Delete it out from under the cleanup: on the Windows host a directory
+    # another process holds cannot be unlinked (CLAUDE.md's WinError 32/5
+    # note), and a teardown that raises would turn this green module red.
+    shutil.rmtree(root, ignore_errors=True)
+    try:
+        _cleanup_fixtures()
+    except Exception as exc:  # noqa: BLE001 -- the whole point of the check
+        check("cleanup cannot raise", False, "%s: %s" % (type(exc).__name__, exc))
+        return
+    check("the registry is drained", _FIXTURES == [], str(_FIXTURES))
+
+
 def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
     eps = 1e-6
     check("below advisory is OK", M.verdict(M.ADVISORY_SHARE - eps) == "OK")
@@ -307,7 +347,13 @@ def _cli(argv):
 
 
 def test_a_root_that_does_not_exist_is_an_error_not_an_empty_corpus():
-    missing = pathlib.Path(tempfile.mkdtemp()) / "no-such-checkout"
+    # Registered like a `fixture()` root: this is the one site that needs a
+    # real parent directory holding a path that does not exist, so it cannot go
+    # through the helper, and it was the single directory still leaking after
+    # the registry landed.
+    parent = pathlib.Path(tempfile.mkdtemp())
+    _FIXTURES.append(parent)
+    missing = parent / "no-such-checkout"
     rc, out, err = _cli(["--root", str(missing)])
     check("exits non-zero", rc != 0, "rc=%d" % rc)
     check("does not render a verdict", "VERDICT" not in out, out[:200])

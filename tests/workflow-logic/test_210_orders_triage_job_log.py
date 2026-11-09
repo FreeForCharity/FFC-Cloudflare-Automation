@@ -160,6 +160,37 @@ def test_the_job_log_emission_block_is_still_present():
     )
 
 
+# Variables a job-log line may interpolate: the loop record (whose properties are
+# checked against LOG_SAFE above) and the collection it is counted from. Any other
+# variable is a local the property scan cannot see through -- `$n = $o.name`
+# followed by `name=$n` carries the name with no `$o.name` on the emission line.
+LOG_VARS = frozenset({"o", "pending"})
+
+# A variable reference: `$n`, `$o`, `$pending`. `$(`, `$env:` style scoped names
+# and `$_` are not bare locals; `$(` never matches because `(` is not a name char.
+VAR_REF = re.compile(r"\$([A-Za-z_]\w*)(?!:)")
+
+
+def vars_in_log(pwsh_body: str) -> set[str]:
+    """Variables interpolated into job-log emissions, lowercased."""
+    found: set[str] = set()
+    for line in log_emission_lines(pwsh_body):
+        found.update(v.lower() for v in VAR_REF.findall(line))
+    return found
+
+
+def test_the_job_log_interpolates_no_local_variable():
+    # The property allowlist only sees `$var.prop`. A local holding a record
+    # field (`$n = $o.name`, then `name=$n`) would pass it, so the variables a
+    # log line may touch are allowlisted too.
+    unexpected = sorted(vars_in_log(body()) - LOG_VARS)
+    assert not unexpected, (
+        f"{WORKFLOW} job-log line interpolates variable(s) {unexpected}. Only "
+        f"{sorted(LOG_VARS)} may appear, so every field it carries is checked "
+        "against LOG_SAFE."
+    )
+
+
 def test_no_pii_column_reaches_the_job_log():
     leaked = sorted(props_in_log(body()) & LOG_FORBIDDEN)
     assert not leaked, (
@@ -254,6 +285,15 @@ def test_the_scan_catches_a_leak_it_was_not_shown():
         assert props_in_log(line) & LOG_FORBIDDEN, (
             f"the scan did not report the {label!r} leak: {line}"
         )
+    # A field laundered through a local is invisible to the property scan, so
+    # the variable allowlist has to catch it instead.
+    laundered = '$n = $o.name\nWrite-Host "PENDING order=$($o.id) name=$n"'
+    assert vars_in_log(laundered) - LOG_VARS, (
+        f"the scan did not report a name laundered through a local: {laundered!r}"
+    )
+    assert not vars_in_log(body()) - LOG_VARS, (
+        "control case failed: the shipped body is reported as using a local"
+    )
     # ...and must not report the text that actually ships.
     assert not props_in_log(body()) & LOG_FORBIDDEN, (
         "control case failed: the shipped body is reported as leaking"

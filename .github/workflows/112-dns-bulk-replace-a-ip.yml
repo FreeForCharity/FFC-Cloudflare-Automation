@@ -53,6 +53,23 @@ jobs:
         run: |
           set -euo pipefail
 
+          # The notice below is a WORKFLOW COMMAND, and workflow commands are line-based:
+          # a raw newline in its text ends the `::notice` line, and anything after it that
+          # starts with `::` is parsed by the runner as a further command. Both IPs are
+          # the dispatcher's, `workflow_dispatch` inputs can carry a newline when the run
+          # is created through the API, and nothing here validates their shape — so the
+          # approver's own annotation is the injection surface. The value stays in the
+          # message, because an approver needs to see the addresses, so the remedy is
+          # escaping rather than omission. Same helper and same reason as
+          # `704-website-analytics-wire.yml`; `%` is substituted FIRST, or the `%0D`/`%0A`
+          # the later replacements introduce would themselves be re-escaped.
+          esc() {
+            local s=${1//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
+
           # Both IPs are `required: true`, so empty here does not mean "left blank" — it
           # means this `env:` mapping was deleted or misspelled. The plan's content is
           # which records change and to what, so refuse rather than print a plan with
@@ -112,8 +129,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # The same verdict as an annotation, so it also shows at the top of the run page,
-          # beside the "Review deployments" button.
-          echo "::notice title=Approving cloudflare-prod-write will::$notice"
+          # beside the "Review deployments" button. Escaped: see `esc()` above — this is
+          # the one line here where dispatcher text meets a workflow command.
+          echo "::notice title=Approving cloudflare-prod-write will::$(esc "$notice")"
 
   bulk-replace:
     runs-on: windows-latest

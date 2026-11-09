@@ -441,12 +441,15 @@ the run pauses for approval, even if the action itself only reads.
    days old.
 
    Both now run an **ungated `preflight` job** that writes the full plan into the run summary before
-   the gate — for 119, every `staging.<domain>` zone by name, the resolved CNAME target, and the
-   fact that the write is **delete-then-create, not an upsert**; for 112, the `old_ip → new_ip` pair
-   and the whole-estate zone scope. The summary is the disclosure, and a **refused** preflight
-   deliberately prints no plan, so a summary with no plan in it means the run never reached the
-   gate. If you are looking at a 112/119 approval and the summary has no plan, do not approve it —
-   find out why the preflight refused.
+   the gate — for 119, every `staging.<domain>` zone by name, the CNAME target, and the fact that
+   the write is **delete-then-create, not an upsert**; for 112, the `old_ip → new_ip` pair and the
+   whole-estate zone scope. The target line is the explicit value when `target` is given and
+   otherwise says the gated job resolves it (`Get-GhPagesWwwTarget`, #778): a blank `target` is the
+   uncommon path, and the preflight deliberately does not guess a value it would have to compute the
+   way the write path does. So do not read that row as always naming a concrete host. The summary is
+   the disclosure, and a **refused** preflight deliberately prints no plan, so a summary with no
+   plan in it means the run never reached the gate. If you are looking at a 112/119 approval and the
+   summary has no plan, do not approve it — find out why the preflight refused.
 
 ## What is _not_ protected
 

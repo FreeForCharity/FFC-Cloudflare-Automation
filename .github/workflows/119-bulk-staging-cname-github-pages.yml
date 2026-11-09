@@ -64,6 +64,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          # The notice at the end of this step is a WORKFLOW COMMAND, and workflow commands
+          # are line-based: a raw newline in its text ends the `::notice` line, and anything
+          # after it beginning with `::` is parsed by the runner as a further command. The
+          # notice carries `$domains`, which is the dispatcher's `domains` input when one is
+          # given, and a `workflow_dispatch` input can carry a newline when the run is
+          # created through the API. So the approver's own annotation is the injection
+          # surface, in the one job whose whole purpose is to tell that approver the truth.
+          # The value stays in the message — an approver needs to see which zones — so the
+          # remedy is escaping rather than omission. Same helper and same reason as
+          # `704-website-analytics-wire.yml`; `%` is substituted FIRST, or the `%0D`/`%0A`
+          # the later replacements introduce would themselves be re-escaped.
+          esc() {
+            local s=${1//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
+
           # Second copy of the gated job's `$defaultDomains` list, which is the price of
           # naming the zones BEFORE the gate: the authoritative list lives in a pwsh body
           # that only runs after approval, and printing the word "default" instead of the
@@ -185,8 +203,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # The same verdict as an annotation, so it also shows at the top of the run page,
-          # beside the "Review deployments" button.
-          echo "::notice title=Approving cloudflare-prod-write will::$notice"
+          # beside the "Review deployments" button. Escaped: see `esc()` above — this is
+          # the one line here where dispatcher text meets a workflow command.
+          echo "::notice title=Approving cloudflare-prod-write will::$(esc "$notice")"
 
   bulk-staging-cname:
     runs-on: windows-latest

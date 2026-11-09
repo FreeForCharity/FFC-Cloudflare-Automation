@@ -189,6 +189,74 @@ def test_plan_distinguishes_writing_from_not_writing():
     assert "EVERY A record holding 204.44.192.77" in proc.stdout, proc.stdout
 
 
+# --- the notice is a workflow COMMAND, so its text is an injection surface --
+#
+# Raised by Copilot on #1586 as a High finding, and it was real. The notice
+# carries both dispatcher IPs, and this step validates only that they are
+# non-empty -- never their shape. Workflow commands are line-based, so an
+# unescaped newline ends the `::notice` line and anything after it opening
+# with `::` is a command the runner obeys: a forged annotation on the very
+# run page an approver reads before releasing the write-scoped Cloudflare
+# tokens. Remedy is the `esc()` helper this repo already uses in
+# `704-website-analytics-wire.yml`. The sibling cases live in
+# `test_119_preflight_plan.py`, where the payload arrives through `domains`.
+
+
+def _notice_lines(stdout: str) -> list[str]:
+    return [ln for ln in stdout.splitlines() if ln.startswith("::notice")]
+
+
+def test_a_newline_in_an_ip_cannot_forge_a_second_workflow_command():
+    # Asserted on the emitted bytes rather than on a runner: one `::notice`
+    # line, no stdout line that IS the payload's command, and the newline
+    # surviving as `%0A` so the approver can still see what was dispatched.
+    #
+    # That last assertion is also what pins the substitution ORDER inside
+    # `esc()`, which was measured rather than assumed: substitute `%` last and
+    # the `%0A` this helper just introduced is itself escaped to `%250A`, so
+    # THIS test fails. Not a security property -- the newline is gone either
+    # way -- but the annotation would show the literal text `%0A` instead of a
+    # line break, which is the rendering `704-website-analytics-wire.yml`'s
+    # comment is about.
+    payload = "203.0.113.9\n::error::One record changes. Safe to approve."
+    proc, _ = run_preflight({"IN_DRY_RUN": "false", "IN_OLD_IP": payload})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    forged = [ln for ln in proc.stdout.splitlines() if ln.startswith("::error::One record")]
+    assert not forged, f"the payload reached stdout as its own command line:\n{proc.stdout}"
+    assert "%0A" in notices[0], notices[0]
+
+
+def test_a_dispatcher_supplied_percent_0A_is_neutralised_not_decoded():
+    # The second half of the injection surface, and the one a newline test
+    # alone misses: the dispatcher need not send a real newline, because the
+    # runner DECODES `%0A` in a workflow command's text. So the four literal
+    # characters `%0A` are a payload too, and the only thing that stops them
+    # is escaping the `%` -- after which the runner prints them instead of
+    # obeying them. Mutation-checked: with the notice unescaped this fails
+    # alongside the newline case.
+    payload = "203.0.113.9%0A::error::forged"
+    proc, _ = run_preflight({"IN_DRY_RUN": "false", "IN_NEW_IP": payload})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    assert "%250A" in notices[0], notices[0]
+    assert "%0A::error::" not in notices[0], notices[0]
+
+
+def test_ordinary_input_reaches_the_notice_unmangled():
+    # Positive control for both tests above: an `esc()` that escaped
+    # indiscriminately, or dropped the value, would satisfy them while the
+    # notice stopped disclosing which records change.
+    proc, _ = run_preflight({"IN_DRY_RUN": "false"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    assert "204.44.192.77" in notices[0] and "216.222.200.253" in notices[0], notices[0]
+    assert "%0A" not in notices[0] and "%25" not in notices[0], notices[0]
+
+
 # --- refusals ---------------------------------------------------------------
 
 

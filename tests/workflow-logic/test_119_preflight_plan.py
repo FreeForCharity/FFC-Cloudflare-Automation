@@ -287,6 +287,74 @@ def test_the_notice_names_the_zone_count_on_a_writing_run():
     assert "3 zone(s)" in proc.stdout, proc.stdout
 
 
+# --- the notice is a workflow COMMAND, so its text is an injection surface --
+#
+# Raised by Copilot on #1586 as two High findings, one per workflow, and both
+# were real. The notice carries `$domains` -- the dispatcher's input when one
+# is given -- and nothing in this step validates its shape, only that the
+# resolved list is non-empty. Workflow commands are line-based, so an
+# unescaped newline ends the `::notice` line and anything after it opening
+# with `::` is a command the runner obeys. The consequence is specific and
+# bad: a forged annotation on the very run page an approver reads to decide a
+# `cloudflare-prod-write` gate, emitted by the job whose only purpose is to
+# tell that approver the truth. Remedy is the `esc()` helper this repo already
+# uses in `704-website-analytics-wire.yml`, not dropping the value.
+
+
+def _notice_lines(stdout: str) -> list[str]:
+    return [ln for ln in stdout.splitlines() if ln.startswith("::notice")]
+
+
+def test_a_newline_in_domains_cannot_forge_a_second_workflow_command():
+    # Asserted on the emitted bytes, not on a runner: exactly one `::notice`
+    # line, no line of stdout that IS the payload's command, and the newline
+    # surviving as the literal escape `%0A` -- an approver must still be able
+    # to see what was dispatched, so escaping is the fix and omission is not.
+    #
+    # That last assertion is also what pins the substitution ORDER inside
+    # `esc()`, measured rather than assumed: substitute `%` last and the `%0A`
+    # the helper just introduced is itself escaped to `%250A`, failing THIS
+    # test. The newline is neutralised either way, so the order is a rendering
+    # property (a line break versus the literal text `%0A`), not a security
+    # one -- which is what `704-website-analytics-wire.yml`'s comment means.
+    payload = "a.org\n::error::Scope is one zone. Safe to approve."
+    proc, _ = run_preflight({"IN_DRY_RUN": "false", "IN_DOMAINS": payload})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    forged = [ln for ln in proc.stdout.splitlines() if ln.startswith("::error::Scope is")]
+    assert not forged, f"the payload reached stdout as its own command line:\n{proc.stdout}"
+    assert "%0A" in notices[0], notices[0]
+
+
+def test_a_dispatcher_supplied_percent_0A_is_neutralised_not_decoded():
+    # The half of the surface a newline test alone misses. The dispatcher does
+    # not need to send a real newline: the runner DECODES `%0A` inside a
+    # workflow command's text, so the four literal characters are a payload in
+    # their own right, and escaping the `%` is the only thing that makes the
+    # runner print them rather than obey them. Mutation-checked: with the
+    # notice unescaped this fails beside the newline case.
+    payload = "a.org%0A::error::forged"
+    proc, _ = run_preflight({"IN_DRY_RUN": "false", "IN_DOMAINS": payload})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    assert "%250A" in notices[0], notices[0]
+    assert "%0A::error::" not in notices[0], notices[0]
+
+
+def test_ordinary_input_reaches_the_notice_unmangled():
+    # The positive control for both tests above. Without it an `esc()` that
+    # escaped indiscriminately -- or one that dropped the value entirely --
+    # would satisfy them, and the notice would stop disclosing the scope.
+    proc, _ = run_preflight({"IN_DRY_RUN": "false", "IN_DOMAINS": "a.org,b.org"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    notices = _notice_lines(proc.stdout)
+    assert len(notices) == 1, proc.stdout
+    assert "a.org,b.org" in notices[0], notices[0]
+    assert "%0A" not in notices[0] and "%25" not in notices[0], notices[0]
+
+
 # --- refusals: a refused preflight prints no plan ---------------------------
 
 

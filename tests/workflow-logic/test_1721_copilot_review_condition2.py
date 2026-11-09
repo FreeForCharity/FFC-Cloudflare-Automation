@@ -42,6 +42,9 @@ _spec.loader.exec_module(_mod)
 classify = _mod.classify
 body_is_real_review = _mod.body_is_real_review
 body_is_tier_degraded = _mod.body_is_tier_degraded
+body_is_refusal = _mod.body_is_refusal
+select_check_run = _mod.select_check_run
+review_commit_is_acceptable = _mod.review_commit_is_acceptable
 
 SATISFIED = _mod.SATISFIED
 WAIT = _mod.WAIT
@@ -271,6 +274,152 @@ def test_AGENTS_md_no_longer_requires_the_marker_to_be_FIRST():
     assert "tier notice, not a refusal" in agents, (
         "AGENTS.md does not say the tier banner is a notice, not a refusal"
     )
+
+
+# --------------------------------------------------------------------------
+# Findings Copilot raised on #1725 itself. Each reproduced before it was fixed.
+# --------------------------------------------------------------------------
+
+
+def test_an_in_flight_check_run_beats_an_older_completed_one():
+    """A queued run has `started_at: null`, which sorts to the FRONT.
+
+    So `sorted(...)[-1]` discarded the newest run and reported the older
+    `completed/success` beside it -- `SATISFIED` while a review was still
+    running, the one verdict that lets a PR be enqueued too early. Reproduced
+    on #1725 before the fix.
+    """
+    runs = [
+        {
+            "name": "copilot-pull-request-reviewer",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-09T12:00:00Z",
+            "completed_at": "2026-11-09T12:05:00Z",
+        },
+        {
+            "name": "copilot-pull-request-reviewer",
+            "status": "queued",
+            "conclusion": None,
+            "started_at": None,
+            "completed_at": None,
+        },
+    ]
+    chosen = select_check_run(runs)
+    assert chosen["status"] == "queued", (
+        "an in-flight run must win; picking the older completed run reports "
+        "SATISFIED while the reviewer is still working"
+    )
+    verdict, _ = classify(
+        chosen["status"], chosen.get("conclusion"), TIER_DEGRADED_APPROVAL
+    )
+    assert verdict == WAIT, f"expected WAIT while a run is queued, got {verdict}"
+
+
+def test_the_newest_completed_check_run_is_chosen_when_none_are_pending():
+    """With no run in flight, the verdict comes from the newest completed one."""
+    runs = [
+        {
+            "name": "copilot-pull-request-reviewer",
+            "status": "completed",
+            "conclusion": "failure",
+            "started_at": "2026-11-09T10:00:00Z",
+            "completed_at": "2026-11-09T10:01:00Z",
+        },
+        {
+            "name": "copilot-pull-request-reviewer",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-09T12:00:00Z",
+            "completed_at": "2026-11-09T12:05:00Z",
+        },
+    ]
+    assert select_check_run(runs)["conclusion"] == "success"
+    assert select_check_run([]) is None
+    assert select_check_run([{"name": "Validate Repository", "status": "completed"}]) is None
+
+
+def test_a_review_on_an_earlier_commit_counts_when_only_merges_followed():
+    """AGENTS.md condition 2's second clause, which an exact head match drops.
+
+    `update-branch` adds a merge commit and keeps a perfectly good review, so
+    requiring `commit_id == head` reports NO_REVIEW on a PR whose review is
+    valid per the documented rule. Copilot raised this on #1725.
+    """
+    commits = [
+        {"sha": "aaa", "parents": [{"sha": "root"}]},
+        {"sha": "bbb", "parents": [{"sha": "aaa"}, {"sha": "main1"}]},  # merge of main
+    ]
+    in_base = {"main1", "main2"}
+    ok, why = review_commit_is_acceptable(
+        "aaa", "bbb", commits, lambda s: s in in_base
+    )
+    assert ok, f"a review on `aaa` must survive a merge of the base branch: {why}"
+    assert "merges of the base branch" in why, why
+
+
+def test_a_review_on_an_earlier_commit_does_NOT_count_when_code_followed():
+    """The clause is narrow: a real code commit after the review voids it."""
+    commits = [
+        {"sha": "aaa", "parents": [{"sha": "root"}]},
+        {"sha": "ccc", "parents": [{"sha": "aaa"}]},  # ordinary code commit
+    ]
+    ok, why = review_commit_is_acceptable("aaa", "ccc", commits, lambda s: False)
+    assert not ok, "a code commit after the review must void it"
+    assert "not a merge commit" in why, why
+
+
+def test_a_merge_of_some_OTHER_branch_does_not_preserve_a_review():
+    """A merge commit is not automatically a merge of `main`.
+
+    Merging a third branch in brings code the review never saw, so crediting
+    any merge commit would pass unreviewed code as reviewed.
+    """
+    commits = [
+        {"sha": "aaa", "parents": [{"sha": "root"}]},
+        {"sha": "bbb", "parents": [{"sha": "aaa"}, {"sha": "feature-x"}]},
+    ]
+    ok, why = review_commit_is_acceptable(
+        "aaa", "bbb", commits, lambda s: s == "main1"
+    )
+    assert not ok, "a merge of an unrelated branch must not preserve the review"
+    assert "not of the base branch" in why, why
+    # And an unknown reviewed commit is never credited.
+    ok, why = review_commit_is_acceptable("zzz", "bbb", commits, lambda s: True)
+    assert not ok and "not in this PR's history" in why, why
+
+
+def test_a_real_review_that_MENTIONS_an_error_is_not_a_refusal():
+    """The refusal phrases are anchored on "Copilot" for this reason.
+
+    An earlier draft matched the bare fragment `encountered an error`, which a
+    review of error-handling code can easily say -- and because the draft also
+    required no refusal phrase alongside the marker, that conjunction only ever
+    fired on a genuine review. Copilot raised the generality on #1725.
+    """
+    body = (
+        TIER_BANNER + "<!-- ccr-overview-v2 -->\n\n"
+        "### 🟡 Changes recommended\n\n"
+        "The retry path swallows the exception when the client encountered an "
+        "error, so a caller cannot tell a refusal from a timeout.\n"
+    )
+    assert not body_is_refusal(body), (
+        "a review discussing an error was classified as a refusal"
+    )
+    assert body_is_real_review(body)
+    verdict, _ = classify("completed", "success", body)
+    assert verdict == SATISFIED, (
+        f"a real review that mentions an error must satisfy condition 2, got {verdict}"
+    )
+
+
+def test_refusal_and_tier_matching_is_case_insensitive():
+    """Capitalisation drift in Copilot's prose must not flip a verdict."""
+    assert body_is_refusal(CORPUS_REFUSAL.upper())
+    assert body_is_refusal(GENERIC_ERROR.upper())
+    assert body_is_tier_degraded(TIER_DEGRADED_APPROVAL.upper())
+    # ...while the marker itself stays an exact match: it is machine-emitted.
+    assert not body_is_real_review(PLAIN_APPROVAL.upper())
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

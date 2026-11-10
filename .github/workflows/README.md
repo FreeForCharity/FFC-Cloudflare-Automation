@@ -588,6 +588,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 232 | WHMCS - Charity-Lane Verdicts (Gate 1/2, read-only) [FRAUDLABS+WHMCS] | `232-whmcs-charity-lane-verdicts.yml` | workflow_dispatch | Reads | whmcs-prod-read + fraudlabspro-prod-read |
 | 233 | WHMCS - Charity-Lane Ticket Reply (classify, read-only) [WHMCS] | `233-whmcs-charity-lane-ticket-reply.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 234 | WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS] | `234-whmcs-charity-lane-site-fields.yml` | workflow_dispatch | Reads | whmcs-prod-read |
+| 235 | WHMCS - Ticket Thread Read (full text, encrypted) [WHMCS] | `235-whmcs-ticket-thread-read.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

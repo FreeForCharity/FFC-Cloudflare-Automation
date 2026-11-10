@@ -98,6 +98,15 @@ API = "https://api.github.com"
 OWNER = "FreeForCharity"
 REPO = "FFC-Cloudflare-Automation"
 
+#: Sent on every request, matching the convention the repo's other REST callers
+#: already follow (`generate-agentic-os-status.py`, `audit-agentic-os-board.py`,
+#: `audit-agent-ready-anchors.py`, `check-environment-protection.py`). GitHub
+#: throttles unidentified clients harder, and this module's whole contract is
+#: that a failed read must not look like a verdict -- so being rate-limited is
+#: not a cosmetic concern here. Deliberately a generic tool name: it identifies
+#: the script, never the operator running it.
+USER_AGENT = "ffc-review-threads-rest"
+
 #: The key the REST/CCR route uses. Tested for by presence, never assumed.
 REST_KEY = "resolved"
 
@@ -178,10 +187,22 @@ def _assert_resolution_key(threads):
 def unresolved_threads(payload):
     """The threads that are not resolved. Raises rather than guessing.
 
-    Only ``resolved is False`` counts as unresolved. A ``None`` resolution is an
-    unread value, not a resolved one, so it is refused by the key check above
-    when the key is absent and treated as unresolved when the key is present but
-    null -- in both directions the module declines to call an unknown "clean".
+    **Only ``resolved is True`` counts as RESOLVED**; anything else is
+    unresolved. The test is deliberately on the boolean identity and not on
+    falsiness, so `None` (present but unread), the string `"true"`, `1` and any
+    other non-boolean all count as unresolved rather than being coerced.
+
+    That asymmetry is the point: this module's job is to avoid calling an
+    unknown "clean", so the burden of proof is on *resolved*. A payload whose
+    threads carry no resolution key at all never reaches here -- the key check
+    above refuses it.
+
+    An earlier version of this docstring said "only ``resolved is False``
+    counts as unresolved", which describes a narrower predicate than the code
+    implements and would have licensed treating `None` as resolved. Caught by
+    review on #1727; `test_a_truthy_non_true_resolution_is_not_accepted_as_resolved`
+    and `test_a_present_but_null_resolution_counts_as_unresolved` pin the real
+    contract.
     """
     threads = _threads(payload)
     _assert_resolution_key(threads)
@@ -235,6 +256,7 @@ def _get(path, token):
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", USER_AGENT)
     with urllib.request.urlopen(req, timeout=60) as fh:
         return json.loads(fh.read().decode("utf-8"))
 

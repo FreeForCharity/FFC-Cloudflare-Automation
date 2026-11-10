@@ -552,6 +552,72 @@ def test_exit_1_is_reachable_ONLY_from_a_completed_evaluation():
         restore_token()
 
 
+def test_get_sends_the_repo_standard_headers_including_a_User_Agent():
+    """GitHub throttles unidentified clients harder, and a throttled read here
+    is a read that failed -- which this module must never let look like a
+    verdict. Four other REST callers in `scripts/` already send a `User-Agent`;
+    this one did not until review on #1727 caught it.
+
+    Also pins that the agent is a generic TOOL name: it identifies the script,
+    never the operator, so the header cannot leak who ran the sweep.
+    """
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["timeout"] = timeout
+        # urllib normalises header names to Capitalised-Form in this dict.
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return FakeResponse()
+
+    original = M.urllib.request.urlopen
+    try:
+        M.urllib.request.urlopen = fake_urlopen
+        out = M._get("/repos/o/r/pulls/1/ccr/review_threads", "tok")
+    finally:
+        M.urllib.request.urlopen = original
+
+    check("the body is parsed", out == [], repr(out))
+    h = seen.get("headers", {})
+    check("User-Agent is sent", "user-agent" in h, str(sorted(h)))
+    check(
+        "User-Agent is the module's constant",
+        h.get("user-agent") == M.USER_AGENT,
+        repr(h.get("user-agent")),
+    )
+    check(
+        "User-Agent names the tool, not a person",
+        M.USER_AGENT.startswith("ffc-") and "@" not in M.USER_AGENT,
+        M.USER_AGENT,
+    )
+    check(
+        "Authorization is a bearer token, not a literal",
+        h.get("authorization") == "Bearer tok",
+        repr(h.get("authorization")),
+    )
+    check("Accept pins the v3 JSON media type",
+          h.get("accept") == "application/vnd.github+json", repr(h.get("accept")))
+    check("the API version is pinned",
+          h.get("x-github-api-version") == "2022-11-28",
+          repr(h.get("x-github-api-version")))
+    check("a timeout is set", seen.get("timeout") == 60, repr(seen.get("timeout")))
+    check(
+        "the request goes to api.github.com",
+        seen.get("url", "").startswith("https://api.github.com/"),
+        repr(seen.get("url")),
+    )
+
+
 def test_each_failure_class_is_NAMED_distinctly_on_stderr():
     """The specific `except` clauses exist for their messages, so pin them.
 

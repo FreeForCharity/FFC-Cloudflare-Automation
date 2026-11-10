@@ -286,6 +286,24 @@ def main(argv=None):
     except urllib.error.HTTPError as exc:
         print("PR #%d: HTTP %s reading threads" % (args.pr, exc.code), file=sys.stderr)
         return 2
+    # `HTTPError` subclasses `URLError`, so it must be caught FIRST (above) or a
+    # server response would be reported as a transport failure. The order here
+    # is load-bearing, not stylistic.
+    #
+    # Without this clause a timeout, DNS failure or connection reset left the
+    # exception uncaught, and Python exits **1** for an uncaught exception --
+    # which this module defines as "condition 3 is not satisfied". So a read
+    # that never happened rendered as a verdict that threads are unresolved,
+    # which is the exact confusion between "could not tell" and an answer that
+    # the whole module exists to prevent. Found by review on this PR; the
+    # reproduction is in the tests.
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(
+            "PR #%d: transport failure reading threads (%s: %s)"
+            % (args.pr, type(exc).__name__, exc),
+            file=sys.stderr,
+        )
+        return 2
 
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))

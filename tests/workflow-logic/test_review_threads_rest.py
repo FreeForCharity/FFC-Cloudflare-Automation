@@ -107,7 +107,12 @@ PR1647 = [
     },
 ]
 
-#: #1586 on 2026-11-10: eight threads, all resolved.
+#: #1586 on 2026-11-10: all threads resolved. The live PR carried EIGHT; two of
+#: them are kept here verbatim (one outdated with a null line, one current with a
+#: real line), because the assertions below are about the resolved/unresolved
+#: split and the remaining six were identical in shape. The live count of 8 is
+#: what the `per_page` test cites, and it is a fact about the route, not about
+#: this fixture -- so the two numbers are deliberately different.
 PR1586 = [
     {
         "resolved": True,
@@ -378,9 +383,31 @@ def test_an_object_wrapper_around_the_list_is_accepted():
 # --- the process boundary: refusal is exit 2, never exit 0 -------------------
 
 
+def _restoring_token(value="t"):
+    """Set GH_TOKEN and hand back a restorer for the PREVIOUS value.
+
+    The module runs its own in-process runner, so a test that leaves GH_TOKEN
+    mutated makes later tests order-dependent -- and in this file the very next
+    test by sort order is the one that asserts behaviour when the token is
+    ABSENT. Restoring the prior value (including its absence) keeps each test's
+    environment its own.
+    """
+    had = "GH_TOKEN" in M.os.environ
+    previous = M.os.environ.get("GH_TOKEN")
+    M.os.environ["GH_TOKEN"] = value
+
+    def restore():
+        if had:
+            M.os.environ["GH_TOKEN"] = previous
+        else:
+            M.os.environ.pop("GH_TOKEN", None)
+
+    return restore
+
+
 def test_main_exits_2_on_an_unreadable_payload_and_0_only_when_satisfied():
     """"Could not tell" and "satisfied" must not share an exit code."""
-    M.os.environ["GH_TOKEN"] = "t"
+    restore_token = _restoring_token()
     original = M._get
     try:
         M._get = lambda path, token: _graphql_shaped(PR1647)
@@ -393,6 +420,140 @@ def test_main_exits_2_on_an_unreadable_payload_and_0_only_when_satisfied():
         check("no threads exits 0", M.main(["--pr", "1"]) == 0)
     finally:
         M._get = original
+        restore_token()
+
+
+def test_main_exits_2_on_a_TRANSPORT_failure_not_1():
+    """A read that never happened must not render as "threads unresolved".
+
+    `HTTPError` subclasses `URLError`, so the HTTP clause alone left a timeout,
+    DNS failure or connection reset uncaught -- and Python exits 1 for an
+    uncaught exception, which this module defines as "condition 3 not
+    satisfied". Reproduced on this PR before the fix: `main()` raised
+    `URLError` instead of returning anything.
+    """
+    restore_token = _restoring_token()
+    original = M._get
+    try:
+        for exc in (
+            M.urllib.error.URLError("connection reset"),
+            TimeoutError("read timed out"),
+            OSError("network unreachable"),
+        ):
+
+            def boom(path, token, _exc=exc):
+                raise _exc
+
+            M._get = boom
+            try:
+                rc = M.main(["--pr", "1647"])
+            except Exception as leaked:  # noqa: BLE001
+                check(
+                    "%s must not escape main()" % type(exc).__name__,
+                    False,
+                    "uncaught %s: %s" % (type(leaked).__name__, leaked),
+                )
+                continue
+            check(
+                "%s must exit 2, not 1" % type(exc).__name__,
+                rc == 2,
+                "got %r -- 1 would mean 'threads unresolved'" % (rc,),
+            )
+    finally:
+        M._get = original
+        restore_token()
+
+
+def test_an_HTTP_error_is_still_reported_as_HTTP_not_as_transport():
+    """The except-clause ORDER is load-bearing: HTTPError subclasses URLError.
+
+    Catching `URLError` first would report every server response as a transport
+    failure, losing the status code from the message.
+    """
+    restore_token = _restoring_token()
+    original = M._get
+    try:
+
+        def not_found(path, token):
+            raise M.urllib.error.HTTPError(
+                "https://api.github.com" + path, 404, "Not Found", {}, None
+            )
+
+        M._get = not_found
+        check("HTTP error exits 2", M.main(["--pr", "1647"]) == 2)
+    finally:
+        M._get = original
+        restore_token()
+
+
+def test_no_test_in_this_module_leaves_GH_TOKEN_mutated():
+    """The leak the review found, asserted as a property of the whole module.
+
+    Written as its own test because the fix is a convention every future test
+    has to follow, and a convention with nothing checking it is prose.
+
+    This runs each sibling test and compares the GH_TOKEN state after it against
+    the state before -- the behaviour itself, not the source text. The first
+    draft of this guard DID scan the source, and it failed on its own string
+    literals, which is a fair warning about what source-scraping measures.
+    """
+    me = "test_no_test_in_this_module_leaves_GH_TOKEN_mutated"
+    had = "GH_TOKEN" in M.os.environ
+    previous = M.os.environ.get("GH_TOKEN")
+    saved = list(_CURRENT)
+    leak = None
+
+    def state():
+        return ("GH_TOKEN" in M.os.environ, M.os.environ.get("GH_TOKEN"))
+
+    try:
+        for name, fn in sorted(globals().items()):
+            if name == me or not (name.startswith("test_") and callable(fn)):
+                continue
+            # Force a KNOWN, DISTINCT state before each sibling, and snapshot
+            # per sibling rather than once at the top. Two earlier drafts of
+            # this guard were both measurably blind, and the second failure is
+            # the instructive one:
+            #
+            #   1. a single snapshot taken when this guard started cannot see a
+            #      leak that happened earlier in the run -- which is the common
+            #      case, since the leaking test sorts ahead of this one;
+            #   2. snapshotting per sibling still cannot see it, because
+            #      `_restoring_token` always sets the SAME value. Once a leak
+            #      has left GH_TOKEN="t", a sibling that sets "t" and fails to
+            #      restore changes nothing, so before == after.
+            #
+            # Clearing it first makes "set and restored" distinguishable from
+            # "set and leaked". Both blind drafts were caught by reverting the
+            # fix and finding the suite still green -- a test that cannot fail
+            # is worth less than no test, because it reads as coverage.
+            M.os.environ.pop("GH_TOKEN", None)
+            before = state()
+            del _CURRENT[:]
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 -- that test reports its own result
+                pass
+            if state() != before:
+                after_had, after = state()
+                was_had, was = before
+                leak = "%s left GH_TOKEN=%s (was %s)" % (
+                    name,
+                    repr(after) if after_had else "<unset>",
+                    repr(was) if was_had else "<unset>",
+                )
+                break
+    finally:
+        # Restore the environment and this module's finding buffer before
+        # reporting, so one leak cannot cascade into every later test.
+        if had:
+            M.os.environ["GH_TOKEN"] = previous
+        else:
+            M.os.environ.pop("GH_TOKEN", None)
+        del _CURRENT[:]
+        _CURRENT.extend(saved)
+
+    check("no sibling test leaks GH_TOKEN", leak is None, leak or "")
 
 
 def test_main_refuses_without_a_token_rather_than_reporting_clean():

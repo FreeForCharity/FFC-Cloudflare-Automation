@@ -383,10 +383,51 @@ def test_a_merge_of_some_OTHER_branch_does_not_preserve_a_review():
         "aaa", "bbb", commits, lambda s: s == "main1"
     )
     assert not ok, "a merge of an unrelated branch must not preserve the review"
-    assert "not of the base branch" in why, why
+    assert "not in the base branch" in why, why
     # And an unknown reviewed commit is never credited.
     ok, why = review_commit_is_acceptable("zzz", "bbb", commits, lambda s: True)
     assert not ok and "not in this PR's history" in why, why
+
+
+def test_an_octopus_merge_that_also_pulls_a_FEATURE_branch_voids_the_review():
+    """`any()` over the non-first parents is not enough -- it must be `all()`.
+
+    An octopus merge has parents [prev, base, feature]. Asking whether *any*
+    non-first parent is in the base branch is satisfied by the base parent
+    alone, so the merge is credited while the feature parent brought code the
+    review never saw. That is precisely the hole this function exists to close.
+    Raised by Copilot on #1725, and it was real.
+    """
+    commits = [
+        {"sha": "aaa", "parents": [{"sha": "root"}]},
+        {
+            "sha": "oct",
+            "parents": [{"sha": "aaa"}, {"sha": "main1"}, {"sha": "feature-x"}],
+        },
+    ]
+    in_base = {"main1", "main2"}
+    ok, why = review_commit_is_acceptable(
+        "aaa", "oct", commits, lambda s: s in in_base
+    )
+    assert not ok, (
+        "an octopus merge carrying a non-base parent must void the review; "
+        "`any()` credits it because the base parent alone satisfies the test"
+    )
+    assert "feature-" in why, f"the reason must name the offending parent: {why}"
+
+    # ...while an octopus merge whose every non-first parent IS in base is fine:
+    # nothing unreviewed came in.
+    commits_ok = [
+        {"sha": "aaa", "parents": [{"sha": "root"}]},
+        {
+            "sha": "oct",
+            "parents": [{"sha": "aaa"}, {"sha": "main1"}, {"sha": "main2"}],
+        },
+    ]
+    ok, why = review_commit_is_acceptable(
+        "aaa", "oct", commits_ok, lambda s: s in in_base
+    )
+    assert ok, f"every non-first parent is in base, so nothing unreviewed landed: {why}"
 
 
 def test_a_real_review_that_MENTIONS_an_error_is_not_a_refusal():

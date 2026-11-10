@@ -229,8 +229,18 @@ def review_commit_is_acceptable(reviewed_sha, head_sha, pr_commits, is_base_ance
         ]
         if len(parents) < 2:
             return False, f"{commit['sha'][:8]} after the review is not a merge commit"
-        if not any(is_base_ancestor(p) for p in parents[1:]):
-            return False, f"{commit['sha'][:8]} is a merge, but not of the base branch"
+        # EVERY non-first parent must be contained in the base branch, not just
+        # one of them. `any()` credits an octopus merge -- parents
+        # [prev, base, feature] -- because the base parent satisfies it, while
+        # the feature parent brought code the review never saw. That is the
+        # exact hole this function exists to close, and the docstring already
+        # said "merges of the base branch". Raised by Copilot on #1725.
+        outside = [p for p in parents[1:] if not is_base_ancestor(p)]
+        if outside:
+            return (
+                False,
+                f"{commit['sha'][:8]} merges {outside[0][:8]}, which is not in the base branch",
+            )
     return True, "review predates only merges of the base branch"
 
 

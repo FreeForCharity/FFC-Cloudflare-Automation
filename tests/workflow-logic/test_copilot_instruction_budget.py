@@ -264,6 +264,36 @@ def test_every_fixture_root_is_registered_for_cleanup_and_cleanup_cannot_raise()
     check("the registry is drained", _FIXTURES == [], str(_FIXTURES))
 
 
+def test_a_non_positive_budget_or_token_size_is_refused_not_scored():
+    # The `budget_tokens=0` half was a fail-OPEN wearing a guard clause's
+    # clothes: `share = est_tokens / budget_tokens if budget_tokens else 0.0`
+    # scored the live 260,832 B corpus as `share 0.0, verdict OK`. Measured
+    # before the fix. `bytes_per_token=0` raised a bare ZeroDivisionError.
+    # Filed by Copilot on #1706 (discussion_r4521809577), medium severity.
+    root = fixture({"AGENTS.md": b"a" * 400})
+    for kwargs in ({"budget_tokens": 0}, {"budget_tokens": -1},
+                   {"bytes_per_token": 0}, {"bytes_per_token": -4}):
+        label = ", ".join("%s=%r" % kv for kv in kwargs.items())
+        try:
+            report = M.measure(root, **kwargs)
+        except M.CorpusError:
+            continue
+        except Exception as exc:  # noqa: BLE001 -- any other type is the bug
+            check("refuses %s with CorpusError" % label, False,
+                  "%s: %s" % (type(exc).__name__, exc))
+            continue
+        check("refuses %s" % label, False,
+              "scored it instead: share=%r verdict=%r"
+              % (report["share_of_budget"], report["verdict"]))
+    # The valid path must still compute, so the guards cannot be satisfied by
+    # refusing everything.
+    ok = M.measure(root, budget_tokens=100, bytes_per_token=4)
+    check("a positive budget still scores", ok["estimated_tokens"] == 100,
+          str(ok["estimated_tokens"]))
+    check("and its share is computed", abs(ok["share_of_budget"] - 1.0) < 1e-9,
+          str(ok["share_of_budget"]))
+
+
 def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
     eps = 1e-6
     check("below advisory is OK", M.verdict(M.ADVISORY_SHARE - eps) == "OK")

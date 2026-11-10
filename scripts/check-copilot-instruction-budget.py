@@ -159,7 +159,25 @@ def measure(
     universal-newline translation, which this repository has already been
     burned by twice (CLAUDE.md's CR-counting notes): a CRLF checkout would
     under-report every file by one byte per line.
+
+    Both numeric arguments are rejected unless positive. `budget_tokens=0` used
+    to take a `if budget_tokens else 0.0` branch and score the live 260,832 B
+    corpus as `share 0.0, verdict OK` -- a fail-OPEN dressed as a guard clause,
+    which is the one failure direction this module exists to prevent, and it
+    read as defensive care. `bytes_per_token=0` raised a bare
+    ZeroDivisionError. Both now raise `CorpusError`, which `main()` already
+    reports as exit 2.
     """
+    if budget_tokens <= 0:
+        raise CorpusError(
+            "budget_tokens must be positive, got %r -- a zero budget scores any "
+            "corpus as 0.0%% of it" % (budget_tokens,)
+        )
+    if bytes_per_token <= 0:
+        raise CorpusError(
+            "bytes_per_token must be positive, got %r" % (bytes_per_token,)
+        )
+
     files = []
     total = 0
     for name, present in discover(root):
@@ -181,7 +199,7 @@ def measure(
     # and erring high costs nothing here.
     est_tokens = -(-total // bytes_per_token)
     budget_bytes = budget_tokens * bytes_per_token
-    share = est_tokens / budget_tokens if budget_tokens else 0.0
+    share = est_tokens / budget_tokens
     for entry in files:
         entry["share_of_corpus"] = (
             entry["bytes"] / total if entry["bytes"] and total else 0.0

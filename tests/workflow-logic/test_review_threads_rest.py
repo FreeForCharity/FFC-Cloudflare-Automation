@@ -464,6 +464,151 @@ def test_main_exits_2_on_a_TRANSPORT_failure_not_1():
         restore_token()
 
 
+def test_main_exits_2_on_a_MALFORMED_body_not_1():
+    """A body that is not valid UTF-8, or truncated JSON, is "could not tell".
+
+    `_get` ends in `json.loads(fh.read().decode("utf-8"))`. Both failures
+    subclass `ValueError` and neither is an `OSError`, so the transport clause
+    does not reach them. Reproduced before the fix: `main()` raised and Python
+    exited 1, which this module defines as "threads unresolved".
+    """
+    restore_token = _restoring_token()
+    original = M._get
+    try:
+        for exc in (
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+            M.json.JSONDecodeError("Expecting value", '[{"resolved"', 12),
+        ):
+
+            def boom(path, token, _exc=exc):
+                raise _exc
+
+            M._get = boom
+            try:
+                rc = M.main(["--pr", "1727"])
+            except Exception as leaked:  # noqa: BLE001
+                check(
+                    "%s must not escape main()" % type(exc).__name__,
+                    False,
+                    "uncaught %s" % type(leaked).__name__,
+                )
+                continue
+            check(
+                "%s must exit 2, not 1" % type(exc).__name__,
+                rc == 2,
+                "got %r" % (rc,),
+            )
+    finally:
+        M._get = original
+        restore_token()
+
+
+def test_exit_1_is_reachable_ONLY_from_a_completed_evaluation():
+    """The structural property, asserted over an exception type nobody listed.
+
+    Two review findings on this PR were each "another exception type exits 1":
+    transport, then decode. Enumerating types cannot close that class, because
+    exit 1 is this module's word for the VERDICT "some threads are unresolved".
+    So any failure to complete must be 2, and this test uses a bespoke exception
+    class so it cannot be satisfied by adding one more `except` clause.
+    """
+
+    class SomethingNobodyAnticipated(Exception):
+        pass
+
+    restore_token = _restoring_token()
+    original = M._get
+    try:
+        for exc in (
+            SomethingNobodyAnticipated("surprise"),
+            KeyError("parents"),
+            AttributeError("code"),
+            RecursionError("deep"),
+        ):
+
+            def boom(path, token, _exc=exc):
+                raise _exc
+
+            M._get = boom
+            try:
+                rc = M.main(["--pr", "1727"])
+            except Exception as leaked:  # noqa: BLE001
+                check(
+                    "%s must not escape main()" % type(exc).__name__,
+                    False,
+                    "uncaught %s" % type(leaked).__name__,
+                )
+                continue
+            check(
+                "%s must exit 2, never 1" % type(exc).__name__,
+                rc == 2,
+                "got %r -- 1 would assert a verdict from a read that failed" % (rc,),
+            )
+        # and the converse: 1 must still be reachable, or the above is vacuous
+        M._get = lambda path, token: PR1647
+        check("a real unresolved thread still exits 1", M.main(["--pr", "1647"]) == 1)
+    finally:
+        M._get = original
+        restore_token()
+
+
+def test_each_failure_class_is_NAMED_distinctly_on_stderr():
+    """The specific `except` clauses exist for their messages, so pin them.
+
+    With the catch-all backstop in place, deleting any one specific clause
+    leaves the exit code at 2 -- so an exit-code test cannot tell the clauses
+    apart, and removing one is an equivalent mutant. Measured: deleting the
+    `ValueError` clause left the whole suite green. An operator debugging a
+    broken sweep needs "unreadable response body" distinguished from "transport
+    failure" and from "payload NOT UNDERSTOOD", so that distinction is the
+    contract these clauses actually carry, and this is the test that holds it.
+    """
+    import contextlib
+    import io as _io
+
+    cases = [
+        (M.urllib.error.URLError("reset"), "transport failure"),
+        (
+            M.json.JSONDecodeError("Expecting value", '[{"resolved"', 12),
+            "unreadable response body",
+        ),
+        (KeyError("surprise"), "could not evaluate"),
+    ]
+    restore_token = _restoring_token()
+    original = M._get
+    try:
+        for exc, expected in cases:
+
+            def boom(path, token, _exc=exc):
+                raise _exc
+
+            M._get = boom
+            err = _io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = M.main(["--pr", "1727"])
+            text = err.getvalue()
+            check("%s exits 2" % type(exc).__name__, rc == 2, "got %r" % (rc,))
+            check(
+                "%s is reported as %r" % (type(exc).__name__, expected),
+                expected in text,
+                "stderr was %r" % (text.strip(),),
+            )
+        # the shape-refusal message must stay distinct from all three above
+        M._get = lambda path, token: _graphql_shaped(PR1647)
+        err = _io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = M.main(["--pr", "1727"])
+        check("a shape refusal exits 2", rc == 2, "got %r" % (rc,))
+        check(
+            "a shape refusal says NOT UNDERSTOOD",
+            "NOT UNDERSTOOD" in err.getvalue(),
+            "stderr was %r" % (err.getvalue().strip(),),
+        )
+    finally:
+        M._get = original
+        restore_token()
+
+
 def test_an_HTTP_error_is_still_reported_as_HTTP_not_as_transport():
     """The except-clause ORDER is load-bearing: HTTPError subclasses URLError.
 

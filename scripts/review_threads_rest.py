@@ -304,6 +304,38 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 2
+    # A malformed body -- not valid UTF-8, or truncated JSON -- raises
+    # `UnicodeDecodeError` / `json.JSONDecodeError` out of `_get`. Both subclass
+    # `ValueError`, and neither is an `OSError`, so the clause above does not
+    # reach them.
+    except ValueError as exc:
+        print(
+            "PR #%d: unreadable response body (%s: %s)"
+            % (args.pr, type(exc).__name__, exc),
+            file=sys.stderr,
+        )
+        return 2
+    # Backstop, and the clause that actually makes the contract hold.
+    #
+    # The three clauses above were each added in response to a separate review
+    # finding -- transport, then decode -- which is the shape of a whack-a-mole
+    # fix: every new exception type `_get` can raise is another silent exit 1,
+    # and exit 1 is this module's word for "I read the threads and some are
+    # unresolved". That is a verdict, so it must be reachable ONLY from an
+    # evaluation that completed. Enumerating exception types cannot guarantee
+    # that; inverting the default can.
+    #
+    # So the rule is structural: anything that stops `evaluate_pr` completing
+    # is exit 2, whatever it is. The specific clauses stay because they produce
+    # better messages, not because they are load-bearing. A test asserts the
+    # property over an arbitrary exception type precisely so a future reader is
+    # not tempted to "tighten" this back into a list.
+    except Exception as exc:  # noqa: BLE001 -- see above: 2 is the safe default
+        print(
+            "PR #%d: could not evaluate (%s: %s)" % (args.pr, type(exc).__name__, exc),
+            file=sys.stderr,
+        )
+        return 2
 
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))

@@ -102,6 +102,12 @@ def test_inputs_reach_script_only_through_env():
     assert env["RECIPIENT_PUBLIC_KEY"] == "${{ inputs.recipient_public_key }}"
 
 
+def test_run_name_interpolates_no_input():
+    # run-name shows in the public run list, unvalidated.
+    run_name = _wf()["run-name"]
+    assert "${{" not in run_name, run_name
+
+
 def test_upload_is_fixed_path_encrypted_file_one_day():
     up = [s for s in _job()["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact")]
     assert len(up) == 1, up
@@ -167,6 +173,7 @@ TESTS = [
     test_read_lane_and_read_scope,
     test_no_write_permissions,
     test_inputs_reach_script_only_through_env,
+    test_run_name_interpolates_no_input,
     test_upload_is_fixed_path_encrypted_file_one_day,
     test_callee_sends_read_actions_only,
     test_callee_log_lines_carry_no_thread_fields,

@@ -1,6 +1,8 @@
 name: '235. WHMCS - Ticket Thread Read (full text, encrypted) [WHMCS]'
-run-name:
-  'WHMCS Ticket Thread Read: tickets ${{ inputs.ticket_ids }} client ${{ inputs.client_id }}'
+# Fixed text on purpose: run-name is rendered in the PUBLIC run list before any
+# input validation, so interpolating a free-text input would publish whatever
+# was pasted into it.
+run-name: 'WHMCS Ticket Thread Read (encrypted)'
 
 # Read-only. Reads the FULL thread of one or more WHMCS tickets -- every
 # message (GetTicket) plus FFC's internal notes (GetTicketNotes) -- so a reply

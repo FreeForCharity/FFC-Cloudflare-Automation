@@ -2291,6 +2291,60 @@ def test_graphql_is_not_a_recognised_api_endpoint():
            path == "repos/O/R/issues", f"got {path!r}")
 
 
+def test_collection_remediation_names_no_endpoint_specific_token():
+    """An interpolated remediation message may not hard-code a filter or field.
+
+    Rules 10b (block) and the `[#1647]` warn arm both fire on ANY collection
+    endpoint and compose their advice around the caller's own `fpath`. Every
+    literal left beside that interpolation is therefore a claim about every
+    endpoint the rule matches, and `?state=open&...--jq '.[] | .number'` was
+    only ever true for `issues`/`pulls`.
+
+    The sharp half, and the reason this is asserted rather than left to review:
+    the advice does not fail loudly on the endpoints where it is wrong.
+    Measured on 2026-11-09 against this repo, `actions/workflows?per_page=5`
+    and `actions/workflows?per_page=5&state=open` both return `total_count`
+    134 -- identical, HTTP 200 -- because REST drops an unrecognised query
+    parameter in silence. A guard whose remediation text hands the operator a
+    silently-unfiltered read points them at the exact failure class the
+    dropped-query-parameter rule in CLAUDE.md exists to catch. `actions/
+    workflows` also returns an OBJECT with no `number` field, so the old
+    example was wrong three ways there -- filter, field and shape -- while
+    reading as a complete, copy-pasteable command.
+
+    Asserted on the emitted text, not on the source, so a future rewording
+    that reintroduces a literal is caught wherever it is spelled.
+    """
+    # Endpoints chosen because `state` is NOT one of their filters and their
+    # items carry no `number`: the needles cannot come from the payload being
+    # echoed back, only from the message's own hard-coded example.
+    probes = [
+        ("block arm", "gh api repos/O/R/actions/workflows --paginate -f per_page=100 --jq '.[]|.id'", 2),
+        ("warn arm", "gh api repos/O/R/branches -f protected=true --jq '.[].name'", 0),
+    ]
+    needles = ("state=open", ".number")
+    problems = []
+    for arm, cmd, want_rc in probes:
+        proc = run_full("guard_bash.py", bash(cmd))
+        out = proc.stderr + proc.stdout
+        if proc.returncode != want_rc:
+            problems.append(f"{arm}: rc={proc.returncode}, wanted {want_rc} -- the rule did not fire")
+            continue
+        # rc alone cannot distinguish "fired with clean advice" from "never
+        # fired", so require the rule's own marker before reading the text.
+        if "gh api" not in out:
+            problems.append(f"{arm}: rc={want_rc} but emitted no remediation text to inspect")
+            continue
+        for needle in needles:
+            if needle in out:
+                problems.append(
+                    f"{arm}: remediation hard-codes {needle!r}, which is not valid for "
+                    f"this endpoint and is dropped with a 200 rather than rejected\n"
+                    f"  emitted: {' '.join(out.split())[:200]}")
+    record("collection remediation carries no endpoint-specific filter or field",
+           not problems, "\n".join(problems))
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -2433,6 +2487,7 @@ def main():
     test_rule_polarity()
     test_strip_quoted_matches_a_bash_accurate_scanner()
     test_graphql_is_not_a_recognised_api_endpoint()
+    test_collection_remediation_names_no_endpoint_specific_token()
     test_rule_attribution()
     test_refusal_site_coverage()
     test_no_hook_module_has_an_invalid_escape_sequence()

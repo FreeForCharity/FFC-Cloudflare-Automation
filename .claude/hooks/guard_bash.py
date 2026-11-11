@@ -2332,7 +2332,10 @@ def main():
                     "  A POST has ONE response: there is nothing to paginate and nothing to "
                     "iterate with `.[]`.\n"
                     "  Reading a filtered list -- put the filter in the QUERY STRING:\n"
-                    f"    gh api \"{fpath}?state=open&per_page=100\" --paginate --jq '.[] | .number'\n"
+                    f"    gh api \"{fpath}?per_page=100&<filter>=<value>\" --paginate --jq '.[]'\n"
+                    "    (check THAT endpoint's own docs for its filter names and its\n"
+                    "     response shape -- REST DROPS an unrecognised query parameter\n"
+                    "     silently and still returns 200)\n"
                     "  Genuinely need -f on a read (rare): pass `-X GET` so the method is explicit.\n"
                     "  Creating something: pass `-X POST` and drop --paginate / the `.[]` filter.\n"
                     "  Run 258 issued this shape against `issues` and attempted to open a public "
@@ -2342,7 +2345,7 @@ def main():
                 warn(
                     f"[#1647] `-f`/`-F` with no `-X`/`--method` makes `gh api {fpath}` a POST, "
                     "not a read. If you meant to list, put the filter in the query string "
-                    f"(`gh api \"{fpath}?state=open\" --paginate`). If you meant to create or "
+                    f"(`gh api \"{fpath}?<filter>=<value>\" --paginate`). If you meant to create or "
                     "add (e.g. labels, which return an array), pass `-X POST` to say so."
                 )
 

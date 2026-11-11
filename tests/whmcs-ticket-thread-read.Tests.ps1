@@ -27,7 +27,8 @@ BeforeAll {
             replies = [pscustomobject]@{ reply = @(
                     [pscustomobject]@{ replyid = '0'; date = '2026-11-09 21:52:45'; admin = ''; name = 'Jane Doe'; email = 'jane.doe@example.org'; message = $script:Sentinel; attachment = '' }
                     [pscustomobject]@{ replyid = '9'; date = '2026-11-09 23:00:00'; admin = 'Clarke Moyer'; name = ''; email = ''; message = 'We are looking'; attachment = '' }
-                ) }
+                ) 
+            }
         }
     }
     $script:Calls = [System.Collections.Generic.List[string]]::new()

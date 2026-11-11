@@ -208,19 +208,19 @@ function ConvertTo-ThreadRecord {
         }
     }
     return [pscustomobject]@{
-        id         = [string](Get-ThreadProp $Ticket 'ticketid')
-        tid        = [string](Get-ThreadProp $Ticket 'tid')
-        userid     = [string](Get-ThreadProp $Ticket 'userid')
-        deptname   = [string](Get-ThreadProp $Ticket 'deptname')
-        subject    = [string](Get-ThreadProp $Ticket 'subject')
-        status     = [string](Get-ThreadProp $Ticket 'status')
-        priority   = [string](Get-ThreadProp $Ticket 'priority')
-        opened     = [string](Get-ThreadProp $Ticket 'date')
-        lastreply  = [string](Get-ThreadProp $Ticket 'lastreply')
-        name       = [string](Get-ThreadProp $Ticket 'name')
-        email      = [string](Get-ThreadProp $Ticket 'email')
-        replies    = @($replies)
-        notes      = @($noteList)
+        id        = [string](Get-ThreadProp $Ticket 'ticketid')
+        tid       = [string](Get-ThreadProp $Ticket 'tid')
+        userid    = [string](Get-ThreadProp $Ticket 'userid')
+        deptname  = [string](Get-ThreadProp $Ticket 'deptname')
+        subject   = [string](Get-ThreadProp $Ticket 'subject')
+        status    = [string](Get-ThreadProp $Ticket 'status')
+        priority  = [string](Get-ThreadProp $Ticket 'priority')
+        opened    = [string](Get-ThreadProp $Ticket 'date')
+        lastreply = [string](Get-ThreadProp $Ticket 'lastreply')
+        name      = [string](Get-ThreadProp $Ticket 'name')
+        email     = [string](Get-ThreadProp $Ticket 'email')
+        replies   = @($replies)
+        notes     = @($noteList)
     }
 }
 
@@ -283,12 +283,12 @@ function Invoke-TicketThreadRead {
         ConvertTo-ThreadRecord -Ticket $ticketResp -Notes $notesResp
     }
     return [pscustomobject]@{
-        generated_at  = $GeneratedAt
-        run_url       = $RunUrl
-        client_id     = $ClientId
-        ticket_count  = @($threads).Count
-        note          = 'WHMCS dates are in the WHMCS system time zone, unconverted. from_admin empty = written by the client.'
-        tickets       = @($threads)
+        generated_at = $GeneratedAt
+        run_url      = $RunUrl
+        client_id    = $ClientId
+        ticket_count = @($threads).Count
+        note         = 'WHMCS dates are in the WHMCS system time zone, unconverted. from_admin empty = written by the client.'
+        tickets      = @($threads)
     }
 }
 
@@ -334,7 +334,7 @@ try {
     Write-Host $summary
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
         @('## WHMCS ticket threads (encrypted)', '', $summary, '',
-          'Decrypt: `python3 scripts/whmcs-ticket-thread-decrypt.py decrypt --key <private.pem> <envelope.json>`') |
+            'Decrypt: `python3 scripts/whmcs-ticket-thread-decrypt.py decrypt --key <private.pem> <envelope.json>`') |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
     exit 0

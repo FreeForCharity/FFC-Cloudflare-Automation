@@ -1676,7 +1676,12 @@ def test_the_satellite_list_is_not_bound_to_the_FFC_IN_prefix():
     )
 
 
-def test_every_satellite_watches_a_workflow_name_this_repo_can_resolve():
+def test_every_satellite_watches_the_one_pinned_workflow_name():
+    # Pins the literal every satellite line targets. It does NOT assert that
+    # the name resolves in the target repo -- nothing here reaches GitHub; the
+    # sweep's behaviour on an unresolvable name is asserted by
+    # `test_an_unresolvable_satellite_name_names_the_repo_it_was_looked_for_in`.
+    #
     # A satellite entry is matched byte-exactly against the target repo's
     # workflow list, and an unresolvable name FAILS THE SWEEP rather than being
     # skipped (`test_an_unresolvable_satellite_name_names_the_repo_it_was_looked_

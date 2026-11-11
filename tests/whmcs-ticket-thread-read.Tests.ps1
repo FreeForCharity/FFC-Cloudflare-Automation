@@ -124,6 +124,18 @@ Describe 'Invoke-TicketThreadRead' {
     It 'refuses more tickets than the cap' {
         { Invoke-TicketThreadRead -TicketIds @(1, 2, 3) -InvokeApi $script:Api -MaxTickets 2 } | Should -Throw -ExpectedMessage '*at most 2*'
     }
+    It 'stops paging GetTickets once the cap is exceeded' {
+        $script:Pages = 0
+        $many = {
+            param([hashtable]$Body)
+            if ($Body.action -ne 'GetTickets') { throw 'no thread read expected' }
+            $script:Pages++
+            $base = [int]$Body.limitstart
+            [pscustomobject]@{ result = 'success'; totalresults = '900'; tickets = [pscustomobject]@{ ticket = @(1..100 | ForEach-Object { [pscustomobject]@{ id = [string]($base + $_) } }) } }
+        }
+        { Invoke-TicketThreadRead -ClientId 77 -InvokeApi $many -MaxTickets 50 } | Should -Throw -ExpectedMessage '*more than 50*'
+        $script:Pages | Should -Be 1
+    }
     It 'refuses an empty selection' {
         { Invoke-TicketThreadRead -InvokeApi $script:Api } | Should -Throw -ExpectedMessage '*No tickets*'
     }

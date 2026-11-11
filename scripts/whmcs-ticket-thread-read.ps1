@@ -271,11 +271,14 @@ function Invoke-TicketThreadRead {
             $total = 0
             [void][int]::TryParse([string](Get-ThreadProp $resp 'totalresults'), [ref]$total)
             if ($total -gt 0 -and $start -ge $total) { break }
+            # Stop paging once the cap is already exceeded: the refusal below
+            # fires either way, so further GetTickets pages are wasted calls.
+            if ($ids.Count -gt $MaxTickets) { break }
             if ($start -ge 1000) { break }
         }
     }
     if ($ids.Count -eq 0) { throw 'No tickets to read: give ticket_ids and/or a client_id that has tickets.' }
-    if ($ids.Count -gt $MaxTickets) { throw "That selects $($ids.Count) tickets; at most $MaxTickets per run. Narrow it with ticket_ids." }
+    if ($ids.Count -gt $MaxTickets) { throw "That selects more than $MaxTickets tickets; at most $MaxTickets per run. Narrow it with ticket_ids." }
 
     $threads = foreach ($id in ($ids | Sort-Object)) {
         $ticketResp = & $InvokeApi @{ action = 'GetTicket'; ticketid = $id; repliessort = 'ASC' }

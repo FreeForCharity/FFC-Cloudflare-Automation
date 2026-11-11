@@ -46,10 +46,6 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: whmcs-ticket-thread-read-${{ github.run_id }}
-  cancel-in-progress: false
-
 jobs:
   thread_read:
     runs-on: windows-latest

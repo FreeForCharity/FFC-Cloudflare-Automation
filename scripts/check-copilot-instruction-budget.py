@@ -53,14 +53,28 @@ not evidence about which term overflowed.
 Thresholds are POLICY KNOBS, not measurements, and are deliberately set above
 today's reading so that crossing one is news:
 
-  * ADVISORY_SHARE -- report WARN, exit 0. Growth worth a second look.
-  * HARD_SHARE -- exit 1. The corpus has eaten so much of the window that the
-    trim decision (#1696 AC1, a policy change reserved to @clarkemoyer) can no
-    longer wait.
+  * ADVISORY_SHARE -- report WARN. Growth worth a second look.
+  * HARD_SHARE -- report OVER. The corpus has eaten so much of the window that
+    the trim decision (#1696 AC1, a policy change reserved to @clarkemoyer) can
+    no longer wait.
 
-Enforcement reaches CI through `tests/workflow-logic/test_copilot_instruction_budget.py`,
-which measures the live tree and fails over HARD_SHARE. That needs no workflow
-edit: `run_all.py` picks the module up by name.
+BOTH VERDICTS ARE ADVISORY: this check reports and exits 0 (Clarke, 2026-11-12).
+`--strict` opts in to exit 1 on OVER, and nothing in CI passes it. Two reasons,
+both learned after the thresholds were first proposed:
+
+  * The hard tier's failure mode blocks its own remedy. This module runs in the
+    repo-wide suite, so an exit-1 at OVER turns EVERY PR red -- including the PR
+    that would trim the corpus. A shared-resource gate whose trip locks the
+    queue gets armed deliberately, not inherited by whoever crosses the line.
+  * The corpus is not the binding constraint, so a corpus gate would fail CI on
+    the wrong variable. #1718 measured a SUCCESSFUL review's prompt at 106,003
+    of 110,000 tokens (96.4%) with the corpus at 59.3%; the term that fills the
+    rest is the PR's own comment thread, which this module does not look at.
+    #1696's premise (corpus over budget) is falsified by that measurement.
+
+What #1696 AC2 actually asked for is a check that "makes the ceiling visible
+before it bites", which a reported verdict delivers. `run_all.py` picks the
+module up by name, so the reading appears in every CI run's log.
 
 Usage:
     python3 scripts/check-copilot-instruction-budget.py
@@ -272,6 +286,11 @@ def main(argv: list[str] | None = None) -> int:
         help="repository checkout to measure (default: this script's repository)",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 on the OVER verdict (default: advisory, always exit 0)",
+    )
     args = parser.parse_args(argv)
 
     root = (
@@ -298,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(render(report))
-    return 1 if report["verdict"] == "OVER" else 0
+    return 1 if (args.strict and report["verdict"] == "OVER") else 0
 
 
 if __name__ == "__main__":

@@ -29,9 +29,10 @@ Pinned here:
     follow it;
   * the verdict boundaries are `>=` on both thresholds, checked one unit either
     side, so an off-by-one in either direction is caught;
-  * the exit code is non-zero ONLY over the hard threshold -- a guard that
-    exited 1 on today's tree would be reverted within a day, and one that
-    exited 0 unconditionally would never be noticed;
+  * the OVER verdict is ADVISORY by default and exits 1 only under `--strict`
+    (Clarke, 2026-11-12) -- an exit-1 at OVER runs in the repo-wide suite, so
+    it would turn every PR red including the one that trims the corpus, and
+    #1718 shows the corpus is not the term that overflows the prompt anyway;
   * the report prints the observed-refusal note, so a verdict of `OK` cannot be
     read as "review works" -- refusals are already happening at today's share;
   * `MAX_PROMPT_TOKENS` still matches the provenance recorded in the docstring,
@@ -304,7 +305,7 @@ def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
     check("thresholds ordered", M.ADVISORY_SHARE < M.HARD_SHARE)
 
 
-def test_the_exit_code_is_non_zero_only_over_the_hard_threshold():
+def test_the_over_verdict_is_advisory_by_default_and_exits_1_under_strict():
     under = fixture({"AGENTS.md": b"a" * 1000})
     # Bytes needed to reach the hard share, given the recorded budget.
     over_bytes = int(M.HARD_SHARE * M.MAX_PROMPT_TOKENS * M.BYTES_PER_TOKEN) + M.BYTES_PER_TOKEN
@@ -314,8 +315,14 @@ def test_the_exit_code_is_non_zero_only_over_the_hard_threshold():
     with contextlib.redirect_stdout(io.StringIO()):
         under_rc = M.main(["--root", str(under)])
         over_rc = M.main(["--root", str(over)])
+        under_strict = M.main(["--root", str(under), "--strict"])
+        over_strict = M.main(["--root", str(over), "--strict"])
     check("under exits 0", under_rc == 0)
-    check("over exits 1", over_rc == 1)
+    # The advisory default. This is the assertion that keeps a repo-wide gate
+    # from being reintroduced by accident: OVER must NOT fail an ordinary run.
+    check("over exits 0 by default (advisory)", over_rc == 0, "rc=%d" % over_rc)
+    check("under --strict exits 0", under_strict == 0)
+    check("over --strict exits 1", over_strict == 1, "rc=%d" % over_strict)
 
 
 def test_the_report_names_the_observed_refusal_so_ok_is_not_read_as_working():
@@ -347,19 +354,26 @@ def test_the_budget_constant_still_matches_its_recorded_provenance():
           'names=["AGENTS.md","CLAUDE.md"]' in doc, "docstring lost its provenance")
 
 
-def test_the_live_tree_is_within_the_recorded_hard_threshold():
+def test_the_live_tree_corpus_is_measurable_and_its_verdict_reported():
     report = M.measure(ROOT)
     present = {f["path"] for f in report["files"] if f["present"]}
     check("AGENTS.md measured in the live tree", "AGENTS.md" in present, str(present))
     check("CLAUDE.md measured in the live tree", "CLAUDE.md" in present, str(present))
-    check(
-        "corpus within the hard threshold",
-        report["verdict"] != "OVER",
-        "corpus is %d B = %.1f%% of the %d-token budget (hard %.0f%%); "
-        "trimming it is #1696 AC1, a policy change reserved to @clarkemoyer"
+    # ADVISORY, not a check(): see the module docstring. The reading is printed
+    # on every CI run so crossing a threshold is visible, but it does not fail
+    # the suite -- a repo-wide red here would also block the trim that fixes it.
+    print(
+        "  INFO corpus %d B = %.1f%% of the %d-token budget "
+        "(advisory %.0f%%, hard %.0f%%) -- VERDICT %s"
         % (report["total_bytes"], 100 * report["share_of_budget"],
-           report["budget_tokens"], 100 * M.HARD_SHARE),
+           report["budget_tokens"], 100 * M.ADVISORY_SHARE,
+           100 * M.HARD_SHARE, report["verdict"])
     )
+    if report["verdict"] == "OVER":
+        print(
+            "  INFO the corpus is over the hard threshold; trimming it is "
+            "#1696 AC1, a policy change reserved to @clarkemoyer"
+        )
 
 
 def _cli(argv):

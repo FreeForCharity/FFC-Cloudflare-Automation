@@ -1,11 +1,12 @@
 name: '103. Domain - Enforce Standard (GitHub Apex + M365) [CF+M365]'
 run-name: 'Enforce Domain Standard: ${{ inputs.domain }} (dry_run=${{ inputs.dry_run }})'
 
-# HYBRID - Cloudflare DNS + FFC-tenant M365. The cloudflare_enforce job writes tenant-agnostic DNS
-# (apex/www, MX/SPF/DMARC) and is safe for any domain. The exo_check/exo_enable jobs act on the
-# FFC Microsoft tenant's Exchange Online (DKIM create/enable) - for a charity running their OWN
-# Microsoft tenant, dispatch with skip_m365=true so only DNS is touched. See
-# docs/m365-domain-and-dkim.md (internal vs external).
+# HYBRID - Cloudflare DNS + optional FFC-tenant M365. The cloudflare_enforce job writes
+# tenant-agnostic DNS (apex/www, MX/SPF/DMARC) and is safe for any domain. The exo_check/exo_enable
+# jobs act on the FFC Microsoft tenant's Exchange Online (DKIM create/enable), so they are OFF by
+# default and run only for an internal FFC-tenant domain dispatched with manage_m365=true (never
+# together with github_pages_only=true). An external/charity domain needs no flag and never waits
+# on the m365-prod gate. See docs/m365-domain-and-dkim.md (internal vs external).
 
 on:
   workflow_dispatch:
@@ -26,10 +27,11 @@ on:
         description: 'Only manage apex A/AAAA + www CNAME; do not touch MX/TXT/SRV/M365 records'
         type: boolean
         default: false
-      skip_m365:
+      manage_m365:
         description:
-          'Skip Microsoft 365 jobs (DKIM check, set, enable) - they act on the FFC tenant. Use for
-          CF-only domains with no M365 tenant AND for charities running their own Microsoft tenant.'
+          'Internal FFC-tenant domains only: also run the Microsoft 365 DKIM jobs (check, set,
+          enable) against the FFC tenant (m365-prod gate). Leave off for external/charity domains.
+          Ignored when github_pages_only is true.'
         type: boolean
         default: false
       issue_number:
@@ -166,7 +168,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: m365-prod
     needs: [cloudflare_enforce]
-    if: ${{ inputs.skip_m365 != true }}
+    if: ${{ inputs.manage_m365 == true && inputs.github_pages_only != true }}
 
     outputs:
       organization: ${{ steps.org.outputs.organization }}
@@ -235,7 +237,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloudflare-prod-write
     needs: [exo_check]
-    if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
+    if:
+      ${{ inputs.dry_run == false && inputs.manage_m365 == true && inputs.github_pages_only != true
+      }}
 
     steps:
       - uses: actions/checkout@v7.0.1
@@ -283,7 +287,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: m365-prod
     needs: [cloudflare_set_dkim, exo_check]
-    if: ${{ inputs.dry_run == false && inputs.skip_m365 != true }}
+    if:
+      ${{ inputs.dry_run == false && inputs.manage_m365 == true && inputs.github_pages_only != true
+      }}
 
     steps:
       - uses: actions/checkout@v7.0.1

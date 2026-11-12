@@ -80,9 +80,22 @@ def _envelope(public_key, plain: bytes) -> dict:
     }
 
 
-def test_read_lane_and_read_scope():
+def test_gated_lane_and_read_scope():
+    """The GATED environment, still on the READ-scoped credential.
+
+    Both halves matter and they pull in opposite directions, which is why one
+    test asserts them together. Full ticket TEXT waits for a human approval
+    (Clarke, 2026-11-12) -- unlike the ungated subject/count reads -- so the
+    environment must be the gated `whmcs-prod`. But gating must NOT be reached
+    by promoting the credential: `whmcs-prod` is the lane every WRITE workflow
+    uses, and the obvious way to make OIDC work there is to switch to
+    `scope: write` on the WR_ALL identity, which would hand a read-only
+    workflow a writer PAT. 222 already pairs `environment: whmcs-prod` with
+    `scope: read` on READ_ALL, so no credential change is needed, and this test
+    fails if a later edit takes the easy route.
+    """
     job = _job()
-    assert job["environment"] == "whmcs-prod-read", job["environment"]
+    assert job["environment"] == "whmcs-prod", job["environment"]
     kv = [s for s in job["steps"] if s.get("uses") == "./.github/actions/whmcs-secrets-from-kv"]
     assert len(kv) == 1, kv
     assert kv[0]["with"]["scope"] == "read"
@@ -170,7 +183,7 @@ def test_decrypt_helper_keygen_round_trip_and_wrong_key():
 
 
 TESTS = [
-    test_read_lane_and_read_scope,
+    test_gated_lane_and_read_scope,
     test_no_write_permissions,
     test_inputs_reach_script_only_through_env,
     test_run_name_interpolates_no_input,

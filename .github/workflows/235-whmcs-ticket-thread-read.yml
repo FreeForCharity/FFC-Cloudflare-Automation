@@ -16,7 +16,10 @@ run-name: 'WHMCS Ticket Thread Read (encrypted)'
 # and decrypt the artifact with the same script's `decrypt`. The log and job
 # summary carry ticket/message COUNTS and the key fingerprint only.
 #
-# Ungated `whmcs-prod-read` lane with the READ-scoped credential, as
+# GATED `whmcs-prod` lane with the READ-scoped credential. Full ticket TEXT is a
+# different category from the subjects/counts the ungated reads emit, so this one
+# waits for a human approval (Clarke, 2026-11-12). Same shape as 222, which already
+# pairs `environment: whmcs-prod` with `scope: read` on the READ_ALL identity. As
 # 219/221/232/233: `scope: read` on the READ_ALL_FFC_AZURE_* identity. Every
 # input reaches the script through env:, never the script text.
 
@@ -49,7 +52,7 @@ permissions:
 jobs:
   thread_read:
     runs-on: windows-latest
-    environment: whmcs-prod-read
+    environment: whmcs-prod
     timeout-minutes: 15
 
     steps:

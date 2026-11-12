@@ -71,7 +71,7 @@ THE FIRST `github-script` SITE IN THE BURN-DOWN
     the whole argument for moving it rests on a fact about GitHub that the type
     name actively argues against.
 
-    The four `boolean` inputs (`dry_run`, `github_pages_only`, `skip_m365`,
+    The four `boolean` inputs (`dry_run`, `github_pages_only`, `manage_m365`,
     `dmarc_mgmt_debug`) stay interpolated deliberately, and
     `test_the_still_interpolated_inputs_are_type_constrained` pins their
     declarations rather than leaving that as a reading of a comment.
@@ -857,6 +857,38 @@ def test_the_jobs_still_sit_in_the_environments_this_module_is_about():
     )
 
 
+M365_JOBS = ("exo_check", "cloudflare_set_dkim", "exo_enable")
+
+
+def test_m365_jobs_are_opt_in_and_off_for_pages_only_runs():
+    """The FFC-tenant jobs run only when a dispatch asks for them.
+
+    An external domain dispatched with the defaults used to queue `exo_check` on
+    the `m365-prod` gate (vpmin.org, 2026-11-05), holding the one-at-a-time 103
+    queue behind an approval nobody should give. `manage_m365` is the opt-in for
+    internal FFC-tenant domains; `github_pages_only` overrides it.
+    """
+    wf = load_workflow(WORKFLOW)
+    # PyYAML reads the bare `on:` key as boolean True.
+    trigger = wf.get("on", wf.get(True))
+    declared = trigger["workflow_dispatch"]["inputs"]
+    assert "skip_m365" not in declared, "the retired opt-out flag is back"
+    flag = declared["manage_m365"]
+    assert flag.get("default") is False, (
+        f"manage_m365 defaults to {flag.get('default')!r}: M365 must be off "
+        f"unless a dispatch turns it on"
+    )
+    jobs = wf["jobs"]
+    for name in M365_JOBS:
+        cond = str(jobs[name].get("if", ""))
+        assert "inputs.manage_m365 == true" in cond, (
+            f"job {name!r} runs without manage_m365=true (if: {cond!r})"
+        )
+        assert "inputs.github_pages_only != true" in cond, (
+            f"job {name!r} can run on a github_pages_only dispatch (if: {cond!r})"
+        )
+
+
 def test_the_cloudflare_jobs_load_write_scoped_tokens_before_the_call_site():
     """Where the Cloudflare half's credential comes from, and that it precedes the call.
 
@@ -926,7 +958,7 @@ def test_the_still_interpolated_inputs_are_type_constrained():
     through a parameter nobody re-reads.
     """
     declared = _dispatch_inputs()
-    for name in ("dry_run", "github_pages_only", "skip_m365", "dmarc_mgmt_debug"):
+    for name in ("dry_run", "github_pages_only", "manage_m365", "dmarc_mgmt_debug"):
         actual = declared[name].get("type")
         assert actual == "boolean", (
             f"inputs.{name} is declared type {actual!r}, not 'boolean'. It is "

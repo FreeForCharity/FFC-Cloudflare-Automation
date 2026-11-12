@@ -47,7 +47,7 @@ file names — the two differ. Map display→file via
 ```
 (0) Find the application   → 221 (search by domain) → confirm client id → 219 (read full app)
 (1) Domain under CF        → 113 (buy) OR 102 (add existing)          ⏸ cloudflare-prod-write
-(2) DNS + email records    → 103 (skip_m365=true) · 105 · 122          ⏸ cloudflare-prod-write
+(2) DNS + email records    → 103 (M365 off)        · 105 · 122          ⏸ cloudflare-prod-write
 (3) Website repo + Pages   → 701 (assign the issue)                   ⏸ github-prod, cloudflare-prod-write
 (4) Rebrand the site       → edit FFC-EX-<domain>/src/lib/site.config.ts from the application (PR)
 (5) Analytics              → 505 (GA4 property) → 503 (GTM container) → wire analytics.config.ts ⏸ google-prod-write
@@ -98,13 +98,13 @@ file names — the two differ. Map display→file via
 > though the domain steps are listed earlier in the chain above. There is no rush.
 
 - **`103. Domain - Enforce Standard (GitHub Apex + M365)`** — GitHub Pages apex A/AAAA + `www`.
-  **Always pass `skip_m365=true` for a charity** — its `exo_check`/`exo_enable` jobs act on the FFC
-  tenant's Exchange Online. Mail records (MX/SPF/service records) are touched **only** for a domain
-  listed in `data/mail-providers.json`, and then for the provider listed there (`Microsoft365` or
-  `Google`) — an unlisted domain's mail is left alone. So list a charity's domain with **its own**
-  provider before relying on 103 for mail, or use `github_pages_only=true` and add their mail
-  records with `105`. **Defaults to `dry_run=true`** — read the preview, then re-run `dry_run=false`
-  and approve the gate.
+  **Never set `manage_m365=true` for a charity** — that opt-in runs the `exo_check`/`exo_enable`
+  jobs against the FFC tenant's Exchange Online; the default leaves them off. Mail records
+  (MX/SPF/service records) are touched **only** for a domain listed in `data/mail-providers.json`,
+  and then for the provider listed there (`Microsoft365` or `Google`) — an unlisted domain's mail is
+  left alone. So list a charity's domain with **its own** provider before relying on 103 for mail,
+  or use `github_pages_only=true` and add their mail records with `105`. **Defaults to
+  `dry_run=true`** — read the preview, then re-run `dry_run=false` and approve the gate.
 - **Charity's own tenant records:** once the charity has added the domain in _their_ Microsoft or
   Google admin console, write the verification TXT / DKIM / MX records they are given with
   **`105`**, or invite their contact as a zone-scoped Cloudflare Domain Admin with
@@ -126,7 +126,7 @@ file names — the two differ. Map display→file via
 
 Full runbook: **Phase 3b** in `docs/charity-onboarding-lifecycle.md`. The traps, in order:
 
-- `103` with `github_pages_only=true` + `skip_m365=true`. 103 runs one at a time, so an old dry run
+- `103` with `github_pages_only=true` (M365 stays off). 103 runs one at a time, so an old dry run
   for another domain left at its gate blocks yours.
 - `120` derives the repo as `FFC-EX-<domain>`. **Rename the repo first** if its name differs (a
   human step; the sandbox proxy can't rename repos or touch Pages settings). Dispatch with explicit
@@ -204,8 +204,8 @@ Full runbook: **Phase 3b** in `docs/charity-onboarding-lifecycle.md`. The traps,
 
 - [ ] `221` → confirmed client id (not a masked-name guess)
 - [ ] Domain in CF zone (`113`/`102`), active
-- [ ] `103` enforce-standard applied with `skip_m365=true` (apex + `www` + mail DNS); the charity's
-      own Microsoft/Google tenant records added via `105`/`122` — never the FFC tenant
+- [ ] `103` enforce-standard applied with M365 off (apex + `www` + mail DNS); the charity's own
+      Microsoft/Google tenant records added via `105`/`122` — never the FFC tenant
 - [ ] `701` provisioned `FFC-EX-<domain>`, Pages live over HTTPS, maintainer added
 - [ ] `site.config.ts` rebranded from the application (PR merged, drift clean)
 - [ ] `505` GA4 property + `503` GTM container, ids wired in `analytics.config.ts`

@@ -194,10 +194,10 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      always Clarke's.
    - **Brand-new domain** (the zone exists in FFC Cloudflare and nothing serves the apex yet): run
      `python3 scripts/charity_lane_gate.py live-site <domain>` first. If it reports not live, run
-     rule `103-pages-apex` (`domain`, `github_pages_only=true`, `skip_m365=true`, `dry_run=false`),
-     then rule `120-cname-new-domain` (`domains=<domain>`, `skip_dns=true`, `dry_run=false`).
-     Confirm `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the
-     previous lane label).
+     rule `103-pages-apex` (`domain`, `github_pages_only=true`, `dry_run=false`), then rule
+     `120-cname-new-domain` (`domains=<domain>`, `skip_dns=true`, `dry_run=false`). Confirm
+     `https://<domain>/` answers from GitHub, then label the item `lane:live` (remove the previous
+     lane label).
    - **Existing live site** (step 3 found one, or the live-site check says live): stop at **ready
      for cutover**. Run `121` (ungated preflight) for the domain. A site still on the default Pages
      URL always shows one expected blocker, "Artifact apex-ready (no project-basePath refs)": the

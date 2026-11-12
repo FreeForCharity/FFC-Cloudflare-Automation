@@ -25,7 +25,7 @@ run-name: 'Charity-Lane Gate Broker (${{ inputs.mode || github.event.schedule }}
 # (Actions RW, Deployments RW, Issues RW, Contents R). The environment
 # `charity-lane-broker` has NO reviewer and a deployment branch policy of
 # `main` only, so the only code that can hold the PAT is reviewed code on main.
-# scripts/check-broker-environment.py (CI) fails any other workflow that names
+# test_only_753_uses_the_broker_environment (CI) fails any other workflow that names
 # that environment.
 
 on:

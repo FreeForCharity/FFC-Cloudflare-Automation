@@ -1,0 +1,12 @@
+{
+  "target_repo": "FFC-EX-btsscv.org",
+  "work_order": null,
+  "hub_item": "https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/1738",
+  "files": [
+    "src/lib/site.config.ts",
+    "src/data/team.ts",
+    "src/data/team/logesh-varadan.json",
+    "src/data/team/anbarasu-subramonian.json",
+    "src/data/team/senthilrajan-mockian.json"
+  ]
+}

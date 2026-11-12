@@ -2360,6 +2360,46 @@ def test_a_working_link_with_no_name_is_named_rather_than_removed():
         )
 
 
+def test_wordpress_comments_never_reach_a_static_site():
+    """FFC static sites carry no comment system, so the converter strips it.
+
+    FFC-EX-vpmin.org went live with 101 captured comments on 61 pages, gambling
+    spam among them, plus a reply form and an "N comments" count on every post.
+    `removeWordPressComments` drops the comment area (Divi, core and block
+    themes), the byline count and every link into the comment system, and
+    leaves an unbalanced area alone rather than truncating the page.
+    """
+    proc = subprocess.run(
+        ["node", str(REPO_ROOT / "scripts" / "clone-to-routes-lib.mjs"), "--self-test"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=child_env(),
+    )
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out[-2000:]
+    for name in (
+        "a Divi comment section is removed whole, nested sections included",
+        "a core-theme comments area is removed",
+        "a block-theme comments block is removed",
+        "the byline count goes with its separator; the rest of the byline stays",
+        "stray links into the comment system go; an ordinary anchor stays",
+        "an unbalanced area is left alone rather than truncating the page",
+        "a page with no comments is untouched",
+    ):
+        assert f"ok   {name}" in out, (name, out[-2000:])
+
+    # Wired into the per-page pipeline, before paths are tokenized (so its
+    # href tests see the captured links), and its count is reported.
+    src = (REPO_ROOT / "scripts" / "convert-clone-to-routes.mjs").read_text(encoding="utf-8")
+    call = "removeWordPressComments(out)"
+    assert call in src, _around(src, "removeFormerHostCredits(out)", call)
+    assert src.index(call) < src.index("tokenizeAssetPaths(out"), _around(
+        src, call, "comment removal must run before path tokenizing"
+    )
+    assert "tally.commentsRemoved" in src[src.index("console.log") :], "count not reported"
+
+
 def test_what_can_be_repaired_is_repaired_rather_than_removed():
     """Removal is the last resort, not the first move. Three passes ahead of it
     put a real destination back on a link the capture left parked, and each one

@@ -574,6 +574,122 @@ def test_the_workflow_has_a_safety_table_row():
     assert "| 744 " in doc, "add a row to docs/workflow-safety-and-approvals.md"
 
 
+# --- a work queue decays on human time, not on publication cadence (run 249) --
+
+
+def test_the_actionable_threshold_is_12_hours():
+    assert const("ACTIONABLE_STALE_AFTER_HOURS") == 12
+
+
+def test_pending_gates_is_the_registered_work_queue():
+    # Adding a field here is a deliberate act — it declares that a reader is
+    # expected to ACT on the value. This test exists so the list cannot grow or
+    # shrink silently.
+    assert const("ACTIONABLE_FIELDS") == ["pending_gates"]
+
+
+def test_run_249_a_day_old_feed_still_asserting_two_gates_is_a_finding():
+    # The measured case. On 2026-10-11T07:1xZ the published feed was built
+    # 2026-10-10T07:36:04Z — 23.5h old, well inside the 36h window, so 744 read
+    # FRESH on its 10:23Z tick and would have read FRESH again at the next one.
+    # The page was meanwhile telling the public that two environment approval
+    # gates were waiting on a human; both had completed the previous evening,
+    # and zero were pending.
+    r = classify(
+        _feed("2026-07-31T12:30:00Z", pending_gates=[{"run_id": 37283881466}, {"run_id": 37384577096}])
+    )
+    assert r["verdict"] == "ACTIONABLE_STALE", r
+    assert r["ageHours"] == 23.5, r
+    assert r["actionableFields"] == ["pending_gates"], r
+    assert "pending_gates` (2)" in r["detail"], r
+
+
+def test_an_empty_queue_at_the_same_age_is_fresh():
+    # The first of two discriminators. Same timestamp as the case above, so a
+    # rule that keyed on age alone would fail here. An empty queue asserts that
+    # nothing is waiting, and that claim does not decay.
+    r = classify(_feed("2026-07-31T12:30:00Z", pending_gates=[]))
+    assert r["verdict"] == "FRESH", r
+    assert r["ageHours"] == 23.5, r
+
+
+def test_a_recent_feed_asserting_two_gates_is_fresh():
+    # The second discriminator, from the other side: same content as the finding
+    # case, fresh timestamp. A rule that keyed on content alone would fail here.
+    r = classify(_feed("2026-08-01T10:24:42Z", pending_gates=[{"run_id": 1}, {"run_id": 2}]))
+    assert r["verdict"] == "FRESH", r
+
+
+def test_exactly_at_the_actionable_threshold_is_not_yet_a_finding():
+    # Boundary and operator direction: `> threshold`, so 12.0h is still fresh.
+    # Flipping the comparison flips this test and leaves the run-249 case green,
+    # which is what makes the pair a mutation check rather than one assertion.
+    r = classify(_feed("2026-08-01T00:00:00Z", pending_gates=[{"run_id": 1}]))
+    assert r["ageHours"] == 12.0, r
+    assert r["verdict"] == "FRESH", r
+
+
+def test_just_past_the_actionable_threshold_is_a_finding():
+    r = classify(_feed("2026-07-31T23:54:00Z", pending_gates=[{"run_id": 1}]))
+    assert r["ageHours"] == 12.1, r
+    assert r["verdict"] == "ACTIONABLE_STALE", r
+
+
+def test_past_the_publication_window_reports_stale_not_actionable_stale():
+    # Precedence, so the two budgets cannot double-report the same feed. A feed
+    # outside the 36h window is already a finding; narrowing it to the queue
+    # would bury the bigger fact that nothing is publishing at all.
+    r = classify(_feed("2026-07-29T10:00:00Z", pending_gates=[{"run_id": 1}]))
+    assert r["verdict"] == "STALE", r
+
+
+def test_an_absent_queue_field_is_not_a_finding():
+    # Documented asymmetry with the malformed case below. With no
+    # `pending_gates` key the page renders no queue, so it misleads no reader —
+    # and firing here would red-line every feed generated before this check.
+    r = classify(_feed("2026-07-31T12:30:00Z"))
+    assert r["verdict"] == "FRESH", r
+
+
+def test_a_queue_field_that_is_not_an_array_is_reported_not_assumed_empty():
+    # The fail-open this rule would otherwise have. `Array.isArray(x) && x.length`
+    # reads naturally and goes silent the moment the generator emits a COUNT
+    # instead of a list — which is how the gate panel is described in prose, so
+    # it is a plausible change. #977's standard is that anything which cannot
+    # establish the state is a finding, never a pass.
+    r = classify(_feed("2026-07-31T12:30:00Z", pending_gates=2))
+    assert r["verdict"] == "ACTIONABLE_STALE", r
+    assert "not an array" in r["detail"], r
+
+
+def test_an_actionable_stale_feed_sets_has_finding():
+    # The workflow folds every verdict through `hasFinding` alone, so this is
+    # the assertion that actually opens the rolling issue.
+    a = analyze(observations=[_feed("2026-07-31T12:30:00Z", pending_gates=[{"run_id": 1}])])
+    assert a["hasFinding"] is True, a
+    assert len(a["actionableStale"]) == 1, a
+    assert len(a["stale"]) == 0, a
+
+
+def test_the_summary_names_both_budgets():
+    # A one-line summary that reports only the 36h threshold makes an
+    # ACTIONABLE_STALE run look like it was judged against a window it passed.
+    a = analyze(observations=[_feed("2026-07-31T12:30:00Z", pending_gates=[{"run_id": 1}])])
+    s = _summary(a)
+    assert "actionable_stale=1" in s, s
+    assert "actionable_threshold=12h" in s, s
+
+
+def test_the_rendered_body_explains_the_queue_section_and_its_limit():
+    a = analyze(observations=[_feed("2026-07-31T12:30:00Z", pending_gates=[{"run_id": 1}])])
+    body = render(a)
+    assert "Stale work queue" in body, body
+    # The complement must be stated: this catches over-reporting only. A gate
+    # opened AFTER generation is absent from a feed that reads perfectly fresh,
+    # and nothing in the feed's own bytes can reveal it.
+    assert "#1547" in body, body
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

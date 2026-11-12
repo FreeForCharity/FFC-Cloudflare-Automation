@@ -74,10 +74,14 @@ def test_205_requires_allowlisted_template():
 
 
 def test_103_must_be_pages_only_without_m365():
-    ok = {"domain": "newcharity.org", "github_pages_only": "true", "skip_m365": "true", "dry_run": "false"}
+    ok = {"domain": "newcharity.org", "github_pages_only": "true", "dry_run": "false"}
     assert not refused("103-pages-apex", ok)
-    assert refused("103-pages-apex", {**ok, "skip_m365": "false"})
+    # M365 is opt-in, so omitting the flag is the safe default; saying so explicitly is too.
+    assert not refused("103-pages-apex", {**ok, "manage_m365": "false"})
+    assert refused("103-pages-apex", {**ok, "manage_m365": "true"})
     assert refused("103-pages-apex", {**ok, "github_pages_only": "false"})
+    # The retired opt-out flag is no longer an input of 103, so it must not pass either.
+    assert refused("103-pages-apex", {**ok, "skip_m365": "true"})
 
 
 def test_domain_pattern_rejects_injection():

@@ -124,14 +124,14 @@
       "workflow": "103-enforce-domain-standard.yml",
       "environments": ["cloudflare-prod-write"],
       "live_site_check": ["cloudflare-prod-write"],
-      "required": ["domain", "github_pages_only", "skip_m365"],
+      "required": ["domain", "github_pages_only"],
       "inputs": {
         "domain": {
           "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
         },
         "dry_run": { "enum": ["true", "false"] },
         "github_pages_only": { "enum": ["true"] },
-        "skip_m365": { "enum": ["true"] },
+        "manage_m365": { "enum": ["false"] },
         "issue_number": { "pattern": "^[0-9]{1,6}$" }
       }
     },

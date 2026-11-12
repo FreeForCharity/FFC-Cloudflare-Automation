@@ -152,10 +152,10 @@ marker orders from `224` need no gate.
   the order's Pages URL. **Accepting it stays Tier 2**: the conductor posts the verified order as
   `DECISION NEEDED`.
 - **New domain, no live site:** once the zone is in FFC Cloudflare, the conductor runs `103` with
-  `github_pages_only=true` and `skip_m365=true` (rule `103-pages-apex`), then the `CNAME` change in
-  the `FFC-EX-*` repo. The gate script runs a live-site check first and refuses if the apex or `www`
-  already points outside GitHub Pages or answers from a non-GitHub server. Mail records are left to
-  the charity's own tenant (lifecycle Phase 2).
+  `github_pages_only=true` and M365 left off (rule `103-pages-apex` refuses `manage_m365=true`),
+  then the `CNAME` change in the `FFC-EX-*` repo. The gate script runs a live-site check first and
+  refuses if the apex or `www` already points outside GitHub Pages or answers from a non-GitHub
+  server. Mail records are left to the charity's own tenant (lifecycle Phase 2).
 - **Domain already serving a live site:** the conductor stops at **ready for cutover**: `121`
   preflight READY, preview approved by the charity. The cutover itself (`120`) is Tier 2.
 

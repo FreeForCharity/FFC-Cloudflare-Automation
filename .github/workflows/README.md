@@ -628,7 +628,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | --- | --- | --- | --- | --- | --- |
 | 701 | Website - Provision (Issue Assigned) [CF+Repo] | `701-website-provision.yml` | issues, repository_dispatch, workflow_dispatch | Writes (gated) | ✅ cloudflare-prod-write / ✅ github-prod |
 | 702 | Domain - Deploy Static Clone to FFC-EX Repo | `702-ffc-ex-clone-deploy.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod |
-| 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | schedule, workflow_dispatch | Writes (data PR only) | ✅ github-prod |
+| 703 | Sites List - Generate (CSV + JSON) [GH] | `703-sites-list-generate.yml` | workflow_dispatch | Writes (data PR only) | ✅ github-prod |
 | 704 | Website - Analytics Wire [GH] | `704-website-analytics-wire.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod |
 | 705 | Website - Capture WordPress Site (REST API + Scrape) [WP] | `705-website-wordpress-capture.yml` | workflow_dispatch | Reads | none (no credentials) |
 | 706 | Website - WordPress to Pages Conversion (end to end) [WP] | `706-website-wordpress-to-pages.yml` | workflow_dispatch | Writes (gated) | ✅ github-prod on the `deliver` job ONLY |
@@ -666,6 +666,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 750 | Repo - Charity-Lane Duplicate Lookup (read-only) [GH] | `750-charity-lane-lookup.yml` | workflow_dispatch | Reads | — |
 | 751 | Website - Security Overrides Sync (FFC-EX) [GH] | `751-website-security-overrides-sync.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 752 | Repo - Merge Queue Backfill (FFC-EX) [GH] | `752-repo-merge-queue-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
+| 753 | Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH] | `753-charity-lane-gate-broker.yml` | schedule, workflow_dispatch | Writes (policy-bound approvals) | charity-lane-broker (**no reviewer**, deployment branch policy `main` only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

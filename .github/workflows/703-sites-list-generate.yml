@@ -10,10 +10,21 @@ run-name: 'Generate Sites List'
 # dispatch the sibling export workflows, so generation lives here. Downstream
 # consumers (e.g. ffcadmin.org) pull the published files from this repo.
 
+# No cron of its own: the weekly run is dispatched by 753 (gate broker) every
+# Monday as the `weekly-sites-list` policy sequence, after 753 has refreshed
+# 601's export, and 753 approves this job's github-prod gate under policy rule
+# `703-generate`. A cron here parked at that gate until janitor 734 reaped it.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 8 * * 1' # Weekly on Mondays at 08:00 UTC
+    inputs:
+      prime_wpmudev:
+        description: 'Dispatch 601 at the end for next week (false when 753 already ran 601 first)'
+        required: false
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
 
 permissions:
   contents: write
@@ -290,7 +301,7 @@ jobs:
         # but qualified on the PAT step, because a bare `always()` would run
         # this after the Key Vault load failed and report "no credential" as
         # "the dispatch failed" (#899, test_always_steps_are_guarded).
-        if: always() && steps.load_pat.conclusion == 'success'
+        if: always() && steps.load_pat.conclusion == 'success' && inputs.prime_wpmudev != 'false'
         env:
           REPO: ${{ github.repository }}
         run: |

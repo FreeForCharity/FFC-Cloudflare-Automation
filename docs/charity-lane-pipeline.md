@@ -195,6 +195,13 @@ The policy file is the authority; changing it changes what an unattended agent m
 a policy change for Clarke. `.claude/settings.json` allows only the script's subcommands, not raw
 `pending_deployments` calls.
 
+**Since 2026-11-12 the script runs inside GitHub Actions as workflow 753** (gate broker,
+[charity-intake-autonomy.md](charity-intake-autonomy.md)), because cloud sessions cannot approve
+gates and the local Conductor is retired. A session or scheduled task asks for a gated step by
+dispatching `753-charity-lane-gate-broker.yml` with `mode=run`, `rule=<id>` and `inputs_json`. 753
+also runs Gate 1/2 itself every day (`advance`: 232, then up to three accepts) and the weekly sites
+list (`sequence weekly-sites-list`).
+
 ## Real problems (the only escalations)
 
 - An ESCALATE verdict, an ineligible applicant, or a fraud flag.

@@ -1,8 +1,20 @@
 {
-  "_comment": "Gate policy for the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). scripts/charity_lane_gate.py is the ONLY path by which the Onboarding Conductor clears an environment gate: it validates a dispatch against one rule below, dispatches it itself, and approves only that run, only for the rule's environments. Inputs are a closed set: an input not listed under a rule is refused. Changing this file changes what an unattended agent may approve, so it is a policy change for Clarke.",
+  "_comment": "Gate policy for the charity-lane pipeline (docs/charity-lane-pipeline.md, epic #1618). scripts/charity_lane_gate.py is the ONLY path by which the Onboarding Conductor clears an environment gate: it validates a dispatch against one rule below, dispatches it itself, and approves only that run, only for the rule's environments. Inputs are a closed set: an input not listed under a rule is refused. Changing this file changes what an unattended agent may approve, so it is a policy change for Clarke. The same script also runs inside workflow 753 (environment charity-lane-broker, docs/charity-intake-autonomy.md), so these rules are exactly what GitHub Actions itself may approve with no agent session and no operator present; `advance` and `sequences` below are the unattended loops 753 runs on its schedules.",
   "repo": "FreeForCharity/FFC-Cloudflare-Automation",
   "ref": "main",
   "ledger_issue": 1608,
+  "advance": {
+    "_comment": "Gate 1/2 loop: run the verdicts rule, then accept each ACCEPT row whose own fraud_check is pass, oldest order first, through 226-approve-one (gate 1) or 211-accept-one (gate 2). At most max_accepts per run (the testing-period limit in docs/charity-lane-pipeline.md).",
+    "verdicts_rule": "232-verdicts",
+    "verdicts_artifact": "charity-lane-verdicts",
+    "max_accepts": 3
+  },
+  "sequences": {
+    "weekly-sites-list": [
+      { "rule": "601-export", "inputs": {} },
+      { "rule": "703-generate", "inputs": { "prime_wpmudev": "false" } }
+    ]
+  },
   "never": [
     "211 cancel or fraud",
     "226 reconcile or reconcile-report, or approve with more than one order id",
@@ -179,6 +191,37 @@
       "inputs": {
         "target_repos": { "pattern": "^FFC-EX-[a-z0-9.-]{3,100}$" },
         "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
+      "id": "232-verdicts",
+      "purpose": "Gate 1/2 input: the read-only verdicts run that `advance` reads (ungated; listed so the broker may dispatch it)",
+      "workflow": "232-whmcs-charity-lane-verdicts.yml",
+      "environments": [],
+      "required": [],
+      "inputs": {
+        "fraud_order_id_field": { "enum": ["ordernum", "id"] },
+        "issue_number": { "pattern": "^[0-9]{0,6}$" }
+      }
+    },
+    {
+      "id": "601-export",
+      "purpose": "Weekly sites list, step 1: refresh the read-only WPMUDEV export that 703 consumes (gated only because wpmudev-prod carries a reviewer)",
+      "workflow": "601-wpmudev-export-sites.yml",
+      "environments": ["wpmudev-prod"],
+      "required": [],
+      "inputs": {
+        "output_file": { "enum": ["wpmudev_domains.csv"] }
+      }
+    },
+    {
+      "id": "703-generate",
+      "purpose": "Weekly sites list, step 2: regenerate the list and open the data PR (a PR, so the merge queue still reviews it)",
+      "workflow": "703-sites-list-generate.yml",
+      "environments": ["github-prod"],
+      "required": ["prime_wpmudev"],
+      "inputs": {
+        "prime_wpmudev": { "enum": ["false"] }
       }
     }
   ]

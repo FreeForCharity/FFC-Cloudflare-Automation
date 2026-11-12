@@ -45,6 +45,11 @@ to ledger #1608. A run the broker did not dispatch is never approved.
   fine-grained token for this repository only, with Actions (read/write), Deployments (read/write),
   Issues (read/write) and Contents (read). It cannot push, change settings, or reach another
   repository.
+- **Dedicated Azure identity.** 753 signs in to Azure as **FFC Application Intake**
+  (`vars.INTAKE_FFC_AZURE_KV_CLIENT_ID`), not the shared `ffc-admin-kv-writer`. Every gated write
+  lane federates to the writer, so putting an ungated environment on it would let 753 read every
+  `wr-all-*` secret in the vault. Intake holds **Key Vault Secrets User** scoped to the one secret
+  above and nothing else, so an ungated run can reach exactly one credential.
 - **No reviewer on the broker environment, by design.** The reviewer moved from each run to the code
   and policy that define the runs (the principle in
   [human-intervention-map.md](human-intervention-map.md)). The environment's lack of a reviewer is
@@ -80,16 +85,31 @@ workflow names to exist.
      -f name=main -f type=branch
    ```
 
-2. **Federated credential** on the Key Vault writer app (`vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID`),
-   subject `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:charity-lane-broker`,
-   following [azure-oidc-federated-credentials.md](azure-oidc-federated-credentials.md).
+2. **Azure identity.** App registration **FFC Application Intake** (client id
+   `c7d0a578-58a5-4a04-b490-82a4d203f752`, object id `67445b55-c007-4cf5-a246-c601ccfd3a9d`) with a
+   service principal, and one federated credential
+   `gha-FFC-Cloudflare-Automation-charity-lane-broker`, subject
+   `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:charity-lane-broker` (issuer and
+   audience as in [azure-oidc-federated-credentials.md](azure-oidc-federated-credentials.md)).
+   Repository variable `INTAKE_FFC_AZURE_KV_CLIENT_ID` holds the client id; the tenant reuses
+   `WR_ALL_FFC_AZURE_TENANT_ID`.
 
 3. **Token.** Clarke mints a fine-grained PAT (resource owner FreeForCharity, repository
    FFC-Cloudflare-Automation only, permissions above, 1-year expiry) and stores it as
    `wr-all-ffc-charity-lane-broker-github-pat` in `kv-ffc-admin-prod-cbm`. Rotation = a new secret
    version; 733 reminds quarterly.
 
-4. **First run.** Dispatch 753 `mode=advance dry_run=true`, then
+4. **Secret-scoped role.** After step 3 (a secret-scoped assignment needs the secret to exist),
+   grant Intake read on that one secret and nothing wider:
+
+   ```bash
+   KV_ID=$(az keyvault show --name kv-ffc-admin-prod-cbm --query id -o tsv)
+   az role assignment create --assignee-object-id 53e96c75-2071-4649-9a84-c1625c411883 \
+     --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" \
+     --scope "$KV_ID/secrets/wr-all-ffc-charity-lane-broker-github-pat"
+   ```
+
+5. **First run.** Dispatch 753 `mode=advance dry_run=true`, then
    `mode=sequence rule=weekly-sites-list dry_run=true`; read the plan on #1608. Then one live
    `mode=run` for a pending, ACCEPT-verdict order.
 

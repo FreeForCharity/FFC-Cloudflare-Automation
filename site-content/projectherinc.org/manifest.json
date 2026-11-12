@@ -1,0 +1,5 @@
+{
+  "target_repo": "FFC-EX-projectherinc.org",
+  "work_order": "",
+  "files": ["src/lib/site.config.ts", "src/data/team.ts", "src/data/team/garyel-tubbs.json"]
+}

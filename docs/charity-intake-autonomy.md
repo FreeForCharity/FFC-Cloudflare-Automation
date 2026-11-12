@@ -113,6 +113,22 @@ workflow names to exist.
    `mode=sequence rule=weekly-sites-list dry_run=true`; read the plan on #1608. Then one live
    `mode=run` for a pending, ACCEPT-verdict order.
 
+## Footer address rule (Clarke, 2026-11-12)
+
+A charity's website footer always shows City and State. It shows a street address only when the
+applicant typed one into the application field marked as the **public** street address. That field
+is the applicant's consent to publish it, so no further confirmation step is needed.
+
+| Application                                    | Footer address                          |
+| ---------------------------------------------- | --------------------------------------- |
+| Public street-address field filled and valid   | that street address, then City, State   |
+| Public street-address field present but empty  | City, State                             |
+| Older application with no public address field | City, State, until the charity confirms |
+
+Never sourced from the IRS / ProPublica record, the WHMCS client mailing address, or any field the
+applicant did not mark public. On 2026-11-12 btsscv.org and projectherinc.org were provisioned with
+the IRS address and corrected the same day (FFC-EX-btsscv.org#7, FFC-EX-projectherinc.org#6).
+
 ## What still needs a person
 
 - Paying for a domain (Gate 4 order accept, 113).

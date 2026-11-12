@@ -136,11 +136,37 @@ jobs:
           # `Security Audit` is the workflow this issue was filed from: it is the daily
           # `pnpm audit --prod` on every Node repo in the fleet, and it was red for eleven days
           # on the template with nothing watching it.
+          #
+          # FFC-EX-canary IS THE FIFTH ENTRY, AND IT IS THE POINT OF THE "DELIBERATELY SMALL"
+          # NOTE ABOVE RATHER THAN AN EXCEPTION TO IT (#1533). #1296's cohort was the four
+          # `FFC-IN-*` repos; canary is `FFC-EX-*`, so it fell outside a list enumerated by
+          # prefix and nothing looked. Measured: nine consecutive scheduled failures,
+          # 2026-10-01 -> 2026-10-09, last green 2026-09-30, zero alerts of any kind. The same
+          # commit `4948c58` passed on 09-30 and failed on 10-01, so the tree never moved --
+          # `GHSA-vcvr-r3jv-pc5j` (critical, RCE in `next/og`) published between the two runs,
+          # which is exactly the case `security-audit.yml`'s own header says the daily cron
+          # exists to catch. It caught it nine times and nothing carried it anywhere.
+          #
+          # Canary is the repo that exists to fail FIRST, ahead of the ~78-repo FFC-EX fleet
+          # (#755), so it is the one satellite whose silence costs the most: an unwatched canary
+          # is not a canary. Growing the list by one repo is still the cohort-at-a-time rule --
+          # canary's audit has a known-red backlog of exactly one advisory, so the first sweep
+          # opens one alert, not a wall of them.
+          #
+          # THE SHAPE WILL RECUR AND THIS ENTRY DOES NOT FIX IT. This list is hand-maintained,
+          # so it is an allowlist of repos somebody remembered. #1296 replaced one hard-coded
+          # scope with a longer hard-coded scope; this is the second instance, and the third is
+          # likely an FFC-EX charity site. 741 already re-derives the Node fleet from the org
+          # listing every run, which is evidence that deriving this list ("every repo with a
+          # `security-audit.yml`") is cheap rather than speculative -- 741 measures whether
+          # detection EXISTS, 740 measures whether anyone is told when it fires, and only the
+          # first of those two is derived today. Tracked as the open half of #1533.
           WATCHED_SATELLITE_WORKFLOWS: |
             FreeForCharity/FFC-IN-FFC_Single_Page_Template :: Security Audit
             FreeForCharity/FFC-IN-Footer_Only_Template :: Security Audit
             FreeForCharity/FFC-IN-ffcadmin.org :: Security Audit
             FreeForCharity/FFC-IN-freeforcharity.org :: Security Audit
+            FreeForCharity/FFC-EX-canary :: Security Audit
           # Empty on a schedule, so scheduled sweeps always write. This inverts the repo's usual
           # `dry_run` default (true on write workflows) on purpose: 740 is a monitor whose whole
           # job is to write, and a monitor that defaults to doing nothing is the bug it exists to

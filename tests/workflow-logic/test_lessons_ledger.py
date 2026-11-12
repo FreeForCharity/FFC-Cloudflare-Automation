@@ -1149,17 +1149,29 @@ def test_the_1441_regression_a_shifted_bare_citation_is_reported():
     quoted anchor caught them. The pre-shift coordinate below is therefore that
     PR's own latest shift, not a number chosen to make the test pass — and the
     fact that it recurred within one PR is the argument for the anchor rule.
+
+    #1533 shifted the same file a third time, by +26, and this is the first
+    shift the BARE citation did not survive: the anchored `:598` landed on
+    `const recorded = existing ? recordedRun(…)` and the bare `:518` on a `//`
+    comment, both real content — so the blank rule was again silent for both,
+    and the quoted anchor reported BOTH. The difference from #1441/#1447 is not
+    the shift, it is that L222's bare citation has since acquired a quote
+    (`const failed`); a bare coordinate is bare of a PATH, not of an anchor,
+    and once it carries one it is caught like any other. That is the rule
+    earning its keep rather than a change in the failure shape. The live bare
+    citation is now `:544`; this fixture tracks it, which is the point of
+    deriving it from the shipped row rather than freezing a copy.
     """
     row = next(
         line
         for line in LEDGER.read_text(encoding="utf-8").splitlines()
         if line.strip().startswith("| L222 ")
     )
-    assert "`:518`" in row, (
+    assert "`:544`" in row, (
         "L222 no longer carries the bare citation this regression is about — "
         "re-derive the fixture from whichever row does, or drop this test"
     )
-    shifted = _FIXTURE_HEADER + row.replace("`:518`", "`:507`") + "\n"
+    shifted = _FIXTURE_HEADER + row.replace("`:544`", "`:507`") + "\n"
     problems = citation_problems(shifted, label="planted.md")
     assert problems, (
         "the pre-#1441 coordinate must be reported; it is real code, so only "

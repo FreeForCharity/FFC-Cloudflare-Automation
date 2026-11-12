@@ -22,8 +22,11 @@
       - org Facebook + LinkedIn Page URLs present, well-formed, and answering
         HTTP 2xx/3xx (no redirect followed). Any other answer -- including the
         404 / 999 / 400 responses LinkedIn and Facebook hand to non-browser
-        clients for pages that DO exist -- is UNVERIFIED -> ESCALATE, never a
-        NEED_INFO, so a bot wall can never send an applicant a false ticket;
+        clients for pages that DO exist -- is UNVERIFIED, never a NEED_INFO, so
+        a bot wall can never send an applicant a false ticket. Facebook
+        UNVERIFIED is ESCALATE; LinkedIn UNVERIFIED is INFO (Clarke, 2026-11-12:
+        LinkedIn answers every bot with 999, so it could never verify), and a
+        pasted admin/tab LinkedIn URL is reduced to the public page first;
       - Terms of Service and US-establishment attestations ticked;
       - legal-status answer present, recognized, and matching the track;
       - EIN present; for pid 33 confirmed as a 501(c)(3) on ProPublica (the
@@ -165,7 +168,7 @@ $script:LaneReasonCodes = [ordered]@{
     FACEBOOK_URL_UNVERIFIED       = @{ severity = 'ESCALATE'; description = 'Facebook Page URL did not answer HTTP 2xx/3xx (or was not probed); a human must open it.' }
     LINKEDIN_URL_MISSING          = @{ severity = 'NEED_INFO'; description = 'Organization LinkedIn Page URL missing.' }
     LINKEDIN_URL_NOT_ORG_PAGE     = @{ severity = 'NEED_INFO'; description = 'LinkedIn URL is not an organization page (a company, school or showcase page).' }
-    LINKEDIN_URL_UNVERIFIED       = @{ severity = 'ESCALATE'; description = 'LinkedIn Page URL did not answer HTTP 2xx/3xx (or was not probed); a human must open it.' }
+    LINKEDIN_URL_UNVERIFIED       = @{ severity = 'INFO'; description = 'Well-formed LinkedIn organization page URL that did not answer HTTP 2xx/3xx (LinkedIn answers non-browser clients with 999). Not blocking (Clarke, 2026-11-12): the EIN, Candid and fraud checks gate the accept.' }
     TOS_NOT_ATTESTED              = @{ severity = 'NEED_INFO'; description = 'Terms of Service certification not ticked.' }
     US_NOT_ATTESTED               = @{ severity = 'NEED_INFO'; description = 'US-establishment attestation not ticked.' }
     LEGAL_STATUS_MISSING          = @{ severity = 'NEED_INFO'; description = 'Legal-status answer missing.' }
@@ -396,7 +399,19 @@ function Get-LaneSocialPageUrl {
     if ([string]::IsNullOrWhiteSpace($value)) { $value = Get-FieldValue -Fields $Fields -Pattern $script:LaneFieldPatterns.LinkedInFallback }
     if (Test-PlaceholderValue -Value $value) { return [pscustomobject]@{ Url = ''; Code = 'LINKEDIN_URL_MISSING' } }
     if (-not (Test-LinkedInOrgUrl -Value $value)) { return [pscustomobject]@{ Url = ''; Code = 'LINKEDIN_URL_NOT_ORG_PAGE' } }
-    return [pscustomobject]@{ Url = (Get-HrefOrRaw -Value $value); Code = $null }
+    return [pscustomobject]@{ Url = (ConvertTo-LinkedInOrgCanonicalUrl -Value (Get-HrefOrRaw -Value $value)); Code = $null }
+}
+
+function ConvertTo-LinkedInOrgCanonicalUrl {
+    # Applicants paste whatever their browser shows, often the page's admin view
+    # (/company/143949611/admin/dashboard/) or a tab (/company/x/home/). Keep the
+    # public page only: https://www.linkedin.com/<company|school|showcase>/<slug>.
+    # Anything that does not match is returned unchanged.
+    [OutputType([string])]
+    param([string]$Value)
+    $m = [regex]::Match([string]$Value, '^(?i)https?://(?:[a-z]{2,3}\.|www\.)?linkedin\.com/(company|school|showcase)/([^/?#]+)')
+    if (-not $m.Success) { return [string]$Value }
+    return 'https://www.linkedin.com/{0}/{1}' -f $m.Groups[1].Value.ToLowerInvariant(), $m.Groups[2].Value
 }
 
 function Test-LaneProbeAnswered {

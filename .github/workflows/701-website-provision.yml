@@ -415,6 +415,13 @@ jobs:
 
             const hasUsZip = (value) => /\b\d{5}(?:-\d{4})?\b/.test(String(value || ''));
 
+            // A charity-confirmed footer location of the form "City, ST" or "City, State",
+            // which is what the pid 33 application's "City & state to show in your website
+            // footer" field collects. No digits allowed, so a street address never passes
+            // as a location; a full address still needs a ZIP.
+            const isCityState = (value) =>
+              /^[A-Za-z][A-Za-z .'-]*,\s*[A-Za-z][A-Za-z .]*$/.test(String(value || '').trim());
+
             const isHttpsUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
 
             const phoneDigits = (value) => String(value || '').replace(/\D/g, '');
@@ -734,11 +741,12 @@ jobs:
                 return;
               }
             } else {
-              // Manual dispatch uses a freeform address input.
-              // If provided, require it to at least include a US ZIP.
+              // Manual dispatch uses a freeform address input. If provided, it must be
+              // either a full address with a US ZIP, or a "City, State" location (the
+              // application's public footer location, which the charity confirmed).
               if (!isDisallowedValue(footerAddress)) {
-                if (!hasUsZip(footerAddress)) {
-                  core.setFailed('Footer address must include a valid US ZIP code (e.g., 85001 or 85001-1234).');
+                if (!hasUsZip(footerAddress) && !isCityState(footerAddress)) {
+                  core.setFailed('Footer address must include a valid US ZIP code (e.g., 85001 or 85001-1234), or be a "City, State" location.');
                   return;
                 }
               }

@@ -374,3 +374,16 @@ if __name__ == "__main__":
             failures += 1
             print(f"  FAIL {t.__name__}: {e}")
     sys.exit(1 if failures else 0)
+
+
+def test_manual_footer_address_accepts_a_city_state_location():
+    # pid 33 asks only "City & state to show in your website footer"; that is the
+    # charity's confirmed public location and must not be refused for lacking a ZIP.
+    for good in ("Santa Clarita, CA", "Gainesville, Florida", "Lincoln, NE", "St. Louis, MO",
+                 "6245 L St, Lincoln, NE 68510"):
+        r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_address": good}}))
+        assert r["failed"] is None, (good, r)
+        assert json.loads(r["outputs"]["footer_address_json"]) == good, (good, r)
+    for bad in ("12 Main St, Springfield", "Springfield", "PO Box 5, Lincoln, NE"):
+        r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_address": bad}}))
+        assert r["failed"] and "ZIP" in r["failed"], (bad, r)

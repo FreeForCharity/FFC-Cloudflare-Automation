@@ -157,6 +157,7 @@ function Read-SiteFieldsConfig {
                 multiline            = [bool]$f.multiline
                 hosts                = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
                 rejectPathPatterns   = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
+                rejectHosts          = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
             })
     }
     if ($fields.Count -eq 0) { throw 'Site-fields config lists no fields.' }
@@ -220,9 +221,20 @@ function Remove-SiteFieldEmbeddedContact {
     return @{ text = $out; redacted = ($out -ne $Text) }
 }
 
+# Paths that are an account's own back office, never a public page, on any
+# host: an applicant pasting the URL they were looking at (LinkedIn
+# /company/x/admin/dashboard/, a Zeffy or Idealist admin screen) must not
+# reach a public footer (orders 875/876, 2026-11-12).
+$script:SiteFieldAdminPath = '(?i)/(wp-)?admin(/|$)|/dashboard(/|$)'
+
+# Click-tracking query parameters, dropped rather than published
+# (Facebook share links carry ?mibextid=..., ads carry utm_*).
+$script:SiteFieldTrackingParam = '(?i)^(utm_[a-z]+|mibextid|fbclid|gclid|igshid|si|ref|ref_src|trk|trackingid)$'
+
 function Test-SiteFieldUrl {
     # https only, no credentials in the authority, no secret-looking query
-    # parameter, optional host allowlist and rejected path patterns.
+    # parameter, optional host allowlist/denylist and rejected path patterns,
+    # no admin/dashboard path; tracking parameters are stripped.
     param([string]$Text, $Field)
     if ($Text -match '\s') { return @{ ok = $false; reason = 'url_has_whitespace' } }
     $u = $null
@@ -236,13 +248,26 @@ function Test-SiteFieldUrl {
         foreach ($h in $Field.hosts) { if ($hostName -eq $h -or $hostName.EndsWith(".$h")) { $hostOk = $true; break } }
         if (-not $hostOk) { return @{ ok = $false; reason = 'url_host_not_allowed' } }
     }
+    foreach ($h in @($Field.rejectHosts)) {
+        if ($h -and ($hostName -eq $h -or $hostName.EndsWith(".$h"))) { return @{ ok = $false; reason = 'url_host_not_public' } }
+    }
     foreach ($p in $Field.rejectPathPatterns) {
         if ($u.AbsolutePath -match $p) { return @{ ok = $false; reason = 'url_path_not_allowed' } }
     }
+    if ($u.AbsolutePath -match $script:SiteFieldAdminPath) { return @{ ok = $false; reason = 'url_path_is_admin' } }
     if ($u.Query -match '(?i)[?&][^=&]*(token|secret|password|passwd|pwd|key|sig|signature|auth|session|code|credential)[^=&]*=') {
         return @{ ok = $false; reason = 'url_query_secret' }
     }
-    return @{ ok = $true; value = $u.AbsoluteUri }
+    $kept = @()
+    foreach ($pair in ($u.Query.TrimStart('?') -split '&')) {
+        if (-not $pair) { continue }
+        $name = ($pair -split '=', 2)[0]
+        if ($name -notmatch $script:SiteFieldTrackingParam) { $kept += $pair }
+    }
+    $b = [UriBuilder]::new($u)
+    $b.Query = ($kept -join '&')
+    if ($b.Port -eq 443) { $b.Port = -1 }
+    return @{ ok = $true; value = $b.Uri.AbsoluteUri }
 }
 
 function Test-SiteFieldValue {

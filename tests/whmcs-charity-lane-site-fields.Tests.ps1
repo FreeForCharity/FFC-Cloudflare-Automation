@@ -485,8 +485,20 @@ Describe 'Validators' {
             @{ k = 'facebookUrl'; v = 'https://notfacebook.com/page'; why = 'url_host_not_allowed' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/in/some-person'; why = 'url_path_not_allowed' }
             @{ k = 'candidProfileUrl'; v = 'https://www.example.org/profile/12-3456789'; why = 'url_host_not_allowed' }
+            # Back-office and non-page URLs pasted by applicants (orders 875/876).
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/dashboard/'; why = 'url_path_is_admin' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/home/'; why = 'url_path_not_allowed' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_host_not_public' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
+            @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }
         ) {
             (Test-SiteFieldValue -Value $v -Field (Get-Field $k)).reason | Should -Be $why
+        }
+        It 'drops click-tracking parameters and keeps the rest' {
+            (Test-SiteFieldValue -Value 'https://www.facebook.com/share/abc123/?mibextid=K35XfP' -Field (Get-Field 'facebookUrl')).value | Should -Be 'https://www.facebook.com/share/abc123/'
+            (Test-SiteFieldValue -Value 'https://www.zeffy.com/en-US/donation-form/bff?utm_source=site&lang=en' -Field (Get-Field 'donationUrl')).value | Should -Be 'https://www.zeffy.com/en-US/donation-form/bff?lang=en'
         }
         It 'unwraps the anchor tag WHMCS puts around URL answers' {
             $v = '<a href="https://www.instagram.com/bff" target="_blank">https://www.instagram.com/bff</a>'

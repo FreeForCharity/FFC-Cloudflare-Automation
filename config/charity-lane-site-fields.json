@@ -165,7 +165,12 @@
       "type": "url",
       "maxLength": 500,
       "hosts": ["linkedin.com"],
-      "rejectPathPatterns": ["^/in/", "^/pub/"]
+      "rejectPathPatterns": [
+        "^/in/",
+        "^/pub/",
+        "^/?$",
+        "^/(home|feed|mynetwork|messaging|notifications)(/|$)"
+      ]
     },
     {
       "key": "instagramUrl",
@@ -201,7 +206,8 @@
       "productLabelPatterns": ["^zeffy donation form url$"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["zeffy.com"]
+      "hosts": ["zeffy.com"],
+      "rejectPathPatterns": ["^/([a-z]{2}(-[A-Za-z]{2})?/)?o/", "^/([a-z]{2}(-[A-Za-z]{2})?/?)?$"]
     },
     {
       "key": "volunteerUrl",
@@ -210,7 +216,8 @@
       "productLabelPatterns": ["^idealist volunteer page url$"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["idealist.org"]
+      "hosts": ["idealist.org"],
+      "rejectPathPatterns": ["^/([a-z]{2}(-[A-Za-z]{2})?/?)?$"]
     },
     {
       "key": "foundingYear",
@@ -242,7 +249,9 @@
       "productLabelPatterns": ["guidestar", "candid"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["guidestar.org", "candid.org"]
+      "hosts": ["guidestar.org", "candid.org"],
+      "rejectHosts": ["app.candid.org"],
+      "rejectPathPatterns": ["^/user/", "^/?$"]
     },
     {
       "key": "templateChoice",

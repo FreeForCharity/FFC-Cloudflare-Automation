@@ -49,6 +49,13 @@
       "maxLength": 80
     },
     {
+      "key": "footerStreetAddress",
+      "productFields": ["footer-street-address"],
+      "productLabelPatterns": ["^public street address for your website footer$"],
+      "type": "publicStreetAddress",
+      "maxLength": 120
+    },
+    {
       "key": "mission",
       "clientField": "Brief mission statement",
       "productFields": ["mission"],
@@ -314,18 +321,23 @@
     {
       "key": "leader1Name",
       "productFields": ["site-leader-1"],
+      "productLabelPatterns": [
+        "^board (chair ?/ ?president|president ?/ ?chair) - full name to show on your website$"
+      ],
       "type": "text",
       "maxLength": 100
     },
     {
       "key": "leader2Name",
       "productFields": ["site-leader-2"],
+      "productLabelPatterns": ["^board secretary - full name to show on your website$"],
       "type": "text",
       "maxLength": 100
     },
     {
       "key": "leader3Name",
       "productFields": ["site-leader-3"],
+      "productLabelPatterns": ["^board treasurer - full name to show on your website$"],
       "type": "text",
       "maxLength": 100
     }

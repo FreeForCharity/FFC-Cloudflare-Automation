@@ -11,6 +11,9 @@ downloads/
 eggs/
 .eggs/
 lib/
+# Charity-lane hand-off branches carry a site's src/lib/site.config.ts under
+# site-content/<domain>/; the Python `lib/` rule above must not drop it.
+!site-content/**/lib/
 lib64/
 parts/
 sdist/

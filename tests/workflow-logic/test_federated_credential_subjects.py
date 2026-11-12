@@ -156,10 +156,13 @@ def test_the_pre_fix_config_is_reported():
             app["environments"] = [
                 "cloudflare-prod-write", "cloudflare-prod", "google-prod-write",
                 "zeffy-prod", "whmcs-prod",
+                # Not part of the historical config; added with 753 so the
+                # plant stays a five-finding fixture as new lanes are mapped.
+                "charity-lane-broker",
             ]
     # Assert the mutation landed before believing its result: a plant that did
     # not apply produces a green run that reads as "the guard has a hole".
-    assert _mapped(pre_fix) != _mapped(CFG) and len(_mapped(pre_fix)) == 9
+    assert _mapped(pre_fix) != _mapped(CFG) and len(_mapped(pre_fix)) == 10
 
     usage, problems = checker.oidc_environment_usage(root=str(REPO_ROOT))
     findings = _coverage_findings(pre_fix, usage, problems)

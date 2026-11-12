@@ -1,5 +1,7 @@
 name: '753. Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH]'
-run-name: 'Charity-Lane Gate Broker (${{ inputs.mode || github.event.schedule }})'
+run-name:
+  'Charity-Lane Gate Broker (${{ inputs.mode || github.event.schedule }}) (dry_run=${{
+  inputs.dry_run || false }})'
 
 # Runs scripts/charity_lane_gate.py inside GitHub Actions, so the charity-lane
 # pipeline and the weekly sites list no longer need an operator's PC or an
@@ -110,8 +112,6 @@ jobs:
       - name: Load the broker PAT from Key Vault
         id: load_pat
         shell: bash
-        env:
-          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           token="$(az keyvault secret show --vault-name kv-ffc-admin-prod-cbm \
@@ -121,12 +121,29 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$token"
-          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+          # Liveness, not just presence (#1102): probe GET /user, separating a
+          # rate limit from a revoked token. Status code only; the token never
+          # reaches output. A 200 proves authentication, not scope.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
             -H "Authorization: Bearer $token" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO" || true)"
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # A 403 with rate-limit headers is a live, throttled token, not a dead one.
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
           if [ "$code" != "200" ]; then
-            echo "::error::the broker PAT could not read this repository (HTTP $code; 000 = no answer). Revoked or mis-scoped: store a new version of wr-all-ffc-charity-lane-broker-github-pat."
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
             exit 1
           fi
           d="GHTOKEN_EOF_${RANDOM}${RANDOM}"

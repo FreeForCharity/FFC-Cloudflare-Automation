@@ -152,20 +152,20 @@ Notation: ⛔ = a human is required today; ✅ = no human. After the change, onl
 
 ### A. New charity onboarding
 
-| Step                                   | Today                                      | After                                                      |
-| -------------------------------------- | ------------------------------------------ | ---------------------------------------------------------- |
-| 0. Find application (221 → 219)        | ✅ (`whmcs-prod-read`)                     | ✅                                                         |
-| 3. File + assign provision issue (701) | ✅ agent via MCP                           | ✅                                                         |
-| 3a. 701 `dns` job                      | ⛔ `cloudflare-prod-write`                 | ✅ Tier 1 when the zone has no live site; Tier 2 otherwise |
-| 3b. 701 `repo` job (chained behind 3a) | ⛔ `github-prod`                           | ✅ Tier 1                                                  |
-| 3c. Attach new repo to the session     | ⛔ `add_repo` confirmation                 | ✅ H1                                                      |
-| 4. Rebrand PR in `FFC-EX-<domain>`     | ✅ merge queue, 0 approvals                | ✅                                                         |
-| 5. 505 GA4 → 503 GTM                   | ⛔⛔ `google-prod-write`                   | ✅ Tier 1 (#636)                                           |
-| 5a. Wire ids PR                        | ✅                                         | ✅                                                         |
-| 1. Buy domain (113, done **last**)     | ⛔ gate + typed confirm                    | ⛔ **Tier 2**: spends money                                |
-| 2. 103 `dry_run=false` on the new zone | ⛔ `cloudflare-prod-write` (+ `m365-prod`) | ✅ Tier 1 with `skip_m365=true` (no live site yet)         |
-| 6. 204 WHMCS onboard                   | ⛔ `whmcs-prod`                            | ✅ Tier 1 (idempotent)                                     |
-| 6a. 211 accept / cancel order          | ⛔                                         | ⛔ **Tier 2**                                              |
+| Step                                   | Today                       | After                                                      |
+| -------------------------------------- | --------------------------- | ---------------------------------------------------------- |
+| 0. Find application (221 → 219)        | ✅ (`whmcs-prod-read`)      | ✅                                                         |
+| 3. File + assign provision issue (701) | ✅ agent via MCP            | ✅                                                         |
+| 3a. 701 `dns` job                      | ⛔ `cloudflare-prod-write`  | ✅ Tier 1 when the zone has no live site; Tier 2 otherwise |
+| 3b. 701 `repo` job (chained behind 3a) | ⛔ `github-prod`            | ✅ Tier 1                                                  |
+| 3c. Attach new repo to the session     | ⛔ `add_repo` confirmation  | ✅ H1                                                      |
+| 4. Rebrand PR in `FFC-EX-<domain>`     | ✅ merge queue, 0 approvals | ✅                                                         |
+| 5. 505 GA4 → 503 GTM                   | ⛔⛔ `google-prod-write`    | ✅ Tier 1 (#636)                                           |
+| 5a. Wire ids PR                        | ✅                          | ✅                                                         |
+| 1. Buy domain (113, done **last**)     | ⛔ gate + typed confirm     | ⛔ **Tier 2**: spends money                                |
+| 2. 103 `dry_run=false` on the new zone | ⛔ `cloudflare-prod-write`  | ✅ Tier 1, M365 off by default (no live site yet)          |
+| 6. 204 WHMCS onboard                   | ⛔ `whmcs-prod`             | ✅ Tier 1 (idempotent)                                     |
+| 6a. 211 accept / cancel order          | ⛔                          | ⛔ **Tier 2**                                              |
 
 **Human clicks per charity: 8–10 today, 1–2 after** (the domain purchase, plus an order decision
 when there is one).

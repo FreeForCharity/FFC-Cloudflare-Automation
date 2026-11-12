@@ -1874,6 +1874,61 @@ export function removeFormerHostCredits(html) {
 }
 
 /**
+ * Remove the WordPress comment system from a captured fragment.
+ *
+ * FFC static sites carry no comments: there is nothing to post to, and a
+ * captured thread is frozen spam as often as not (FFC-EX-vpmin.org shipped a
+ * "forum slot gacor" gambling comment on cutover day). Removed:
+ *
+ *  - the comment area, by tag balance: Divi's `<section id="comment-wrap">`,
+ *    core themes' `id="comments"` / `class="comments-area"`, block themes'
+ *    `wp-block-comments`, and a bare `id="respond"` reply form;
+ *  - the byline count (`<span class="comments-number">`, `comments-link`)
+ *    with the ` | ` separator in front of it;
+ *  - any remaining link into the comment system (`#respond`, `#comments`,
+ *    `#comment-N`, `?replytocom=`).
+ *
+ * An area whose tags do not balance is left alone (see `elementSpan`) and
+ * counted in `unbalanced`, so a truncated page is never the price.
+ */
+const COMMENT_AREA_OPEN =
+  /<(section|div|ol)\b(?=[^>]*\b(?:id\s*=\s*["'](?:comment-wrap|comments|respond)["']|class\s*=\s*["'][^"']*\b(?:comments-area|wp-block-comments)\b))[^>]*>/gi;
+
+export function removeWordPressComments(html) {
+  let out = html;
+  let removed = 0;
+  let unbalanced = 0;
+  for (let from = 0; ; ) {
+    COMMENT_AREA_OPEN.lastIndex = from;
+    const m = COMMENT_AREA_OPEN.exec(out);
+    if (!m) break;
+    const span = elementSpan(out, m.index, m[1]);
+    if (!span) {
+      unbalanced += 1;
+      from = m.index + m[0].length;
+      continue;
+    }
+    out = out.slice(0, span[0]) + out.slice(span[1]);
+    removed += 1;
+    from = span[0];
+  }
+  out = out.replace(
+    /(?:\s*\|\s*)?<span\b[^>]*\bclass\s*=\s*["'][^"']*\b(?:comments-number|comments-link)\b[^"']*["'][^>]*>[\s\S]*?<\/span>/gi,
+    () => {
+      removed += 1;
+      return '';
+    },
+  );
+  out = out.replace(/<a\b([^>]*)>[\s\S]*?<\/a>/gi, (tag, attrs) => {
+    const href = /\bhref\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? '';
+    if (!/#(?:respond|comments?)(?:$|-)|[?&]replytocom=/i.test(href)) return tag;
+    removed += 1;
+    return '';
+  });
+  return { html: out, removed, unbalanced };
+}
+
+/**
  * Point the captured `<main>` at the id the root layout's skip link targets.
  *
  * The Footer-Only template's layout has a "Skip to main content" link to
@@ -4452,6 +4507,58 @@ function selfTest() {
     'a look-alike host is not matched by suffix alone',
     removeFormerHostCredits('<p>Powered by <a href="https://notinterserver.net/">X</a></p>')
       .removed,
+    0,
+  );
+
+  // WordPress comments.
+  const diviComments =
+    '<p>Post</p><section id="comment-wrap"><h2 id="comments">6 Comments</h2>' +
+    '<ol class="commentlist"><li><a href="https://spam.example/">slot gacor</a></li></ol>' +
+    '<section class="inner">x</section><div id="respond" class="comment-respond"><form></form></div>' +
+    '</section><p>After</p>';
+  const dv = removeWordPressComments(diviComments);
+  eq(
+    'a Divi comment section is removed whole, nested sections included',
+    dv.html,
+    '<p>Post</p><p>After</p>',
+  );
+  eq('and counted once', dv.removed, 1);
+  eq(
+    'a core-theme comments area is removed',
+    removeWordPressComments('<div id="comments" class="comments-area"><div>x</div></div><p>k</p>')
+      .html,
+    '<p>k</p>',
+  );
+  eq(
+    'a block-theme comments block is removed',
+    removeWordPressComments('<div class="wp-block-comments"><ol><li>c</li></ol></div><p>k</p>')
+      .html,
+    '<p>k</p>',
+  );
+  eq(
+    'the byline count goes with its separator; the rest of the byline stays',
+    removeWordPressComments(
+      '<p class="post-meta">by <span>VM</span> | <a href="/c/x/">X</a> | <span class="comments-number"><a href="/p/#respond">0 comments</a></span></p>',
+    ).html,
+    '<p class="post-meta">by <span>VM</span> | <a href="/c/x/">X</a></p>',
+  );
+  eq(
+    'stray links into the comment system go; an ordinary anchor stays',
+    removeWordPressComments(
+      '<a href="/p/#respond">Leave a comment</a><a href="/p/#comment-209">r</a><a href="/p/?replytocom=2#respond">R</a><a href="/p/#content">Skip</a>',
+    ).html,
+    '<a href="/p/#content">Skip</a>',
+  );
+  const open = removeWordPressComments('<div id="comments"><p>never closed');
+  eq(
+    'an unbalanced area is left alone rather than truncating the page',
+    open.html,
+    '<div id="comments"><p>never closed',
+  );
+  eq('and reported', open.unbalanced, 1);
+  eq(
+    'a page with no comments is untouched',
+    removeWordPressComments('<main><section id="hero">x</section></main>').removed,
     0,
   );
 

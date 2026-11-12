@@ -74,6 +74,7 @@ import {
   stripLayoutDuplicates,
   uaDefaultsStyle,
   removeFormerHostCredits,
+  removeWordPressComments,
   retargetSkipLinkTarget,
   removeDeadConsentUi,
   ensureImageAlt,
@@ -349,6 +350,8 @@ function main() {
     footersKeptNested: 0,
     consentUiRemoved: 0,
     hostCreditsRemoved: 0,
+    commentsRemoved: 0,
+    commentAreasUnbalanced: 0,
     skipTargetsRetargeted: 0,
     consentUiBytes: 0,
     headDropped: 0,
@@ -406,6 +409,12 @@ function main() {
     const credits = removeFormerHostCredits(out);
     out = credits.html;
     tally.hostCreditsRemoved += credits.removed;
+    // FFC static sites carry no comment system: the thread, reply form,
+    // byline count and links into it all go, spam included.
+    const comments = removeWordPressComments(out);
+    out = comments.html;
+    tally.commentsRemoved += comments.removed;
+    tally.commentAreasUnbalanced += comments.unbalanced;
     const skip = retargetSkipLinkTarget(out, layoutSkipTarget);
     out = skip.html;
     if (skip.retargeted) tally.skipTargetsRetargeted += 1;
@@ -662,6 +671,12 @@ function main() {
       `  (${(tally.consentUiBytes / 1024 / 1024).toFixed(1)} MB)`,
   );
   console.log(`former-host credits removed  ${tally.hostCreditsRemoved}`);
+  console.log(`WordPress comment items removed  ${tally.commentsRemoved}`);
+  // Loud: an unbalanced comment area is left on the page rather than risk
+  // truncating it, so it needs a hand fix before the site goes live.
+  if (tally.commentAreasUnbalanced) {
+    console.log(`comment areas LEFT (tags unbalanced)  ${tally.commentAreasUnbalanced}`);
+  }
   console.log(
     `<main> retargeted at the layout skip link (#${layoutSkipTarget ?? 'n/a'})  ${tally.skipTargetsRetargeted}`,
   );

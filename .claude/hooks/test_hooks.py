@@ -1502,6 +1502,63 @@ RULES = [
         ("warned list read is still allowed", "gh api repos/o/r/issues/719/comments", ALLOW),
     ]),
 
+    Rule("gh-api-field-flips-method", 'makes this a POST, not a read', BLOCK_TIER,
+         label='guard_bash / `gh api -f` with no -X is a POST:', cases=[
+        # The command Conductor run 258 actually issued, to ENUMERATE open issues.
+        # It attempted to open an issue on the public hub repo and 422'd only
+        # because `title` is required and absent.
+        ("run 258's issue enumeration is blocked",
+         "gh api repos/O/R/issues --paginate -f state=open --jq '.[] | .number'", BLOCK),
+        ("-f with --paginate and no --jq is blocked",
+         "gh api repos/O/R/issues -f state=open --paginate", BLOCK),
+        ("--raw-field long form is blocked",
+         "gh api repos/O/R/pulls --raw-field state=open --paginate", BLOCK),
+        ("-F typed form is blocked",
+         "gh api repos/O/R/issues -F state=open --paginate", BLOCK),
+        # Allows. A legitimate create also uses -f, so the rule must not touch it.
+        ("a genuine create reading back one field is silent",
+         "gh api repos/O/R/issues -f title=x -f body=y --jq .number", SILENT),
+        ("an explicit -X POST create is silent",
+         "gh api repos/O/R/issues -X POST -f title=x --jq .number", SILENT),
+        ("an explicit -X GET with -f is silent -- the method is stated",
+         "gh api repos/O/R/issues -X GET -f state=open --paginate --jq '.[] | .number'", SILENT),
+        # graphql is a POST by design and legitimately paginates. The query must
+        # declare $endCursor or the graphql-paginate-endcursor rule blocks it for
+        # its own, unrelated reason -- which is what the first draft of this case
+        # did, reporting rc=2 for a rule that had correctly stayed silent.
+        ("graphql with -f query= and --paginate is silent",
+         "gh api graphql --paginate -f query='query($endCursor:String){repository(owner:\"o\",name:\"r\")"
+         "{issues(first:100,after:$endCursor){nodes{number} pageInfo{hasNextPage endCursor}}}}' "
+         "--jq '.data.repository.issues.nodes[]'", SILENT),
+        ("graphql with -f query= and no --paginate is silent",
+         "gh api graphql -f query='{viewer{login}}' --jq '.data.viewer.login'", SILENT),
+        ("a query-string list read with no -f is silent -- this is the FIX",
+         "gh api 'repos/O/R/issues?state=open&per_page=100' --paginate --jq '.[] | .number'", SILENT),
+        ("non-gh text mentioning the flags is silent",
+         "echo 'gh api repos/O/R/issues -f state=open is a POST'", SILENT),
+        # The check reads the quote-stripped command, as rule 9 does: a create
+        # whose quoted body merely mentions --paginate is a correct POST.
+        ("a create whose quoted body mentions --paginate is silent",
+         "gh api repos/O/R/issues/5/comments -f body='the fix is to drop --paginate from the read'",
+         SILENT),
+    ]),
+
+    Rule("gh-api-field-iterating-jq", '[#1647]', WARN_TIER,
+         label='guard_bash / #1647 `gh api -f` with an iterating --jq:', cases=[
+        # Without --paginate the shape is ambiguous, so it warns rather than blocks.
+        ("-f with an iterating --jq and no --paginate warns",
+         "gh api repos/O/R/issues -f state=open --jq '.[] | .number'", WARN),
+        ("the label-add read-back warns",
+         "gh api repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", WARN),
+        # The tier itself: a label add is a correct command and must run.
+        ("the label-add read-back is still allowed",
+         "gh api repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", ALLOW),
+        ("an explicit --method POST label add is silent",
+         "gh api --method POST repos/O/R/issues/5/labels -f 'labels[]=bug' --jq '.[].name'", SILENT),
+        ("a create reading back one field is silent",
+         "gh api repos/O/R/issues -f title=x --jq .number", SILENT),
+    ]),
+
     Rule("tee-into-head-truncates", '[#255]', WARN_TIER,
          label='guard_bash / run-255 `tee FILE | head` truncation:', cases=[
         # The exact pipeline run 255 issued, which reported a backlog of 79
@@ -2271,6 +2328,97 @@ def test_no_hook_module_has_an_invalid_escape_sequence():
            not offenders, "\n".join(offenders))
 
 
+def test_graphql_is_not_a_recognised_api_endpoint():
+    """Rule 10b's `graphql` exemption is unreachable, and this says why.
+
+    `_gh_api_endpoint` does not treat a bare `graphql` token as a route -- it
+    returns `(None, None)` -- so rule 10b's `fpath` is falsy for every GraphQL
+    call and the `!= "graphql"` arm never evaluates. Mutating that arm away
+    flips ZERO registered cases, which is the signature of a dead branch
+    (L: an alternation branch needs a case only it satisfies).
+
+    The arm is kept rather than deleted, because if `_gh_api_endpoint` is ever
+    taught to recognise `graphql` -- a plausible change, since rules 10 and 11
+    would then cover it -- its absence would make rule 10b BLOCK every
+    `gh api graphql --paginate -f query=...` in the fleet, which is the standard
+    paginated-GraphQL shape. This test is what makes that coupling visible: it
+    fails the moment the assumption stops holding, and names rule 10b.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_gb_endpoint_test", GUARD_BASH)
+    gb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gb)
+
+    for cmd in ("gh api graphql -f query='{viewer{login}}'",
+                "gh api graphql --paginate -f query='x' --jq '.data.a.nodes[]'"):
+        path, _query = gb._gh_api_endpoint(cmd)
+        record(f"`graphql` is not a recognised endpoint, so rule 10b cannot reach it: {cmd[:46]}",
+               path is None,
+               f"_gh_api_endpoint returned {path!r}. If this is now a real endpoint, rule 10b's "
+               "`graphql` exemption has become LIVE -- keep it, and give it a firing case.")
+
+    # The control: a real route IS recognised, so the assertion above is about
+    # `graphql` specifically and not about a resolver that answers None always.
+    path, _query = gb._gh_api_endpoint("gh api repos/O/R/issues -f state=open --paginate")
+    record("a real collection route is still recognised (control for the above)",
+           path == "repos/O/R/issues", f"got {path!r}")
+
+
+def test_collection_remediation_names_no_endpoint_specific_token():
+    """An interpolated remediation message may not hard-code a filter or field.
+
+    Rules 10b (block) and the `[#1647]` warn arm both fire on ANY collection
+    endpoint and compose their advice around the caller's own `fpath`. Every
+    literal left beside that interpolation is therefore a claim about every
+    endpoint the rule matches, and `?state=open&...--jq '.[] | .number'` was
+    only ever true for `issues`/`pulls`.
+
+    The sharp half, and the reason this is asserted rather than left to review:
+    the advice does not fail loudly on the endpoints where it is wrong.
+    Measured on 2026-11-09 against this repo, `actions/workflows?per_page=5`
+    and `actions/workflows?per_page=5&state=open` both return `total_count`
+    134 -- identical, HTTP 200 -- because REST drops an unrecognised query
+    parameter in silence. A guard whose remediation text hands the operator a
+    silently-unfiltered read points them at the exact failure class the
+    dropped-query-parameter rule in CLAUDE.md exists to catch. `actions/
+    workflows` also returns an OBJECT with no `number` field, so the old
+    example was wrong three ways there -- filter, field and shape -- while
+    reading as a complete, copy-pasteable command.
+
+    Asserted on the emitted text, not on the source, so a future rewording
+    that reintroduces a literal is caught wherever it is spelled.
+    """
+    # Endpoints chosen because `state` is NOT one of their filters and their
+    # items carry no `number`: the needles cannot come from the payload being
+    # echoed back, only from the message's own hard-coded example.
+    probes = [
+        ("block arm", "gh api repos/O/R/actions/workflows --paginate -f per_page=100 --jq '.[]|.id'", 2),
+        ("warn arm", "gh api repos/O/R/branches -f protected=true --jq '.[].name'", 0),
+    ]
+    needles = ("state=open", ".number")
+    problems = []
+    for arm, cmd, want_rc in probes:
+        proc = run_full("guard_bash.py", bash(cmd))
+        out = proc.stderr + proc.stdout
+        if proc.returncode != want_rc:
+            problems.append(f"{arm}: rc={proc.returncode}, wanted {want_rc} -- the rule did not fire")
+            continue
+        # rc alone cannot distinguish "fired with clean advice" from "never
+        # fired", so require the rule's own marker before reading the text.
+        if "gh api" not in out:
+            problems.append(f"{arm}: rc={want_rc} but emitted no remediation text to inspect")
+            continue
+        for needle in needles:
+            if needle in out:
+                problems.append(
+                    f"{arm}: remediation hard-codes {needle!r}, which is not valid for "
+                    f"this endpoint and is dropped with a 200 rather than rejected\n"
+                    f"  emitted: {' '.join(out.split())[:200]}")
+    record("collection remediation carries no endpoint-specific filter or field",
+           not problems, "\n".join(problems))
+
+
 def test_rule_attribution():
     """A case must fire for ITS OWN rule's reason.
 
@@ -2412,6 +2560,8 @@ def main():
     print("guard_bash meta-tests (over the rule registry):")
     test_rule_polarity()
     test_strip_quoted_matches_a_bash_accurate_scanner()
+    test_graphql_is_not_a_recognised_api_endpoint()
+    test_collection_remediation_names_no_endpoint_specific_token()
     test_rule_attribution()
     test_refusal_site_coverage()
     test_no_hook_module_has_an_invalid_escape_sequence()

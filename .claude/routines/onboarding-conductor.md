@@ -132,12 +132,17 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `domain_registrar`: map `domainRegistrar` onto the policy enum (GoDaddy, Wix, Squarespace, else
      `Other / another registrar`); `No domain yet` when they do not own it; `Unknown / not sure`
      when blank;
-   - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
-     `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
-     `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
-     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
-     `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
-     consent to appear), then any `leadershipLines`.
+   - `footer_email` / `footer_phone` = `publicEmail` / `publicPhone`; `footer_address` follows the
+     footer address rule (docs/charity-intake-autonomy.md): the street address the applicant entered
+     in the application's PUBLIC street-address field, followed by `footerLocation` (City, State),
+     when that field is present and valid; otherwise `footerLocation` alone. Never the IRS /
+     ProPublica record, the WHMCS client mailing address, or any address the applicant did not mark
+     public; an older application with no public street-address field gets City, State only until
+     the charity confirms an address. `footer_ein` = `ein`; `guidestar_profile_url` =
+     `candidProfileUrl`; `mission`; `donation_url` / `volunteer_url`; `social_links` = the social
+     URLs one per line; `leadership_lines` = `<leader1Name> - Board Chair`,
+     `<leader2Name> - Board Secretary`, `<leader3Name> - Board Treasurer` (one per line; the
+     application requires all three and their consent to appear), then any `leadershipLines`.
 
    If step 3 found an **existing live site**, or `charity_lane_gate.py live-site <domain>` reports
    live, add `skip_dns=true` [701 `skip_dns` input] so the repo is built on the default Pages URL

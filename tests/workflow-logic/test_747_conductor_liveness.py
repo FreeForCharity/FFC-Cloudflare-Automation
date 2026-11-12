@@ -129,6 +129,13 @@ def const(name: str):
     return _node(f"process.stdout.write(JSON.stringify(l.{name}));")
 
 
+def issue_title(analysis: dict) -> str:
+    return _node(
+        "process.stdout.write(JSON.stringify(l.issueTitle(JSON.parse(process.argv[1]))));",
+        json.dumps(analysis),
+    )
+
+
 def _comment(at: str, body: str = "## Run 174 — END", **extra) -> dict:
     out = {"body": body, "created_at": at, "html_url": "https://example.invalid/c"}
     out.update(extra)
@@ -1193,6 +1200,69 @@ def test_agents_md_gives_the_worker_the_escalation_trigger():
     assert "747" in section, "the escalation trigger belongs in the landing-sweep section"
 
 
+# --- the title must name what fired, not a fixed cause (#1598) -------------
+
+
+def test_the_title_names_the_firing_signal_not_a_fixed_cause():
+    """#1598's exact shape: the routine is ALIVE and the finding is merge-silence.
+
+    Measured on the real issue -- `conductor-silence` OK at 0.7h, `merge-silence`
+    WARN at 24.2h -- while the title read 'the supervising routine may have
+    stopped'. Three of this monitor's four signals can fire without the routine
+    having stopped, so a fixed title is wrong on all three.
+    """
+    a = _healthy(mergedPRs=[{"number": 1, "merged_at": "2026-09-13T09:20:00Z"}])
+    assert a["hasFinding"], a["signals"]
+    assert _sig(a, "conductor-silence")["verdict"] == "OK", _sig(a, "conductor-silence")
+    assert _sig(a, "merge-silence")["verdict"] == "WARN", _sig(a, "merge-silence")
+
+    title = issue_title(a)
+    assert "merge-silence WARN" in title, title
+    # The fixed string this replaced. Its presence here would mean the title is
+    # once again asserting a cause the body contradicts.
+    assert "may have stopped" not in title, title
+    # A signal reading OK must not be named as a finding.
+    assert "conductor-silence" not in title, title
+
+
+def test_the_title_leads_with_the_worst_standing_signal():
+    """A reader scanning a listing sees the first few words, so ALERT goes first."""
+    a = _outage(DAY_ONE, 6, [{"at": LAST_CONDUCTOR, "openPRs": 4}])
+    assert _sig(a, "conductor-silence")["verdict"] == "ALERT", _sig(a, "conductor-silence")
+    assert _sig(a, "merge-silence")["verdict"] == "WARN", _sig(a, "merge-silence")
+
+    title = issue_title(a)
+    assert "conductor-silence ALERT" in title, title
+    assert "merge-silence WARN" in title, title
+    assert title.index("conductor-silence ALERT") < title.index("merge-silence WARN"), title
+
+
+def test_the_title_keeps_a_stable_recognisable_stem():
+    """Varying the suffix must not cost the issue its identity in a listing."""
+    a = _outage(DAY_ONE, 6, [{"at": LAST_CONDUCTOR, "openPRs": 4}])
+    assert issue_title(a).startswith(const("TITLE_PREFIX")), issue_title(a)
+
+
+def test_the_title_cannot_exceed_githubs_limit():
+    """GitHub caps a title at 256 chars; an over-long one fails the whole create."""
+    firing = [{"name": f"signal-{i}-with-a-very-long-name", "verdict": "ALERT"} for i in range(40)]
+    title = issue_title({"alert": firing, "warn": [], "unknown": []})
+    assert len(title) <= 240, len(title)
+    assert title.endswith("..."), title
+
+
+def test_the_rolling_update_re_renders_the_title():
+    """A rolling issue outlives the signal that opened it.
+
+    Without a title on the update path, an issue opened on `conductor-silence`
+    keeps saying so for days after the routine returns and the only remaining
+    finding is `merge-silence` -- the body would be right and the title stale.
+    """
+    update = WF_RAW[WF_RAW.index("issues.update(") :]
+    update = update[: update.index("addLabels")]
+    assert "title: lib.issueTitle(analysis)" in update, update[:400]
+
+
 # --- retirement of the local Conductor (2026-10-19) -------------------------
 
 
@@ -1245,6 +1315,20 @@ def test_the_flag_must_be_exactly_true():
 def test_the_workflow_passes_the_retirement_flag_from_the_library():
     assert "supervisorRetired: lib.SUPERVISOR_RETIRED" in WF_RAW
     assert const("SUPERVISOR_RETIRED") is True
+
+def test_a_retired_supervisors_info_is_not_named_in_the_title():
+    """INFO is context, not a finding, so it must not lead the title."""
+    a = analyze(
+        comments=[_comment(LAST_CONDUCTOR, "## Run 174 — END")],
+        mergedPRs=[{"number": 1317, "merged_at": LAST_MERGE}],
+        openPRs=6,
+        now=DAY_FIVE,
+        supervisorRetired=True,
+    )
+    assert _sig(a, "conductor-silence")["verdict"] == "INFO", a["signals"]
+    title = issue_title(a)
+    assert "merge-silence ALERT" in title, title
+    assert "conductor-silence" not in title, title
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

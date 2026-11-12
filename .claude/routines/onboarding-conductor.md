@@ -132,10 +132,16 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `domain_registrar`: map `domainRegistrar` onto the policy enum (GoDaddy, Wix, Squarespace, else
      `Other / another registrar`); `No domain yet` when they do not own it; `Unknown / not sure`
      when blank;
-   - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
-     `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
-     `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
-     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
+   - `footer_email` / `footer_phone` = `publicEmail` / `publicPhone`; `footer_address` follows the
+     footer address rule (docs/charity-intake-autonomy.md):
+     `<footerStreetAddress>, <footerLocation>` when 234 reports `footerStreetAddress` (the
+     application's optional "Public street address for your website footer" question, the
+     applicant's consent to publish it); otherwise `footerLocation` (City, State) alone. Never the
+     IRS / ProPublica record or the WHMCS client mailing address. An application from before that
+     question existed gets City, State only until the charity confirms an address. `footer_ein` =
+     `ein`; `guidestar_profile_url` = `candidProfileUrl`; `mission`; `donation_url` /
+     `volunteer_url`; `social_links` = the social URLs one per line; `leadership_lines` =
+     `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
      `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
      consent to appear), then any `leadershipLines`.
 

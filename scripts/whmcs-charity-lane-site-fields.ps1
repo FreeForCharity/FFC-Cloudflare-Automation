@@ -68,7 +68,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:SiteFieldsMarker = '<!-- charity-lane:site-fields -->'
-$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice', 'githubUser')
+$script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'url', 'year', 'nameList', 'ein', 'choice', 'githubUser', 'publicStreetAddress')
+
+# The ONE address the allowlist may carry: the street address the applicant
+# typed into the pid 33 question that asks for it "for your website footer"
+# (Clarke, 2026-11-12: entering it there is the consent to publish it). The
+# `address` deny fragment is waived for exactly this machine name and label,
+# and only on a field of type publicStreetAddress; every other address field
+# (mailing, contact, the IRS record) stays refused by the loader.
+$script:SiteFieldPublicStreetSlug = 'footer-street-address'
+$script:SiteFieldPublicStreetLabel = '(?i)^public street address for your website footer$'
 
 # --- pure, testable helpers (dot-source stops below) -----------------------
 
@@ -109,12 +118,22 @@ function Get-SiteFieldLabelText {
     return [regex]::Replace($t, '(?i)\s*\(optional\)$', '')
 }
 
+$script:SiteFieldPublicLeaderLabel = '(?i)^board (chair ?/ ?president|president ?/ ?chair|secretary|treasurer) - full name to show on your website$'
+
 function Test-SiteFieldDeniedLabel {
     # The denied-name guard for a legacy LABEL match. "Public email address"
     # (the footer email question) is the one phrase let past the `address`
     # fragment; any other denied fragment in the label still refuses it, so
     # "Contact email address" or a mailing address stays out.
+    #
+    # The pid 33 questions that ask for a board officer's name "to show on
+    # your website" are the second exemption: the form asks for exactly that,
+    # for publication, with the board's consent recorded on the application.
+    # Only the whole label is let past, so the same officer's email or phone
+    # ("Board President/Chair Individual Email") stays denied.
     param([AllowEmptyString()][string]$Label, [string[]]$DeniedPatterns)
+    if ([string]$Label -match $script:SiteFieldPublicLeaderLabel) { return $false }
+    if ([string]$Label -match $script:SiteFieldPublicStreetLabel) { return $false }
     $l = [regex]::Replace([string]$Label, '(?i)\bpublic e-?mail address\b', 'public email')
     return Test-SiteFieldDeniedName -Name $l -DeniedPatterns $DeniedPatterns
 }
@@ -139,7 +158,18 @@ function Read-SiteFieldsConfig {
         if ($script:SiteFieldTypes -notcontains $type) { throw "Site-fields config: field '$key' has unknown type '$type'." }
         $client = [string]$f.clientField
         $products = @($f.productFields | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        if ($type -eq 'publicStreetAddress') {
+            if ($client -or $products.Count -ne 1 -or $products[0] -ne $script:SiteFieldPublicStreetSlug) {
+                throw "Site-fields config: field '$key' of type publicStreetAddress must read only the product field '$($script:SiteFieldPublicStreetSlug)'."
+            }
+            foreach ($p in @($f.productLabelPatterns | Where-Object { $_ })) {
+                if ([string]$p -ne $script:SiteFieldPublicStreetLabel.Substring(4)) {
+                    throw "Site-fields config: field '$key' of type publicStreetAddress may only use the public street-address label pattern."
+                }
+            }
+        }
         foreach ($n in @($client) + $products) {
+            if ($type -eq 'publicStreetAddress' -and $n -eq $script:SiteFieldPublicStreetSlug) { continue }
             if (Test-SiteFieldDeniedName -Name $n -DeniedPatterns $denied) {
                 throw "Site-fields config: field '$key' names '$n', which matches a denied personal/board/address pattern."
             }
@@ -157,6 +187,7 @@ function Read-SiteFieldsConfig {
                 multiline            = [bool]$f.multiline
                 hosts                = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
                 rejectPathPatterns   = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
+                rejectHosts          = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
             })
     }
     if ($fields.Count -eq 0) { throw 'Site-fields config lists no fields.' }
@@ -220,9 +251,20 @@ function Remove-SiteFieldEmbeddedContact {
     return @{ text = $out; redacted = ($out -ne $Text) }
 }
 
+# Paths that are an account's own back office, never a public page, on any
+# host: an applicant pasting the URL they were looking at (LinkedIn
+# /company/x/admin/dashboard/, a Zeffy or Idealist admin screen) must not
+# reach a public footer (orders 875/876, 2026-11-12).
+$script:SiteFieldAdminPath = '(?i)/(wp-)?admin(/|$)|/dashboard(/|$)'
+
+# Click-tracking query parameters, dropped rather than published
+# (Facebook share links carry ?mibextid=..., ads carry utm_*).
+$script:SiteFieldTrackingParam = '(?i)^(utm_[a-z]+|mibextid|fbclid|gclid|igshid|si|ref|ref_src|trk|trackingid)$'
+
 function Test-SiteFieldUrl {
     # https only, no credentials in the authority, no secret-looking query
-    # parameter, optional host allowlist and rejected path patterns.
+    # parameter, optional host allowlist/denylist and rejected path patterns,
+    # no admin/dashboard path; tracking parameters are stripped.
     param([string]$Text, $Field)
     if ($Text -match '\s') { return @{ ok = $false; reason = 'url_has_whitespace' } }
     $u = $null
@@ -236,13 +278,26 @@ function Test-SiteFieldUrl {
         foreach ($h in $Field.hosts) { if ($hostName -eq $h -or $hostName.EndsWith(".$h")) { $hostOk = $true; break } }
         if (-not $hostOk) { return @{ ok = $false; reason = 'url_host_not_allowed' } }
     }
+    foreach ($h in @($Field.rejectHosts)) {
+        if ($h -and ($hostName -eq $h -or $hostName.EndsWith(".$h"))) { return @{ ok = $false; reason = 'url_host_not_public' } }
+    }
     foreach ($p in $Field.rejectPathPatterns) {
         if ($u.AbsolutePath -match $p) { return @{ ok = $false; reason = 'url_path_not_allowed' } }
     }
+    if ($u.AbsolutePath -match $script:SiteFieldAdminPath) { return @{ ok = $false; reason = 'url_path_is_admin' } }
     if ($u.Query -match '(?i)[?&][^=&]*(token|secret|password|passwd|pwd|key|sig|signature|auth|session|code|credential)[^=&]*=') {
         return @{ ok = $false; reason = 'url_query_secret' }
     }
-    return @{ ok = $true; value = $u.AbsoluteUri }
+    $kept = @()
+    foreach ($pair in ($u.Query.TrimStart('?') -split '&')) {
+        if (-not $pair) { continue }
+        $name = ($pair -split '=', 2)[0]
+        if ($name -notmatch $script:SiteFieldTrackingParam) { $kept += $pair }
+    }
+    $b = [UriBuilder]::new($u)
+    $b.Query = ($kept -join '&')
+    if ($b.Port -eq 443) { $b.Port = -1 }
+    return @{ ok = $true; value = $b.Uri.AbsoluteUri }
 }
 
 function Test-SiteFieldValue {
@@ -283,7 +338,7 @@ function Test-SiteFieldValue {
         }
         'choice' {
             if ($Field.maxLength -gt 0 -and $clean.Length -gt $Field.maxLength) { return @{ ok = $false; reason = 'too_long' } }
-            if ($clean -notmatch "^[A-Za-z0-9 ._()/&'+\-]+$") { return @{ ok = $false; reason = 'not_a_choice' } }
+            if ($clean -notmatch "^[A-Za-z0-9 ._()/&'+\-\u2013\u2014]+$") { return @{ ok = $false; reason = 'not_a_choice' } }
             return @{ ok = $true; value = $clean }
         }
         'hexColor' {
@@ -294,6 +349,15 @@ function Test-SiteFieldValue {
             if ($clean -notmatch '^\d{4}$') { return @{ ok = $false; reason = 'not_a_year' } }
             $y = [int]$clean
             if ($y -lt 1700 -or $y -gt ((Get-Date).ToUniversalTime().Year)) { return @{ ok = $false; reason = 'year_out_of_range' } }
+            return @{ ok = $true; value = $clean }
+        }
+        'publicStreetAddress' {
+            # One line, a house number or PO box, no contact details. City and
+            # state come from footerLocation, so this is the street line only.
+            if ($Field.maxLength -gt 0 -and $clean.Length -gt $Field.maxLength) { return @{ ok = $false; reason = 'too_long' } }
+            if ($clean -match '[\r\n]') { return @{ ok = $false; reason = 'not_one_line' } }
+            if ($clean -match '@|https?://|www\.') { return @{ ok = $false; reason = 'not_a_street_address' } }
+            if ($clean -notmatch '\d' -or $clean -notmatch '[A-Za-z]') { return @{ ok = $false; reason = 'not_a_street_address' } }
             return @{ ok = $true; value = $clean }
         }
         'githubUser' {

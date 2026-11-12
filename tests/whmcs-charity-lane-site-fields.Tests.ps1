@@ -76,9 +76,10 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
         $script:Config.productIds | Should -Be @(16, 33, 40)
     }
 
-    It 'names no personal, board, team, contact or address field' {
+    It 'names no personal, board, team, contact or address field (bar the one public street-address question)' {
         foreach ($f in $script:Config.fields) {
             foreach ($n in @($f.clientField) + $f.productFields) {
+                if ($f.type -eq 'publicStreetAddress' -and $n -eq 'footer-street-address') { continue }
                 $n | Should -Not -Match '(?i)mailing|address|contact|board|officer|team|testimonial|individual|first name|last name'
             }
         }
@@ -101,6 +102,25 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
 
     It 'does not take the public email from primary-contact-email (a personal contact)' {
         (Get-Field 'publicEmail').productFields | Should -Not -Contain 'primary-contact-email'
+    }
+
+    It 'waives the address guard only for footer-street-address on a publicStreetAddress field' {
+        (Get-Field 'footerStreetAddress').type | Should -Be 'publicStreetAddress'
+        $c = Copy-ConfigWith { param($c) ($c.fields | Where-Object { $_.key -eq 'footerStreetAddress' }).productFields = @('mailing-address') }
+        { Read-SiteFieldsConfig -ConfigObject $c } | Should -Throw '*publicStreetAddress*'
+        $c = Copy-ConfigWith { param($c) $c.fields += [pscustomobject]@{ key = 'sneakyAddress'; productFields = @('footer-street-address'); type = 'text' } }
+        { Read-SiteFieldsConfig -ConfigObject $c } | Should -Throw '*denied*'
+        $c = Copy-ConfigWith { param($c) ($c.fields | Where-Object { $_.key -eq 'footerStreetAddress' }).productLabelPatterns = @('address') }
+        { Read-SiteFieldsConfig -ConfigObject $c } | Should -Throw '*label pattern*'
+    }
+
+    It 'validates the public street address (<v>)' -ForEach @(
+        @{ v = '123 Main St, Suite 4'; ok = $true }
+        @{ v = 'PO Box 77'; ok = $true }
+        @{ v = 'Main Street'; ok = $false }
+        @{ v = 'info@example.org 12'; ok = $false }
+    ) {
+        (Test-SiteFieldValue -Value $v -Field (Get-Field 'footerStreetAddress')).ok | Should -Be $ok
     }
 
     It 'refuses a config that adds the mailing address' {
@@ -357,15 +377,19 @@ Describe 'Live pid 33 display labels (GetClientsProducts returns the label, HTML
         }
     }
 
-    It 'leaves the board / contact-labelled fields missing (the deny guard still holds)' {
-        foreach ($k in 'maintainerGithub', 'leader1Name', 'leader2Name', 'leader3Name') {
-            $script:LiveResult.missing | Should -Contain $k
-        }
+    It 'fills the board officers the form asks to show on the website' {
+        $script:LiveResult.fields.leader1Name | Should -Be 'Roberta Boardwalker'
+        $script:LiveResult.fields.leader3Name | Should -Be 'Carol Teamworth'
+        $script:LiveResult.missing | Should -Contain 'leader2Name'   # no Secretary question in this fixture
+    }
+
+    It 'leaves the contact-labelled fields missing (the deny guard still holds)' {
+        $script:LiveResult.missing | Should -Contain 'maintainerGithub'
     }
 
     It 'never prints a personal, board or contact value (<_>)' -ForEach @(
         'janet.applicantson', '555-867-5309', 'linkedin.com/in/', 'tech.person', '555-000-1111', 'techperson',
-        'roberta.board', '217-555-0199', 'Boardwalker', 'Teamworth', '555-222-3333'
+        'roberta.board', '217-555-0199', '555-222-3333'
     ) {
         $script:LiveJson | Should -Not -BeLike "*$_*"
     }
@@ -393,6 +417,13 @@ Describe 'Label normalisation and the label deny guard' {
         @{ raw = "  Public   phone`tnumber "; want = 'Public phone number' }
     ) {
         Get-SiteFieldLabelText $raw | Should -Be $want
+    }
+
+    It 'lets only the whole "board officer - full name to show on your website" label past' {
+        Test-SiteFieldDeniedLabel -Label 'Board Chair / President - full name to show on your website' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeFalse
+        Test-SiteFieldDeniedLabel -Label 'Board Secretary - full name to show on your website' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeFalse
+        Test-SiteFieldDeniedLabel -Label 'Board President/Chair Individual Email' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeTrue
+        Test-SiteFieldDeniedLabel -Label 'Board Treasurer - full name to show on your website and phone' -DeniedPatterns $script:Config.deniedNamePatterns | Should -BeTrue
     }
 
     It 'lets "public email address" past the address fragment' {
@@ -485,8 +516,20 @@ Describe 'Validators' {
             @{ k = 'facebookUrl'; v = 'https://notfacebook.com/page'; why = 'url_host_not_allowed' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/in/some-person'; why = 'url_path_not_allowed' }
             @{ k = 'candidProfileUrl'; v = 'https://www.example.org/profile/12-3456789'; why = 'url_host_not_allowed' }
+            # Back-office and non-page URLs pasted by applicants (orders 875/876).
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/dashboard/'; why = 'url_path_is_admin' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/home/'; why = 'url_path_not_allowed' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_host_not_public' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
+            @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }
         ) {
             (Test-SiteFieldValue -Value $v -Field (Get-Field $k)).reason | Should -Be $why
+        }
+        It 'drops click-tracking parameters and keeps the rest' {
+            (Test-SiteFieldValue -Value 'https://www.facebook.com/share/abc123/?mibextid=K35XfP' -Field (Get-Field 'facebookUrl')).value | Should -Be 'https://www.facebook.com/share/abc123/'
+            (Test-SiteFieldValue -Value 'https://www.zeffy.com/en-US/donation-form/bff?utm_source=site&lang=en' -Field (Get-Field 'donationUrl')).value | Should -Be 'https://www.zeffy.com/en-US/donation-form/bff?lang=en'
         }
         It 'unwraps the anchor tag WHMCS puts around URL answers' {
             $v = '<a href="https://www.instagram.com/bff" target="_blank">https://www.instagram.com/bff</a>'

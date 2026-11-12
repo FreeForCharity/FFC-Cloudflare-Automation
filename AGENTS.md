@@ -200,11 +200,28 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
     1. **CI is green** and the PR is conflict-free.
     2. **Copilot has reviewed the current head.** That means a review from
        `copilot-pull-request-reviewer[bot]` whose `commit_id` is the head, or an earlier commit when
-       everything since is merges of `main`. Its body must open with `<!-- ccr-overview-v2 -->`;
-       Copilot's error bodies ("wasn't able to review", "encountered an error") are not reviews.
-       While the `copilot-pull-request-reviewer` check is queued or running, wait. If it failed, or
-       has not started 60 minutes after the push, do not enqueue; report it. Any other AI reviewer
-       that has started (Gemini, Codex, Claude) must also have finished.
+       everything since is merges of `main`.
+       - **The `copilot-pull-request-reviewer` check run on the head SHA is the PRIMARY signal, and
+         it decides refusal on its own:** `absent` = not armed, `queued`/`in_progress` = wait,
+         `failure` = refused (do not enqueue; report it), `success` = read the body. Do not infer a
+         refusal from the body when the check run says `success`.
+       - Its body must **contain** `<!-- ccr-overview-v2 -->` — **not necessarily open with it.**
+         Copilot now prefixes genuine, complete reviews with a `> [!NOTE]` banner about a degraded
+         model tier ("unable to complete this review at the selected tier due to model policy or
+         plan restrictions"), which pushes the marker off offset 0. **That banner is a tier notice,
+         not a refusal:** the review that follows it is whole, carries a verdict and lists its
+         findings. Asserting the marker's _position_ reports real reviews as refusals — measured
+         2026-11-06 on 2 of 12 open `agentic-os` PRs (#1721), and **10 of 10** reviewed PRs in the
+         same cohort on 2026-11-09, both false negatives on 🟢 `Approval recommended` bodies. The
+         wording is Copilot's and may change again; the durable rule is that **position is the wrong
+         thing to assert on**.
+       - Copilot's error bodies ("wasn't able to review", "encountered an error") are not reviews.
+         Those arrive with a `failure` or `absent` check run, so the check-run read above separates
+         them from a tier-degraded real review without parsing prose at all.
+       - `scripts/copilot_review_condition2.py` is the canonical implementation of this clause; call
+         it rather than re-deriving the test. If it failed, or has not started 60 minutes after the
+         push, do not enqueue; report it. Any other AI reviewer that has started (Gemini, Codex,
+         Claude) must also have finished.
     - **An error body is recoverable, but only by RE-REQUESTING — and `requested_reviewers` is the
       wrong field to confirm it with.** Measured end to end on #1589 in run 259, after runs 257 and
       258 each spent a step guessing. Of the three things that look like remedies, exactly one

@@ -19,7 +19,12 @@ addresses anywhere in GitHub. Org name, domain, WHMCS order id and client id are
   within the gate policy.
 - **Internal lane (PR only):** never push to or merge in this hub or any `FFC-IN-*` repo. If the
   pipeline needs a change there, open a PR and list it on the ledger.
-- **Gates:** clear a gate only through `python3 scripts/charity_lane_gate.py run --rule <id> ...`.
+- **Gates:** clear a gate only through the gate broker, workflow 753: dispatch
+  `753-charity-lane-gate-broker.yml` with `mode=run`, `rule=<id>` and `inputs_json` = the rule's
+  inputs as one JSON object (string values), then read the outcome from #1608 or the run log. 753
+  runs `scripts/charity_lane_gate.py` in Actions; cloud sessions cannot approve gates themselves.
+  Gate 1/2 accepts are 753's own daily `advance` run; do not dispatch 226 / 211 accepts yourself.
+  (Before 753: `python3 scripts/charity_lane_gate.py run --rule <id> ...` from the local Conductor.)
   Never call `pending_deployments` directly, and never approve a run the script did not dispatch. If
   the script refuses (exit 2), the request is outside policy: record it as `DECISION NEEDED`.
 - **Dispatch:** for ungated workflows, use

@@ -116,7 +116,7 @@ $script:LaneOfficerConsentPattern = 'agree to be listed'
 # --------------------------------------------------------------------------
 $script:LaneCompletenessCodes = [ordered]@{
     COMPLETENESS_NOT_CHECKED      = @{ severity = 'ESCALATE'; description = 'The pre-acceptance completeness review did not run for this order. Never ACCEPT without it.'; applicant = '' }
-    ORG_LEGAL_NAME_MISSING        = @{ severity = 'NEED_INFO'; description = "Organization's legal name not answered."; applicant = "Your organization's legal name, exactly as on your IRS letter or state filing." }
+    ORG_LEGAL_NAME_MISSING        = @{ severity = 'NEED_INFO'; description = "Organization's legal name not answered."; applicant = "Your organization's legal name, exactly as registered with the IRS or your state." }
     MISSION_MISSING               = @{ severity = 'NEED_INFO'; description = 'Mission not answered.'; applicant = "Your organization's mission, in one or two plain sentences." }
     FOUNDING_YEAR_MISSING         = @{ severity = 'NEED_INFO'; description = 'Founding year not answered.'; applicant = 'The year your organization was founded (for example 2015).' }
     FOUNDING_YEAR_INVALID         = @{ severity = 'NEED_INFO'; description = 'Founding year is not a 4-digit year.'; applicant = 'The year your organization was founded, as a 4-digit year (for example 2015).' }

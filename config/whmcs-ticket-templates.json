@@ -44,6 +44,13 @@
       "subject": "A few details are needed to continue your application",
       "extra_message_required": true,
       "body": "Thank you for applying to Free For Charity. Before we can approve your application and start your website, we need a few details that are missing or could not be confirmed. The specific items are listed below. Please update them in your application at https://freeforcharity.org/hub (or reply to this ticket in your client area with them), and we will continue automatically once they are in place. If anything here looks wrong, reply to this ticket in your client area and a volunteer will take a look."
+    },
+    "onboarding_accepted_gaps": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "Your application is accepted, and a few details are still needed",
+      "extra_message_required": true,
+      "body": "Thank you for applying to Free For Charity, and we are sorry for how long this has taken. We have a deep backlog of applications and are working to activate more charities every week. Your application has been accepted. It was submitted on an older version of our application form, which did not ask for everything we now use to build your website, so a few details are still missing or could not be confirmed. The specific items are listed below, along with the link to your website preview if one is ready. Please update them in your application at https://freeforcharity.org/hub or reply to this ticket in your client area with them. Tickets are not watched around the clock, so the best way to keep things moving is to text Clarke Moyer at 520-222-8104."
     }
   }
 }

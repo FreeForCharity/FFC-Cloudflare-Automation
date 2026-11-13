@@ -115,9 +115,16 @@ flowchart TD
    A row with no review is ESCALATE `COMPLETENESS_NOT_CHECKED`. Each NEED_INFO code carries the
    plain-English `applicant` line the need-info ticket uses. `226 approve` runs the same review for
    every order it is asked to accept and refuses (and fails the run) on any blocking code, so a
-   by-hand accept is gated too; there is no override. The content half of §5b (does the current
-   website describe the same organization, mission and leaders as the application) is a judgment, so
-   the conductor does it before every accept (routine step 2).
+   by-hand accept is gated too. The one exception is an order Clarke adjudicated himself, on an
+   application filed on the older form (Clarke, 2026-11-13: accept the order, then immediately send
+   a follow-up ticket with the preview URL and the gaps). Such an order is listed in
+   `config/charity-lane-adjudicated-orders.json`, by order id and date only, through a PR merged on
+   his approval. `226` still runs the review, accepts the order as `accepted-adjudicated` with its
+   gap codes and the applicant fix list in the accept results, and warns that the
+   `onboarding_accepted_gaps` ticket is owed. The conductor sends that ticket in the same pass.
+   Adjudication covers completeness gaps only, never a fraud, sanctions or eligibility finding. The
+   content half of §5b (does the current website describe the same organization, mission and leaders
+   as the application) is a judgment, so the conductor does it before every accept (routine step 2).
 
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script

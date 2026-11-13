@@ -114,6 +114,20 @@ Describe 'Resolve-WhmcsOpenTicketTemplate (shipped config)' {
         { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_need_info' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
     }
 
+    It 'builds onboarding_accepted_gaps with the backlog apology, the older-form note and the text line' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage 'Preview: https://freeforcharity.github.io/FFC-EX-example.org/'
+        $r.Subject | Should -Be '[Application] Your application is accepted, and a few details are still needed'
+        $r.Message | Should -Match 'sorry for how long this has taken'
+        $r.Message | Should -Match 'activate more charities every week'
+        $r.Message | Should -Match 'older version of our application form'
+        $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
+        $r.Message | Should -Match "`n`nPreview: https://freeforcharity\.github\.io/FFC-EX-example\.org/$"
+    }
+
+    It 'refuses onboarding_accepted_gaps without the gap list' {
+        { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
+    }
+
     It 'refuses a reply-only template (no subject)' {
         { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'need_info' -ExtraMessage '' } | Should -Throw '*reply-only*'
     }

@@ -86,6 +86,12 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      accept. Then
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.
      If 226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names.
+     If it reports `ADJUDICATED` (an order Clarke adjudicated himself, listed in
+     `config/charity-lane-adjudicated-orders.json`), the order is accepted with gaps and you owe its
+     ticket now: `205-templated` with `template=onboarding_accepted_gaps`, the `client_id`, and
+     `extra_message` = `Preview: <url>` when the site is built, then the result's `fixList` lines,
+     one per line. Never add an order to that file yourself; only a PR merged on Clarke's approval
+     does.
    - **ACCEPT, pid 40:**
      `charity_lane_gate.py run --rule 211-accept-one --input order_id=<id> --input action=accept --input dry_run=false`.
    - **NEED_INFO** [`onboarding_need_info` template, #1632]: once per order per 7 days, run

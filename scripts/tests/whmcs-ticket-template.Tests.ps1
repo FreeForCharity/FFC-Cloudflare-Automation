@@ -118,10 +118,25 @@ Describe 'Resolve-WhmcsOpenTicketTemplate (shipped config)' {
         $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage 'Preview: https://freeforcharity.github.io/FFC-EX-example.org/'
         $r.Subject | Should -Be '[Application] Your application is accepted, and a few details are still needed'
         $r.Message | Should -Match 'sorry for how long this has taken'
+        # Clarke 2026-11-13: the first paragraph asks whether they are still
+        # interested, and a reply counts as interest; proof is a URL, never a letter.
+        ($r.Message -split "`n`n")[0] | Should -Match 'still interested in receiving our services'
+        ($r.Message -split "`n`n")[0] | Should -Match 'Replying to this ticket in your client area'
+        $r.Message | Should -Match 'we do not need letters or documents'
         $r.Message | Should -Match 'activate more charities every week'
         $r.Message | Should -Match 'older version of our application form'
         $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
         $r.Message | Should -Match "`n`nPreview: https://freeforcharity\.github\.io/FFC-EX-example\.org/$"
+    }
+
+    It 'opens onboarding_still_interested with the apology and the interest question' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_still_interested' -ExtraMessage 'Missing: organization name'
+        $first = ($r.Message -split "`n`n")[0]
+        $first | Should -Match 'sorry for how long'
+        $first | Should -Match 'still interested in receiving Free For Charity services'
+        $r.Message | Should -Match 'we do not need letters or documents'
+        $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
+        $r.Message | Should -Match 'within 30 days'
     }
 
     It 'refuses onboarding_accepted_gaps without the gap list' {

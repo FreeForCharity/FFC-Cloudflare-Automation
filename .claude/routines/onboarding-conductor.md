@@ -101,6 +101,16 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      `applicant` line from `$script:LaneCompletenessCodes` in
      `scripts/charity-lane-completeness.ps1`, verbatim. Never paste codes or anyone's personal
      details into the ticket. Record the codes on the ledger.
+   - **Several tickets at once:**
+     `scripts/charity_lane_ticket_batch.py plan|send --verdicts-run <232 run> --template <name> --orders <ids>`
+     builds each gap list from that run's codes and sends each ticket through rule `205-templated`.
+     Run `plan` first and read it.
+   - **What a ticket may ask for (Clarke, 2026-11-13):** proof is always a public URL we can open
+     (for example a national body's chapter list, or a Candid profile), never an IRS determination
+     letter, a sponsorship letter or any other document we would not verify. A fiscal sponsor must
+     submit its own FFC application in addition to each group it sponsors; hold the sponsored
+     group's order until the sponsor's application is in, and say so in its ticket. A chapter under
+     a national body is not a fiscal sponsorship (order 800, 2026-11-13).
    - **ESCALATE:** a `DECISION NEEDED` line with the order id, org name and reason codes.
 3. **Find what already exists, then queue** [workflow 750]. Before opening any `[CHARITY-LANE]`
    item, and before provisioning, establish whether this charity is already known and where it lives

@@ -19,7 +19,12 @@ addresses anywhere in GitHub. Org name, domain, WHMCS order id and client id are
   within the gate policy.
 - **Internal lane (PR only):** never push to or merge in this hub or any `FFC-IN-*` repo. If the
   pipeline needs a change there, open a PR and list it on the ledger.
-- **Gates:** clear a gate only through `python3 scripts/charity_lane_gate.py run --rule <id> ...`.
+- **Gates:** clear a gate only through the gate broker, workflow 753: dispatch
+  `753-charity-lane-gate-broker.yml` with `mode=run`, `rule=<id>` and `inputs_json` = the rule's
+  inputs as one JSON object (string values), then read the outcome from #1608 or the run log. 753
+  runs `scripts/charity_lane_gate.py` in Actions; cloud sessions cannot approve gates themselves.
+  Gate 1/2 accepts are 753's own daily `advance` run; do not dispatch 226 / 211 accepts yourself.
+  (Before 753: `python3 scripts/charity_lane_gate.py run --rule <id> ...` from the local Conductor.)
   Never call `pending_deployments` directly, and never approve a run the script did not dispatch. If
   the script refuses (exit 2), the request is outside policy: record it as `DECISION NEEDED`.
 - **Dispatch:** for ungated workflows, use
@@ -127,10 +132,16 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - `domain_registrar`: map `domainRegistrar` onto the policy enum (GoDaddy, Wix, Squarespace, else
      `Other / another registrar`); `No domain yet` when they do not own it; `Unknown / not sure`
      when blank;
-   - `footer_email` / `footer_phone` / `footer_address` = `publicEmail` / `publicPhone` /
-     `footerLocation`; `footer_ein` = `ein`; `guidestar_profile_url` = `candidProfileUrl`;
-     `mission`; `donation_url` / `volunteer_url`; `social_links` = the social URLs one per line;
-     `leadership_lines` = `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
+   - `footer_email` / `footer_phone` = `publicEmail` / `publicPhone`; `footer_address` follows the
+     footer address rule (docs/charity-intake-autonomy.md):
+     `<footerStreetAddress>, <footerLocation>` when 234 reports `footerStreetAddress` (the
+     application's optional "Public street address for your website footer" question, the
+     applicant's consent to publish it); otherwise `footerLocation` (City, State) alone. Never the
+     IRS / ProPublica record or the WHMCS client mailing address. An application from before that
+     question existed gets City, State only until the charity confirms an address. `footer_ein` =
+     `ein`; `guidestar_profile_url` = `candidProfileUrl`; `mission`; `donation_url` /
+     `volunteer_url`; `social_links` = the social URLs one per line; `leadership_lines` =
+     `<leader1Name> - Board Chair`, `<leader2Name> - Board Secretary`,
      `<leader3Name> - Board Treasurer` (one per line; the application requires all three and their
      consent to appear), then any `leadershipLines`.
 

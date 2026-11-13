@@ -20,23 +20,25 @@ credentials — the same convention as `vars.*_AZURE_KV_CLIENT_ID`).
 | `ffc-admin-kv-reader`     | `db736be6-6776-4cbd-9f16-10f76de3a3c1` | `79a123d8-2f45-4925-a550-bbd849399daf` | Read identity — `read-all-*` KV secrets (`READ_ALL_*` OIDC vars) |
 | `ffc-admin-kv-writer`     | `d42c3d6a-8fe9-4ac7-a776-74bac8a19642` | `be39a762-1727-49aa-998f-7af1a5379894` | Write identity — `wr-all-*` KV secrets (`WR_ALL_*` OIDC vars)    |
 | `FFC Microsoft Graph CLI` | `8fc12b52-4f88-43be-ba7c-d2ee9759c212` | `8e54bc08-bd4a-4fc9-ab7b-e6f0d420b6d7` | M365 Graph identity (`FFC_AZURE_CLIENT_ID` env secret)           |
+| `FFC Application Intake`  | `c7d0a578-58a5-4a04-b490-82a4d203f752` | `67445b55-c007-4cf5-a246-c601ccfd3a9d` | 753 broker only — one secret (`INTAKE_FFC_AZURE_KV_CLIENT_ID`)   |
 
 ## Environment → app mapping (this repo)
 
-| Environment                                 | App                                  | Notes                                                                               |
-| ------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
-| `cloudflare-prod-read`                      | kv-reader                            | ungated                                                                             |
-| `cloudflare-prod-write` / `cloudflare-prod` | kv-writer                            | gated                                                                               |
-| `google-prod-read`                          | kv-reader                            | ungated                                                                             |
-| `google-prod-write`                         | kv-writer                            | gated (Google provisioning: 503, 505)                                               |
-| `zeffy-prod`                                | kv-writer                            | ungated                                                                             |
-| `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212)                              |
-| `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–221) — **applied 2026-07-07** |
-| `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **typo fixed 2026-07-07**                                                   |
-| `github-prod-read`                          | kv-reader                            | ungated (GitHub reads: 502 `deliver`, 726, 735) — **applied 2026-07-29**            |
-| `github-prod`                               | kv-writer                            | gated (GitHub writes)                                                               |
-| `candid-prod-read`                          | kv-reader                            | ungated (801, 802) — **federated credential NOT created** (see below)               |
-| `fraudlabspro-prod-read`                    | kv-reader                            | ungated (228 `fraud_review`) — **federated credential NOT created** (see below)     |
+| Environment                                 | App                                  | Notes                                                                                 |
+| ------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------- |
+| `cloudflare-prod-read`                      | kv-reader                            | ungated                                                                               |
+| `cloudflare-prod-write` / `cloudflare-prod` | kv-writer                            | gated                                                                                 |
+| `google-prod-read`                          | kv-reader                            | ungated                                                                               |
+| `google-prod-write`                         | kv-writer                            | gated (Google provisioning: 503, 505)                                                 |
+| `zeffy-prod`                                | kv-writer                            | ungated                                                                               |
+| `whmcs-prod`                                | kv-writer                            | gated (WHMCS writes: 102, 116, 118, 204–207, 211, 212)                                |
+| `whmcs-prod-read`                           | kv-reader                            | ungated (WHMCS reads: 104, 115, 201–203, 208–210, 213–221) — **applied 2026-07-07**   |
+| `m365-prod`                                 | Graph CLI (+ kv-reader for KV steps) | gated — **typo fixed 2026-07-07**                                                     |
+| `github-prod-read`                          | kv-reader                            | ungated (GitHub reads: 502 `deliver`, 726, 735) — **applied 2026-07-29**              |
+| `github-prod`                               | kv-writer                            | gated (GitHub writes)                                                                 |
+| `candid-prod-read`                          | kv-reader                            | ungated (801, 802) — **federated credential NOT created** (see below)                 |
+| `fraudlabspro-prod-read`                    | kv-reader                            | ungated (228 `fraud_review`) — **federated credential NOT created** (see below)       |
+| `charity-lane-broker`                       | FFC Application Intake               | ungated, `main` only (753); KV access is the broker PAT secret alone — **2026-11-12** |
 
 ## ✅ Resolved — `m365-prod` credential subject typo (found & fixed 2026-07-07)
 

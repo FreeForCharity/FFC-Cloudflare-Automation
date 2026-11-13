@@ -9,7 +9,20 @@ for what is allowed.
 
     check  --rule ID --input k=v ...   validate only; dispatches nothing
     run    --rule ID --input k=v ...   validate, dispatch, approve allowed gates, watch
+    run    --rule ID --inputs-env VAR  same, inputs as a JSON object in env var VAR
+                                       (how workflow 753 passes a dispatcher's inputs)
+    advance [--dry-run]                Gate 1/2: run 232, then accept each ACCEPT row
+                                       (fraud screened and passed) through 226 / 211,
+                                       at most policy.advance.max_accepts per run
+    sequence NAME [--dry-run]          run a named policy sequence in order, stopping
+                                       at the first step that does not succeed
+                                       (e.g. weekly-sites-list: 601, then 703)
     live-site DOMAIN                   print the live-site verdict for a domain
+
+`advance` and `sequence` exist so the whole loop can run inside GitHub Actions
+(workflow 753, docs/charity-intake-autonomy.md), where no agent session and no
+operator's PC is needed. Every step still goes through the same rule check,
+dispatch, identify and approve path as `run`.
 
 Order of operations for `run`:
   1. The inputs are checked against the rule: closed set, enum / pattern / maxlen,
@@ -215,6 +228,14 @@ def post_audit(policy: dict, lines: list[str]) -> None:
 
 
 def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, audit: bool) -> int:
+    code, result = execute(policy, rule, inputs, timeout_s, audit)
+    if result is not None:
+        print(json.dumps(result, indent=2))
+    return code
+
+
+def execute(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, audit: bool) -> tuple[int, dict | None]:
+    """Dispatch one run under `rule`, clear its allowed gates, watch it. Returns (exit code, result)."""
     repo, wf = policy["repo"], rule["workflow"]
     # 103/701 name the input `domain`; 120 names it `domains` (one domain, by rule).
     live = live_site(inputs.get("domain") or inputs["domains"]) if rule.get("live_site_check") else None
@@ -248,7 +269,7 @@ def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, au
                     "- DECISION NEEDED: check the workflow's recent runs; do not re-dispatch.",
                 ],
             )
-        return EXIT_DISPATCHED_UNIDENTIFIED
+        return EXIT_DISPATCHED_UNIDENTIFIED, None
 
     rid, url = run["id"], run["html_url"]
     approved, refused = [], []
@@ -282,6 +303,7 @@ def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, au
     conclusion = gh([f"repos/{repo}/actions/runs/{rid}"]).get("conclusion")
     result = {
         "run": url,
+        "run_id": rid,
         "rule": rule["id"],
         "approved": approved,
         "refused": refused,
@@ -289,7 +311,6 @@ def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, au
         "conclusion": conclusion,
         "live_site": live[1] if live else None,
     }
-    print(json.dumps(result, indent=2))
     if audit:
         lines = [
             f"**Charity-lane gate - rule `{rule['id']}`** - {url}",
@@ -301,7 +322,140 @@ def cmd_run(policy: dict, rule: dict, inputs: dict[str, str], timeout_s: int, au
         lines += [f"- ESCALATE (left for Clarke): {r}" for r in refused]
         lines.append(f"- status: {status} / {conclusion}")
         post_audit(policy, lines)
+    return 0, result
+
+
+# ---------------------------------------------------------------- advance / sequence
+
+
+def select_accepts(policy: dict, report: dict, max_accepts: int) -> list[tuple[str, dict[str, str]]]:
+    """Pure: the (rule id, inputs) pairs `advance` will run for a 232 verdicts report.
+
+    Only a fraud-SCREENED report counts (the unscreened intermediate carries
+    FRAUD_CHECK_NOT_RUN on every row and is not a decision input), and only rows
+    whose verdict is ACCEPT *and* whose own fraud_check is `pass`. Oldest order
+    first, capped. Each pair is validated against its rule before it is returned,
+    so a malformed row is refused here rather than at dispatch.
+    """
+    if not str(report.get("schema", "")).startswith("charity-lane-verdicts/"):
+        raise PolicyError(f"unrecognised verdicts schema {report.get('schema')!r}")
+    if report.get("fraud_check") != "screened":
+        raise PolicyError("verdicts report is not fraud-screened; refusing to accept anything from it")
+    rows = [r for r in report.get("verdicts") or [] if r.get("verdict") == "ACCEPT" and r.get("fraud_check") == "pass"]
+    rows.sort(key=lambda r: int(r.get("order_id") or 0))
+    out: list[tuple[str, dict[str, str]]] = []
+    for r in rows:
+        oid = str(r.get("order_id", ""))
+        gate = int(r.get("gate") or 0)
+        if gate == 1:
+            pair = ("226-approve-one", {"mode": "approve", "orderids": oid})
+        elif gate == 2:
+            pair = ("211-accept-one", {"order_id": oid, "action": "accept", "dry_run": "false"})
+        else:
+            continue
+        validate_inputs(find_rule(policy, pair[0]), pair[1])
+        out.append(pair)
+        if len(out) >= max_accepts:
+            break
+    return out
+
+
+def gh_bytes(path: str) -> bytes:
+    r = subprocess.run(["gh", "api", path], capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"gh api {path} failed: {r.stderr.decode('utf-8', 'replace').strip()[:500]}")
+    return r.stdout
+
+
+def download_json_artifact(repo: str, run_id: int, name: str) -> dict:
+    import io
+    import zipfile
+
+    arts = gh([f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"])["artifacts"]
+    hits = [a for a in arts if a.get("name") == name and not a.get("expired")]
+    if len(hits) != 1:
+        raise RuntimeError(f"run {run_id}: expected one artifact {name!r}, found {len(hits)}")
+    blob = gh_bytes(f"repos/{repo}/actions/artifacts/{hits[0]['id']}/zip")
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        members = [m for m in z.namelist() if m.endswith(".json")]
+        if len(members) != 1:
+            raise RuntimeError(f"artifact {name!r}: expected one .json member, found {members}")
+        return json.loads(z.read(members[0]).decode("utf-8-sig"))
+
+
+def cmd_advance(policy: dict, dry_run: bool, timeout_s: int) -> int:
+    cfg = policy.get("advance") or {}
+    cap = int(cfg.get("max_accepts", 0))
+    if cap < 1:
+        raise PolicyError("policy.advance.max_accepts is not set; advance is disabled")
+    vrule = find_rule(policy, cfg.get("verdicts_rule", "232-verdicts"))
+    code, res = execute(policy, vrule, {}, timeout_s, audit=False)
+    if code != 0 or res is None or res.get("conclusion") != "success":
+        print(f"ERROR: verdicts run did not succeed: {json.dumps(res)}", file=sys.stderr)
+        return 1
+    report = download_json_artifact(policy["repo"], res["run_id"], cfg.get("verdicts_artifact", "charity-lane-verdicts"))
+    plan = select_accepts(policy, report, cap)
+    counts = report.get("counts") or {}
+    summary = {"verdicts_run": res["run"], "counts": counts, "plan": [{"rule": r, "inputs": i} for r, i in plan], "dry_run": dry_run, "results": []}
+    worst = 0
+    if not dry_run:
+        for rule_id, inputs in plan:
+            c, out = execute(policy, find_rule(policy, rule_id), inputs, timeout_s, audit=True)
+            summary["results"].append({"rule": rule_id, "inputs": inputs, "exit": c, "conclusion": (out or {}).get("conclusion")})
+            worst = max(worst, c)
+    print(json.dumps(summary, indent=2))
+    post_audit(
+        policy,
+        [
+            f"**Charity-lane advance{' (dry run)' if dry_run else ''}** - verdicts {res['run']}",
+            f"- counts: `{json.dumps(counts)}`",
+            f"- planned accepts (cap {cap}): " + (", ".join(f"{r} {json.dumps(i)}" for r, i in plan) or "none"),
+        ]
+        + [f"- {x['rule']} {json.dumps(x['inputs'])}: exit {x['exit']}, {x['conclusion']}" for x in summary["results"]],
+    )
+    return worst
+
+
+def cmd_sequence(policy: dict, name: str, dry_run: bool, timeout_s: int) -> int:
+    steps = (policy.get("sequences") or {}).get(name)
+    if not steps:
+        raise PolicyError(f"unknown sequence {name!r}")
+    # Validate every step before dispatching any, so a bad later step cannot leave
+    # an earlier one half-done.
+    resolved = []
+    for st in steps:
+        rule = find_rule(policy, st["rule"])
+        validate_inputs(rule, dict(st.get("inputs") or {}))
+        resolved.append((rule, dict(st.get("inputs") or {})))
+    if dry_run:
+        print(json.dumps({"sequence": name, "steps": [r["id"] for r, _ in resolved], "dry_run": True}))
+        return 0
+    for rule, inputs in resolved:
+        code, res = execute(policy, rule, inputs, timeout_s, audit=True)
+        if res is not None:
+            print(json.dumps(res, indent=2))
+        if code != 0 or res is None or res.get("conclusion") != "success":
+            print(f"STOPPED: sequence {name} step {rule['id']} did not succeed", file=sys.stderr)
+            return code or 1
     return 0
+
+
+def inputs_from_env(var: str) -> dict[str, str]:
+    import os
+
+    raw = os.environ.get(var, "").strip() or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise PolicyError(f"{var} is not valid JSON: {e}") from None
+    if not isinstance(data, dict):
+        raise PolicyError(f"{var} must be a JSON object")
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        if not isinstance(v, (str, int, bool)):
+            raise PolicyError(f"input {k!r} must be a string, number or boolean")
+        out[str(k)] = str(v).lower() if isinstance(v, bool) else str(v)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -311,9 +465,17 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         p.add_argument("--rule", required=True)
         p.add_argument("--input", action="append", default=[], metavar="KEY=VALUE")
+        p.add_argument("--inputs-env", metavar="VAR", help="read inputs as a JSON object from env var VAR")
         if name == "run":
             p.add_argument("--timeout", type=int, default=1500, help="seconds to watch the run (default 1500)")
             p.add_argument("--no-audit", action="store_true", help="skip the ledger comment")
+    p = sub.add_parser("advance")
+    p.add_argument("--dry-run", action="store_true", help="read verdicts and print the plan; accept nothing")
+    p.add_argument("--timeout", type=int, default=1500)
+    p = sub.add_parser("sequence")
+    p.add_argument("name")
+    p.add_argument("--dry-run", action="store_true", help="validate the steps; dispatch nothing")
+    p.add_argument("--timeout", type=int, default=3600)
     p = sub.add_parser("live-site")
     p.add_argument("domain")
     args = ap.parse_args(argv)
@@ -327,8 +489,17 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"domain": args.domain, "live": is_live, "reason": reason}))
             return 0
         policy = load_policy()
+        if args.cmd == "advance":
+            return cmd_advance(policy, args.dry_run, args.timeout)
+        if args.cmd == "sequence":
+            return cmd_sequence(policy, args.name, args.dry_run, args.timeout)
         rule = find_rule(policy, args.rule)
-        inputs = parse_inputs(args.input)
+        if args.inputs_env:
+            if args.input:
+                raise PolicyError("give inputs with --input or --inputs-env, not both")
+            inputs = inputs_from_env(args.inputs_env)
+        else:
+            inputs = parse_inputs(args.input)
         validate_inputs(rule, inputs)
         if args.cmd == "check":
             print(json.dumps({"rule": rule["id"], "ok": True}))

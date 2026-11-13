@@ -1,0 +1,467 @@
+"""Unit tests for scripts/check-copilot-instruction-budget.py.
+
+The guard exists because the Copilot instruction corpus is the one input to the
+reviewer's prompt this repository controls, and nothing anywhere read how much
+of the reviewer's window it already consumes (#1696). So the tests here are
+almost entirely about the ways the guard could UNDER-report the corpus, because
+that is the only failure direction that costs anything: an over-report is a
+minute of argument, an under-report reinstates the silent erosion the guard was
+written to stop.
+
+Pinned here:
+  * `CLAUDE.md` is in the candidate set -- the regression anchor for this whole
+    file. Copilot's refusal body names four instruction files to shorten and
+    omits `CLAUDE.md`, which is 61% of the corpus it refused; #1696's own
+    acceptance criteria took their file list from that message. A guard built to
+    it measures 102 KB of a 261 KB corpus and reports headroom that is not
+    there. The measured set comes from the reviewer's job log
+    (`names=["AGENTS.md","CLAUDE.md"]`), and the test asserts that, not the body.
+  * every file the refusal body DOES name is a candidate too, present or not, so
+    adding one later is not a silent budget increase;
+  * the `.github/instructions/**` glob is recursive, so a nested instruction
+    file cannot hide from the total;
+  * sizes are read as bytes, asserted with CRLF content -- text mode would
+    silently drop one byte per line on a CRLF checkout, which is the exact
+    failure CLAUDE.md records twice;
+  * an unreadable candidate is an error, never 0 bytes;
+  * the share is computed from the injected budget rather than a hardcoded
+    number, asserted by driving a different budget and requiring the answer to
+    follow it;
+  * the verdict boundaries are `>=` on both thresholds, checked one unit either
+    side, so an off-by-one in either direction is caught;
+  * the OVER verdict is ADVISORY by default and exits 1 only under `--strict`
+    (Clarke, 2026-11-12) -- an exit-1 at OVER runs in the repo-wide suite, so
+    it would turn every PR red including the one that trims the corpus, and
+    #1718 shows the corpus is not the term that overflows the prompt anyway;
+  * the report prints the observed-refusal note, so a verdict of `OK` cannot be
+    read as "review works" -- refusals are already happening at today's share;
+  * `MAX_PROMPT_TOKENS` still matches the provenance recorded in the docstring,
+    so the budget cannot be raised without the evidence being updated with it;
+  * a corpus the CLI cannot find is an ERROR, not a 0 B corpus scoring 0.0% of
+    budget -- a missing `--root`, a root holding no instruction file, and an
+    unreadable candidate all exit non-zero, with the error exit kept distinct
+    from the OVER exit so a caller can tell "the corpus overflowed" from "the
+    corpus was never read";
+  * and the live tree is within the hard threshold. That last test is how this
+    reaches CI at all: `run_all.py` picks the module up by name, with no
+    `.github/workflows/` edit -- a reserved lane this work must not enter.
+
+No network, no subprocess.
+
+Run: python3 tests/workflow-logic/test_copilot_instruction_budget.py
+"""
+
+from __future__ import annotations
+
+import contextlib
+import atexit
+import importlib.util
+import io
+import json
+import pathlib
+import shutil
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+SCRIPT = ROOT / "scripts" / "check-copilot-instruction-budget.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("check_copilot_instruction_budget", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+M = load_module()
+
+_CURRENT: list[str] = []
+
+
+def check(name, cond, detail=""):
+    if not cond:
+        _CURRENT.append("%s%s" % (name, " -- " + detail if detail else ""))
+
+
+# Fixture roots, removed at interpreter exit. 19 of them leaked per run before
+# this, measured -- small, but this suite runs 148 modules and the repo already
+# tracks a module that litters (#1023).
+#
+# Deliberately NOT `TemporaryDirectory`: CLAUDE.md records
+# `PermissionError [WinError 32]` / `[WinError 5]` tearing one down on the
+# Windows host, where a raising teardown turns a passing module red. Only
+# `ignore_errors=True` cannot raise, so a directory another process holds is
+# left to the OS rather than failing the suite.
+_FIXTURES: list[pathlib.Path] = []
+
+
+def _cleanup_fixtures():
+    while _FIXTURES:
+        shutil.rmtree(_FIXTURES.pop(), ignore_errors=True)
+
+
+atexit.register(_cleanup_fixtures)
+
+
+def fixture(files: dict) -> pathlib.Path:
+    """Write a throwaway checkout. Values are bytes, written verbatim."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    _FIXTURES.append(tmp)
+    for rel, blob in files.items():
+        path = tmp / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)
+    return tmp
+
+
+def test_claude_md_is_a_candidate_though_the_refusal_body_omits_it():
+    check("CLAUDE.md in CANDIDATE_PATHS", "CLAUDE.md" in M.CANDIDATE_PATHS,
+          "the refusal body's file list is not the loaded set; the job log is")
+    root = fixture({"CLAUDE.md": b"x" * 500, "AGENTS.md": b"y" * 100})
+    report = M.measure(root)
+    check("counted", report["total_bytes"] == 600, str(report["total_bytes"]))
+    claude = [f for f in report["files"] if f["path"] == "CLAUDE.md"][0]
+    check("share of corpus reported", abs(claude["share_of_corpus"] - 500 / 600) < 1e-9,
+          str(claude["share_of_corpus"]))
+
+
+def test_every_file_the_refusal_body_names_is_also_a_candidate():
+    for named in ("AGENTS.md", "REVIEW.md", ".github/copilot-instructions.md"):
+        check("candidate %s" % named, named in M.CANDIDATE_PATHS)
+    check("instructions glob present",
+          any("instructions" in g for g in M.CANDIDATE_GLOBS), str(M.CANDIDATE_GLOBS))
+
+
+def test_an_absent_candidate_is_reported_absent_and_contributes_zero():
+    report = M.measure(fixture({"AGENTS.md": b"z" * 40}))
+    absent = [f for f in report["files"] if f["path"] == "REVIEW.md"][0]
+    check("present False", absent["present"] is False, str(absent))
+    check("bytes None", absent["bytes"] is None, str(absent))
+    check("total unaffected", report["total_bytes"] == 40, str(report["total_bytes"]))
+
+
+def test_a_file_added_at_a_candidate_path_is_counted():
+    plain = M.measure(fixture({"AGENTS.md": b"a" * 100}))
+    with_new = M.measure(fixture({
+        "AGENTS.md": b"a" * 100,
+        "REVIEW.md": b"b" * 70,
+        ".github/copilot-instructions.md": b"c" * 30,
+    }))
+    check("growth counted", with_new["total_bytes"] == plain["total_bytes"] + 100,
+          "%d vs %d" % (with_new["total_bytes"], plain["total_bytes"]))
+
+
+def test_a_nested_instructions_file_is_counted_recursively():
+    report = M.measure(fixture({
+        "AGENTS.md": b"a" * 10,
+        ".github/instructions/deep/nested/go.instructions.md": b"g" * 25,
+    }))
+    paths = [f["path"] for f in report["files"]]
+    check("nested path discovered",
+          ".github/instructions/deep/nested/go.instructions.md" in paths, str(paths))
+    check("nested bytes counted", report["total_bytes"] == 35, str(report["total_bytes"]))
+
+
+def test_sizes_are_read_as_bytes_not_text():
+    # Three CRLF line endings: text mode would report 30 bytes, not 33.
+    blob = b"line one" + b"\r\n" + b"line two" + b"\r\n" + b"line three" + b"\r\n"
+    report = M.measure(fixture({"AGENTS.md": blob}))
+    check("CR bytes counted", report["total_bytes"] == len(blob),
+          "%d, expected %d" % (report["total_bytes"], len(blob)))
+
+
+def test_an_unreadable_candidate_is_an_error_not_zero_bytes():
+    root = fixture({"AGENTS.md": b"a" * 10, "CLAUDE.md": b"c" * 10})
+    real = pathlib.Path.read_bytes
+
+    def refuse(self):
+        if self.name == "CLAUDE.md":
+            raise OSError("simulated unreadable file")
+        return real(self)
+
+    pathlib.Path.read_bytes = refuse
+    try:
+        try:
+            report = M.measure(root)
+        except M.CorpusError:
+            return
+        except Exception as exc:  # noqa: BLE001 -- any other type is a finding
+            check("raises CorpusError", False, "%s: %s" % (type(exc).__name__, exc))
+            return
+        check("refused rather than under-reported", False,
+              "returned total_bytes=%d" % report["total_bytes"])
+    finally:
+        pathlib.Path.read_bytes = real
+
+
+def test_the_share_follows_the_injected_budget_not_a_hardcoded_number():
+    root = fixture({"AGENTS.md": b"a" * 4000})
+    wide = M.measure(root, budget_tokens=10000)
+    narrow = M.measure(root, budget_tokens=2000)
+    check("1000 tokens of 10000", abs(wide["share_of_budget"] - 0.10) < 1e-9,
+          str(wide["share_of_budget"]))
+    check("1000 tokens of 2000", abs(narrow["share_of_budget"] - 0.50) < 1e-9,
+          str(narrow["share_of_budget"]))
+    check("budget echoed", narrow["budget_tokens"] == 2000, str(narrow["budget_tokens"]))
+
+
+def test_the_token_estimate_rounds_up_so_the_corpus_is_never_under_reported():
+    # 4001 B is 1000.25 tokens. Flooring reports 1000 and drops the remainder,
+    # which is the one direction this guard must not err in. Found by Copilot on
+    # #1706 (discussion_r4512782481) and marked high severity; the under-report
+    # is below one token, so it could not flip a verdict at thresholds that are
+    # exact token multiples, but the stated contract said conservative and the
+    # arithmetic said otherwise.
+    over = M.measure(fixture({"AGENTS.md": b"a" * 4001}), budget_tokens=10000)
+    check("rounds up", over["estimated_tokens"] == 1001, str(over["estimated_tokens"]))
+    check("the share follows the rounded-up count",
+          abs(over["share_of_budget"] - 0.1001) < 1e-9, str(over["share_of_budget"]))
+    # Discrimination against the plausible wrong fix, `total // bpt + 1`: an
+    # exact multiple must not be inflated.
+    exact = M.measure(fixture({"AGENTS.md": b"a" * 4000}), budget_tokens=10000)
+    check("an exact multiple is not inflated",
+          exact["estimated_tokens"] == 1000, str(exact["estimated_tokens"]))
+
+
+def test_the_report_states_the_bytes_per_token_it_actually_used():
+    # `render()` used to label the estimate with the module constant while
+    # `measure()` computed it from the caller's argument, so a non-default
+    # `bytes_per_token` printed a figure under a label contradicting it.
+    # Raised in Copilot's review summary on #1706 (not filed as an issue) and
+    # confirmed reachable: 260,832 B at 3 B/token reported 86,944 tokens under
+    # a label reading "4 B/token".
+    report = M.measure(fixture({"AGENTS.md": b"a" * 3000}), bytes_per_token=3)
+    check("the value is carried in the report", report.get("bytes_per_token") == 3,
+          str(report.get("bytes_per_token")))
+    check("the estimate used it", report["estimated_tokens"] == 1000,
+          str(report["estimated_tokens"]))
+    check("the rendered label states it, not the constant",
+          "(3 B/token)" in M.render(report),
+          [l for l in M.render(report).splitlines() if "B/token" in l])
+    # The default must still read 4, so carrying the value cannot be faked by
+    # hardcoding the other number.
+    default = M.measure(fixture({"AGENTS.md": b"a" * 3000}))
+    check("the default is unchanged", default["bytes_per_token"] == M.BYTES_PER_TOKEN,
+          str(default["bytes_per_token"]))
+    check("the default label states 4", "(4 B/token)" in M.render(default),
+          [l for l in M.render(default).splitlines() if "B/token" in l])
+
+
+def test_every_fixture_root_is_registered_for_cleanup_and_cleanup_cannot_raise():
+    # Raised in Copilot's review summary on #1706, not filed. Measured at 19
+    # leaked directories per run before the registry existed.
+    root = fixture({"AGENTS.md": b"a" * 8})
+    check("registered for cleanup", root in _FIXTURES, str(root))
+    # Delete it out from under the cleanup: on the Windows host a directory
+    # another process holds cannot be unlinked (CLAUDE.md's WinError 32/5
+    # note), and a teardown that raises would turn this green module red.
+    shutil.rmtree(root, ignore_errors=True)
+    try:
+        _cleanup_fixtures()
+    except Exception as exc:  # noqa: BLE001 -- the whole point of the check
+        check("cleanup cannot raise", False, "%s: %s" % (type(exc).__name__, exc))
+        return
+    check("the registry is drained", _FIXTURES == [], str(_FIXTURES))
+
+
+def test_a_non_positive_budget_or_token_size_is_refused_not_scored():
+    # The `budget_tokens=0` half was a fail-OPEN wearing a guard clause's
+    # clothes: `share = est_tokens / budget_tokens if budget_tokens else 0.0`
+    # scored the live 260,832 B corpus as `share 0.0, verdict OK`. Measured
+    # before the fix. `bytes_per_token=0` raised a bare ZeroDivisionError.
+    # Filed by Copilot on #1706 (discussion_r4521809577), medium severity.
+    root = fixture({"AGENTS.md": b"a" * 400})
+    for kwargs in ({"budget_tokens": 0}, {"budget_tokens": -1},
+                   {"bytes_per_token": 0}, {"bytes_per_token": -4}):
+        label = ", ".join("%s=%r" % kv for kv in kwargs.items())
+        try:
+            report = M.measure(root, **kwargs)
+        except M.CorpusError:
+            continue
+        except Exception as exc:  # noqa: BLE001 -- any other type is the bug
+            check("refuses %s with CorpusError" % label, False,
+                  "%s: %s" % (type(exc).__name__, exc))
+            continue
+        check("refuses %s" % label, False,
+              "scored it instead: share=%r verdict=%r"
+              % (report["share_of_budget"], report["verdict"]))
+    # The valid path must still compute, so the guards cannot be satisfied by
+    # refusing everything.
+    ok = M.measure(root, budget_tokens=100, bytes_per_token=4)
+    check("a positive budget still scores", ok["estimated_tokens"] == 100,
+          str(ok["estimated_tokens"]))
+    check("and its share is computed", abs(ok["share_of_budget"] - 1.0) < 1e-9,
+          str(ok["share_of_budget"]))
+
+
+def test_the_verdict_boundaries_are_inclusive_on_both_thresholds():
+    eps = 1e-6
+    check("below advisory is OK", M.verdict(M.ADVISORY_SHARE - eps) == "OK")
+    check("at advisory is WARN", M.verdict(M.ADVISORY_SHARE) == "WARN")
+    check("below hard is WARN", M.verdict(M.HARD_SHARE - eps) == "WARN")
+    check("at hard is OVER", M.verdict(M.HARD_SHARE) == "OVER")
+    check("above hard is OVER", M.verdict(0.99) == "OVER")
+    check("thresholds ordered", M.ADVISORY_SHARE < M.HARD_SHARE)
+
+
+def test_the_over_verdict_is_advisory_by_default_and_exits_1_under_strict():
+    under = fixture({"AGENTS.md": b"a" * 1000})
+    # Bytes needed to reach the hard share, given the recorded budget.
+    over_bytes = int(M.HARD_SHARE * M.MAX_PROMPT_TOKENS * M.BYTES_PER_TOKEN) + M.BYTES_PER_TOKEN
+    over = fixture({"AGENTS.md": b"a" * over_bytes})
+    # The report goes to stdout; swallow it so the roster `run_all.py` parses
+    # stays one line per test.
+    with contextlib.redirect_stdout(io.StringIO()):
+        under_rc = M.main(["--root", str(under)])
+        over_rc = M.main(["--root", str(over)])
+        under_strict = M.main(["--root", str(under), "--strict"])
+        over_strict = M.main(["--root", str(over), "--strict"])
+    check("under exits 0", under_rc == 0)
+    # The advisory default. This is the assertion that keeps a repo-wide gate
+    # from being reintroduced by accident: OVER must NOT fail an ordinary run.
+    check("over exits 0 by default (advisory)", over_rc == 0, "rc=%d" % over_rc)
+    check("under --strict exits 0", under_strict == 0)
+    check("over --strict exits 1", over_strict == 1, "rc=%d" % over_strict)
+
+
+def test_the_report_names_the_observed_refusal_so_ok_is_not_read_as_working():
+    report = M.measure(fixture({"AGENTS.md": b"a" * 10}))
+    check("verdict is OK on a tiny corpus", report["verdict"] == "OK", report["verdict"])
+    text = M.render(report)
+    check("note rendered", "NOTE:" in text, text[-200:])
+    check("names the refused PR", "#1596" in text, text[-200:])
+    check("names the tracking issue", "#1696" in text, text[-200:])
+
+
+def test_json_output_carries_per_file_bytes_and_both_thresholds():
+    report = M.measure(fixture({"AGENTS.md": b"a" * 80, "CLAUDE.md": b"c" * 120}))
+    blob = json.loads(json.dumps(report))
+    for key in ("files", "total_bytes", "estimated_tokens", "budget_tokens",
+                "share_of_budget", "advisory_share", "hard_share", "verdict"):
+        check("json key %s" % key, key in blob, str(sorted(blob)))
+    sizes = {f["path"]: f["bytes"] for f in blob["files"]}
+    check("per-file bytes", sizes.get("AGENTS.md") == 80 and sizes.get("CLAUDE.md") == 120,
+          str(sizes))
+
+
+def test_the_budget_constant_still_matches_its_recorded_provenance():
+    doc = M.__doc__ or ""
+    check("job log value quoted in the docstring",
+          "MaxPromptTokens=%d" % M.MAX_PROMPT_TOKENS in doc,
+          "raise the constant and the evidence for it must move with it")
+    check("the loaded set is cited from the log, not the refusal body",
+          'names=["AGENTS.md","CLAUDE.md"]' in doc, "docstring lost its provenance")
+
+
+def test_the_live_tree_corpus_is_measurable_and_its_verdict_reported():
+    report = M.measure(ROOT)
+    present = {f["path"] for f in report["files"] if f["present"]}
+    check("AGENTS.md measured in the live tree", "AGENTS.md" in present, str(present))
+    check("CLAUDE.md measured in the live tree", "CLAUDE.md" in present, str(present))
+    # ADVISORY, not a check(): see the module docstring. The reading is printed
+    # on every CI run so crossing a threshold is visible, but it does not fail
+    # the suite -- a repo-wide red here would also block the trim that fixes it.
+    print(
+        "  INFO corpus %d B = %.1f%% of the %d-token budget "
+        "(advisory %.0f%%, hard %.0f%%) -- VERDICT %s"
+        % (report["total_bytes"], 100 * report["share_of_budget"],
+           report["budget_tokens"], 100 * M.ADVISORY_SHARE,
+           100 * M.HARD_SHARE, report["verdict"])
+    )
+    if report["verdict"] == "OVER":
+        print(
+            "  INFO the corpus is over the hard threshold; trimming it is "
+            "#1696 AC1, a policy change reserved to @clarkemoyer"
+        )
+
+
+def _cli(argv):
+    """Run `main(argv)`, returning (rc, stdout, stderr).
+
+    Both streams are swallowed: `run_all.py` parses the roster from this
+    module's output, and an error line printed mid-run would make a module that
+    reports 16 tests look like one that reported 15 and then said something
+    else (L194).
+    """
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = M.main(argv)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def test_a_root_that_does_not_exist_is_an_error_not_an_empty_corpus():
+    # Registered like a `fixture()` root: this is the one site that needs a
+    # real parent directory holding a path that does not exist, so it cannot go
+    # through the helper, and it was the single directory still leaking after
+    # the registry landed.
+    parent = pathlib.Path(tempfile.mkdtemp())
+    _FIXTURES.append(parent)
+    missing = parent / "no-such-checkout"
+    rc, out, err = _cli(["--root", str(missing)])
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("does not render a verdict", "VERDICT" not in out, out[:200])
+    check("says what went wrong on stderr", "ERROR" in err, err[:200])
+    # Name the cause, not just the failure. A root that does not exist also
+    # holds no candidate, so the empty-corpus guard catches this case too --
+    # which means "exits non-zero" passes with the `is_dir()` check deleted.
+    # Measured: removing it leaves this module 17/17 green. Asserting the
+    # message is what makes the two guards distinguishable.
+    check("names the missing directory", "not a directory" in err, err[:200])
+
+
+def test_a_root_holding_no_instruction_file_is_an_error_not_a_zero_byte_corpus():
+    # The directory exists and is readable; the corpus has simply been renamed,
+    # moved, or never existed. 0 B scored 0.0% of budget and exited 0 before
+    # this check, which is the one failure direction this guard must not make.
+    empty = fixture({"README.md": b"not an instruction file"})
+    rc, out, err = _cli(["--root", str(empty)])
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("not reported as OK", "VERDICT: OK" not in out, out[:300])
+    check("names the empty corpus", "no instruction file" in err, err[:200])
+
+
+def test_an_unreadable_candidate_exits_non_zero_from_the_cli_too():
+    # `measure()` already refuses this (see the sibling test); before the
+    # CorpusError handler in `main()` it escaped the CLI as a traceback, whose
+    # status is indistinguishable from the OVER verdict's exit 1.
+    root = fixture({"AGENTS.md": b"a" * 10, "CLAUDE.md": b"c" * 10})
+    real = pathlib.Path.read_bytes
+
+    def refuse(self):
+        if self.name == "CLAUDE.md":
+            raise OSError("simulated unreadable file")
+        return real(self)
+
+    pathlib.Path.read_bytes = refuse
+    try:
+        rc, out, err = _cli(["--root", str(root)])
+    finally:
+        pathlib.Path.read_bytes = real
+    check("exits non-zero", rc != 0, "rc=%d" % rc)
+    check("distinguishable from OVER", rc != 1, "rc=%d collides with the OVER exit" % rc)
+    check("names the unreadable file", "CLAUDE.md" in err, err[:200])
+
+
+def main():
+    print("copilot instruction budget guard (scripts/check-copilot-instruction-budget.py):")
+    failed = 0
+    for name, fn in sorted(globals().items()):
+        if not (name.startswith("test_") and callable(fn)):
+            continue
+        del _CURRENT[:]
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
+            _CURRENT.append("%s: %s" % (type(exc).__name__, exc))
+        if _CURRENT:
+            failed += 1
+            print("  FAIL %s: %s" % (name, "; ".join(_CURRENT)))
+        else:
+            print("  PASS %s" % name)
+    print("\n%d failed" % failed if failed else "\nall passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

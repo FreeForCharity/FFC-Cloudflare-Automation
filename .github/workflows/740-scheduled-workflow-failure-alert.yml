@@ -106,7 +106,6 @@ jobs:
             502. Google - Analytics Report (GA4 -> JSON) [GOOGLE]
             504. Google - GTM Container Backups (weekly export) [GOOGLE]
             506. Google - Fleet Telemetry Reachability [GOOGLE]
-            703. Sites List - Generate (CSV + JSON) [GH]
             723. Repo - CodeQL Security Analysis [Repo]
             726. Repo - Rulesets + Settings Drift Audit [Org]
             731. Repo - Actions Run Metrics (30d per-workflow stats) [GH]
@@ -122,6 +121,7 @@ jobs:
             745. Repo - Agentic OS Board Audit [GH]
             747. Repo - Conductor Liveness [GH]
             748. Repo - Template Provisioning Matrix [Repo]
+            753. Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH]
           # Scheduled workflows in OTHER repositories, one `owner/repo :: Workflow name` per
           # line. Same byte-exact name rule as the hub list, and the same loud failure when an
           # entry resolves to nothing.

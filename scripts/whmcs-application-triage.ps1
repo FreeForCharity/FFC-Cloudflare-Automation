@@ -2007,9 +2007,33 @@ try {
         $body.orderid = $id
         $body.sendemail = [bool]$SendEmail
         if ($AutoSetup) { $body.autosetup = $true }
-        [void](Invoke-WhmcsApi -ApiUrl $api -Body $body)
-        Write-Summary "  - ACCEPTED: order $id (sendemail=$SendEmail, autosetup=$AutoSetup)."
-        $accepted.Add([pscustomobject]@{ orderid = $id; result = 'accepted'; pid = $summaryItem.pid; charity = $summaryItem.charityName })
+        # AcceptOrder can outlive the gateway: Cloudflare answers 524 after ~120s
+        # while WHMCS goes on to complete the accept (orders 875/876, 2026-11-12).
+        # Failing the run there leaves an accepted order reported as an error, and
+        # an immediate re-read can still say Pending, which invites a second
+        # accept. So on ANY call failure, re-read the order's own status for up to
+        # ~3 minutes and treat Active as success; anything else re-raises.
+        $acceptResult = 'accepted'
+        try {
+            [void](Invoke-WhmcsApi -ApiUrl $api -Body $body)
+        }
+        catch {
+            $callError = $_
+            Write-Summary "  - AcceptOrder call for order $id failed ($($callError.Exception.Message)); re-reading the order before deciding."
+            $after = $null
+            for ($attempt = 1; $attempt -le 6; $attempt++) {
+                Start-Sleep -Seconds 30
+                try { $after = Get-WhmcsOrderStatus -Api $api -Auth $auth -OrderId $id } catch { $after = $null }
+                if ($after -eq 'Active') { break }
+            }
+            if ($after -ne 'Active') {
+                Write-Summary "  - FAILED: order $id is '$after' after the failed AcceptOrder call. Do NOT re-run approve until the order's status has been checked in WHMCS."
+                throw $callError
+            }
+            $acceptResult = 'accepted-after-timeout'
+        }
+        Write-Summary "  - ACCEPTED: order $id (sendemail=$SendEmail, autosetup=$AutoSetup, result=$acceptResult)."
+        $accepted.Add([pscustomobject]@{ orderid = $id; result = $acceptResult; pid = $summaryItem.pid; charity = $summaryItem.charityName })
     }
 
     $acceptFile = ($OutputFile -replace '\.json$', '') + '.accept-results.json'

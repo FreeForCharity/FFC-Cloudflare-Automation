@@ -1,0 +1,47 @@
+{
+  "_comment": "Onboarding orders Clarke has adjudicated himself, so 226 approve may accept them even though the pre-acceptance completeness review finds gaps (scripts/charity-lane-completeness.ps1). Every accept through this list is recorded as result 'accepted-adjudicated' with its gap codes, and the same run must open the onboarding_accepted_gaps ticket (workflow 205) listing those gaps and the preview URL. Order ids and dates only: this repository is public, so no names, emails or other applicant details. An entry is added only by a PR merged on Clarke's own approval; 'decision' cites where he gave it. Adjudication never covers a fraud, sanctions or eligibility finding, which 232 decides before an order reaches approve.",
+  "orders": [
+    {
+      "orderid": "753",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; site already built",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "800",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; chapter EIN, ticket asks them to confirm the chapter is covered",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "827",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; charity has its own site",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "852",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; site already built",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "859",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "863",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
+      "orderid": "874",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; charity has its own site",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    }
+  ]
+}

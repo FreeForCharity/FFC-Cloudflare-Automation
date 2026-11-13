@@ -349,6 +349,34 @@ function Get-LaneApplicantFixList {
     return , $out.ToArray()
 }
 
+function Get-LaneAdjudicatedOrders {
+    # config/charity-lane-adjudicated-orders.json -> @{ '<orderid>' = entry }.
+    # Orders Clarke adjudicated himself (older application form): 226 approve
+    # accepts them despite completeness gaps and owes the gap ticket. A missing
+    # file means no overrides; a malformed one throws, because a silently
+    # ignored list would turn an adjudicated accept into a refusal or, worse, a
+    # typo into an override. Ids and dates only (the repository is public).
+    param([string]$Path)
+    $map = @{}
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $map }
+    $doc = Get-Content -LiteralPath $Path -Raw -Encoding utf8 | ConvertFrom-Json
+    if ($null -eq $doc.PSObject.Properties['orders']) { throw "Adjudicated-orders file $Path has no 'orders' list." }
+    foreach ($e in @($doc.orders)) {
+        $id = [string]$e.orderid
+        if ($id -notmatch '^[0-9]{1,9}$') { throw "Adjudicated-orders entry has an invalid orderid '$id'." }
+        if ([string]$e.adjudicatedOn -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "Adjudicated order $id needs adjudicatedOn as YYYY-MM-DD." }
+        if ([string]::IsNullOrWhiteSpace([string]$e.decision)) { throw "Adjudicated order $id needs 'decision' (where Clarke gave it)." }
+        if ([string]::IsNullOrWhiteSpace([string]$e.reason)) { throw "Adjudicated order $id needs a 'reason'." }
+        $text = ($e | ConvertTo-Json -Compress -Depth 4)
+        if ($text -match '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -or $text -match '\d{3}[ .-]\d{3}[ .-]\d{4}') {
+            throw "Adjudicated order $id carries contact details; this file is public, list ids and dates only."
+        }
+        if ($map.ContainsKey($id)) { throw "Adjudicated order $id is listed twice." }
+        $map[$id] = $e
+    }
+    return $map
+}
+
 # --------------------------------------------------------------------------
 # Network helpers (read-only public GETs; the runners call these).
 # --------------------------------------------------------------------------

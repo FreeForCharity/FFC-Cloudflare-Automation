@@ -135,7 +135,13 @@ param(
 
     [Parameter()]
     [ValidateRange(1, 250)]
-    [int]$PageSize = 250
+    [int]$PageSize = 250,
+
+    # approve-only: orders Clarke adjudicated himself (older application form).
+    # Listed orders with completeness gaps are accepted as 'accepted-adjudicated'
+    # and must get the onboarding_accepted_gaps ticket in the same pass.
+    [Parameter()]
+    [string]$AdjudicatedOrdersPath = 'config/charity-lane-adjudicated-orders.json'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1973,6 +1979,7 @@ try {
     Write-Summary ''
     $accepted = [System.Collections.Generic.List[object]]::new()
     $reviewLinkCache = @{}; $reviewGithubCache = @{}
+    $adjudicated = Get-LaneAdjudicatedOrders -Path $AdjudicatedOrdersPath
     foreach ($id in $ids) {
         $summaryItem = $byOrder[$id]
         if ($summaryItem) {
@@ -2013,8 +2020,11 @@ try {
         }
 
         # Pre-acceptance completeness review (scripts/charity-lane-completeness.ps1).
-        # Blocking, no override: an application that is not complete is never
-        # accepted, whoever asked for it (Clarke, 2026-11-13). The same review
+        # Blocking: an application that is not complete is never accepted
+        # (Clarke, 2026-11-13). The one exception is an order Clarke adjudicated
+        # himself, listed in config/charity-lane-adjudicated-orders.json by a
+        # merged PR; it is accepted with its gaps recorded and the gap ticket
+        # owed in the same pass. The same review
         # runs in 232, so the routine sees NEED_INFO / ESCALATE, not ACCEPT.
         $rawApp = @($rawApps | Where-Object { [string]$_.orderid -eq [string]$id }) | Select-Object -First 1
         if (-not $rawApp) {
@@ -2023,12 +2033,19 @@ try {
             continue
         }
         $review = Invoke-LaneCompletenessReview -Fields $rawApp.fields -ProductPid ([int]$rawApp.pid) -LinkCache $reviewLinkCache -GithubCache $reviewGithubCache
-        if (@($review.Blocking).Count -gt 0) {
+        $adjudication = $null
+        if (@($review.Blocking).Count -gt 0 -and $adjudicated.ContainsKey([string]$id)) {
+            $adjudication = $adjudicated[[string]$id]
+            Write-Summary "  - ADJUDICATED: order $id has gaps ($((@($review.Blocking) | ForEach-Object { '`' + $_ + '`' }) -join ' ')) and is accepted on Clarke's own decision ($($adjudication.decision), $($adjudication.adjudicatedOn)). Open the onboarding_accepted_gaps ticket now."
+        }
+        elseif (@($review.Blocking).Count -gt 0) {
             Write-Summary "  - REFUSED: order $id is not complete: $((@($review.Blocking) | ForEach-Object { '`' + $_ + '`' }) -join ' '). Send the onboarding_need_info ticket (or, for an ESCALATE code, have a human open the links); do not accept."
             $accepted.Add([pscustomobject]@{ orderid = $id; result = 'refused'; reason = 'incomplete'; codes = @($review.Blocking) })
             continue
         }
-        Write-Summary "  - Completeness review: pass$(if (@($review.Codes).Count -gt 0) { ' (INFO: ' + (@($review.Codes) -join ', ') + ')' })."
+        else {
+            Write-Summary "  - Completeness review: pass$(if (@($review.Codes).Count -gt 0) { ' (INFO: ' + (@($review.Codes) -join ', ') + ')' })."
+        }
 
         # $0 "No Payment Required" onboarding order: AcceptOrder does not collect
         # payment. sendemail=true so the charity receives the acceptance email.
@@ -2063,13 +2080,25 @@ try {
             $acceptResult = 'accepted-after-timeout'
         }
         Write-Summary "  - ACCEPTED: order $id (sendemail=$SendEmail, autosetup=$AutoSetup, result=$acceptResult)."
-        $accepted.Add([pscustomobject]@{ orderid = $id; result = $acceptResult; pid = $summaryItem.pid; charity = $summaryItem.charityName })
+        $entry = [pscustomobject]@{ orderid = $id; result = $acceptResult; pid = $summaryItem.pid; charity = $summaryItem.charityName }
+        if ($adjudication) {
+            $entry.result = "$acceptResult-adjudicated"
+            $entry | Add-Member -NotePropertyName codes -NotePropertyValue @($review.Blocking)
+            $entry | Add-Member -NotePropertyName fixList -NotePropertyValue @(Get-LaneApplicantFixList -Codes @($review.Blocking))
+            $entry | Add-Member -NotePropertyName ticketTemplate -NotePropertyValue 'onboarding_accepted_gaps'
+            $entry | Add-Member -NotePropertyName decision -NotePropertyValue ([string]$adjudication.decision)
+        }
+        $accepted.Add($entry)
     }
 
     $acceptFile = ($OutputFile -replace '\.json$', '') + '.accept-results.json'
     $accepted | ConvertTo-Json -Depth 6 | Out-File -FilePath $acceptFile -Encoding utf8
     Write-Host "Accept results written: $acceptFile"
     # A refused order fails the run, so a by-hand accept cannot read as done.
+    $owed = @($accepted | Where-Object { [string]$_.result -like '*-adjudicated' })
+    foreach ($o in $owed) {
+        Write-Output "::warning::Order $($o.orderid) was accepted with gaps on Clarke's adjudication. Open the onboarding_accepted_gaps ticket (205) now with the preview URL and: $(@($o.fixList) -join ' ')"
+    }
     $refused = @($accepted | Where-Object { $_.result -eq 'refused' })
     if ($refused.Count -gt 0) {
         Write-Output "::error::$($refused.Count) order(s) refused by the pre-acceptance completeness review: $((@($refused) | ForEach-Object { $_.orderid }) -join ', ')."

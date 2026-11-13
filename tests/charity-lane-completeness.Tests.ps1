@@ -269,3 +269,44 @@ Describe 'Officer name and LinkedIn keys' {
         ConvertTo-LaneLinkedInProfileKey -Url 'https://www.linkedin.com/company/x/' | Should -Be ''
     }
 }
+
+Describe 'Get-LaneAdjudicatedOrders' {
+    BeforeAll {
+        $script:AdjDir = Join-Path ([System.IO.Path]::GetTempPath()) ("adj-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:AdjDir | Out-Null
+        function Write-Adj([string]$Json) {
+            $p = Join-Path $script:AdjDir ([guid]::NewGuid().ToString() + '.json')
+            Set-Content -LiteralPath $p -Value $Json -Encoding utf8
+            return $p
+        }
+    }
+
+    It 'ships an adjudicated-orders file that loads' {
+        $p = Join-Path $PSScriptRoot '..' 'config' 'charity-lane-adjudicated-orders.json'
+        { Get-LaneAdjudicatedOrders -Path $p } | Should -Not -Throw
+    }
+
+    It 'a missing file means no overrides' {
+        (Get-LaneAdjudicatedOrders -Path (Join-Path $script:AdjDir 'none.json')).Count | Should -Be 0
+    }
+
+    It 'keys a valid entry by its order id' {
+        $p = Write-Adj '{"orders":[{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"older form","decision":"Clarke, project thread"}]}'
+        $m = Get-LaneAdjudicatedOrders -Path $p
+        $m.ContainsKey('753') | Should -BeTrue
+        $m.ContainsKey('754') | Should -BeFalse
+    }
+
+    It 'refuses <Name>' -ForEach @(
+        @{ Name = 'a file with no orders list'; Json = '{"x":[]}' }
+        @{ Name = 'a non-numeric order id'; Json = '{"orders":[{"orderid":"75a","adjudicatedOn":"2026-11-13","reason":"r","decision":"d"}]}' }
+        @{ Name = 'a missing decision'; Json = '{"orders":[{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"r"}]}' }
+        @{ Name = 'a bad date'; Json = '{"orders":[{"orderid":"753","adjudicatedOn":"Nov 13","reason":"r","decision":"d"}]}' }
+        @{ Name = 'a duplicate order'; Json = '{"orders":[{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"r","decision":"d"},{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"r","decision":"d"}]}' }
+        @{ Name = 'an email address'; Json = '{"orders":[{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"r","decision":"from jo@example.org"}]}' }
+        @{ Name = 'a phone number'; Json = '{"orders":[{"orderid":"753","adjudicatedOn":"2026-11-13","reason":"call 555-123-4567","decision":"d"}]}' }
+    ) {
+        $p = Write-Adj $Json
+        { Get-LaneAdjudicatedOrders -Path $p } | Should -Throw
+    }
+}

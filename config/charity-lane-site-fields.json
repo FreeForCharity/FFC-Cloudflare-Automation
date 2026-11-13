@@ -162,7 +162,8 @@
       "productLabelPatterns": ["charity facebook"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["facebook.com", "fb.com"]
+      "hosts": ["facebook.com", "fb.com"],
+      "rejectHosts": ["business.facebook.com", "adsmanager.facebook.com"]
     },
     {
       "key": "linkedinUrl",
@@ -204,7 +205,8 @@
       "productLabelPatterns": ["^youtube url$"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["youtube.com", "youtu.be"]
+      "hosts": ["youtube.com", "youtu.be"],
+      "rejectHosts": ["studio.youtube.com"]
     },
     {
       "key": "donationUrl",

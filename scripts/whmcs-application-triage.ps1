@@ -267,7 +267,11 @@ function Test-GuidestarUrl {
 }
 
 function Test-FacebookPageUrl {
-    # A facebook.com page URL (any facebook.com host).
+    # A PUBLIC facebook.com page URL (any facebook.com host except the Meta
+    # Business Suite / Ads Manager back office). An admin, editor or dashboard
+    # link is not a page anyone can open, so it is not a page URL here either:
+    # business.facebook.com/..., /<page>/manage/, /professional_dashboard/,
+    # /settings/, /edit/ (public-links rule, 2026-11-13; orders 875/876).
     [OutputType([bool])]
     param([string]$Value)
     $candidate = Get-HrefOrRaw -Value $Value
@@ -276,6 +280,8 @@ function Test-FacebookPageUrl {
     if (-not [Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$u)) { return $false }
     if (@('http', 'https') -notcontains $u.Scheme) { return $false }
     if (-not [regex]::IsMatch($u.Host, '(^|\.)facebook\.com$', 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($u.Host, '(^|\.)(business|adsmanager)\.facebook\.com$', 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($u.AbsolutePath, '/(wp-)?admin(/|$)|/(professional_)?dashboard(/|$)|/edit(/|$)|/manage(/|$)|/settings(/|$)', 'IgnoreCase')) { return $false }
     # A bare facebook.com root with no page path is not a page.
     return ($u.AbsolutePath.Trim('/').Length -gt 0)
 }
@@ -1496,6 +1502,11 @@ function Get-WhmcsClientDetails {
     return $details
 }
 
+# The pre-acceptance completeness review (scripts/charity-lane-completeness.ps1):
+# the standard both accept paths share. approve mode refuses any order that
+# does not pass it (Clarke, 2026-11-13).
+. (Join-Path $PSScriptRoot 'charity-lane-completeness.ps1')
+
 # When dot-sourced (unit tests), stop here: only the functions are needed.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
@@ -1961,6 +1972,7 @@ try {
     Write-Summary "### Acceptance (approve mode)"
     Write-Summary ''
     $accepted = [System.Collections.Generic.List[object]]::new()
+    $reviewLinkCache = @{}; $reviewGithubCache = @{}
     foreach ($id in $ids) {
         $summaryItem = $byOrder[$id]
         if ($summaryItem) {
@@ -1999,6 +2011,24 @@ try {
             $accepted.Add([pscustomobject]@{ orderid = $id; result = 'skipped'; reason = 'not-onboarding-order' })
             continue
         }
+
+        # Pre-acceptance completeness review (scripts/charity-lane-completeness.ps1).
+        # Blocking, no override: an application that is not complete is never
+        # accepted, whoever asked for it (Clarke, 2026-11-13). The same review
+        # runs in 232, so the routine sees NEED_INFO / ESCALATE, not ACCEPT.
+        $rawApp = @($rawApps | Where-Object { [string]$_.orderid -eq [string]$id }) | Select-Object -First 1
+        if (-not $rawApp) {
+            Write-Summary "  - REFUSED: order $id has no application fields in this run, so the completeness review cannot run."
+            $accepted.Add([pscustomobject]@{ orderid = $id; result = 'refused'; reason = 'completeness-not-checked'; codes = @('COMPLETENESS_NOT_CHECKED') })
+            continue
+        }
+        $review = Invoke-LaneCompletenessReview -Fields $rawApp.fields -ProductPid ([int]$rawApp.pid) -LinkCache $reviewLinkCache -GithubCache $reviewGithubCache
+        if (@($review.Blocking).Count -gt 0) {
+            Write-Summary "  - REFUSED: order $id is not complete: $((@($review.Blocking) | ForEach-Object { '`' + $_ + '`' }) -join ' '). Send the onboarding_need_info ticket (or, for an ESCALATE code, have a human open the links); do not accept."
+            $accepted.Add([pscustomobject]@{ orderid = $id; result = 'refused'; reason = 'incomplete'; codes = @($review.Blocking) })
+            continue
+        }
+        Write-Summary "  - Completeness review: pass$(if (@($review.Codes).Count -gt 0) { ' (INFO: ' + (@($review.Codes) -join ', ') + ')' })."
 
         # $0 "No Payment Required" onboarding order: AcceptOrder does not collect
         # payment. sendemail=true so the charity receives the acceptance email.
@@ -2039,6 +2069,12 @@ try {
     $acceptFile = ($OutputFile -replace '\.json$', '') + '.accept-results.json'
     $accepted | ConvertTo-Json -Depth 6 | Out-File -FilePath $acceptFile -Encoding utf8
     Write-Host "Accept results written: $acceptFile"
+    # A refused order fails the run, so a by-hand accept cannot read as done.
+    $refused = @($accepted | Where-Object { $_.result -eq 'refused' })
+    if ($refused.Count -gt 0) {
+        Write-Output "::error::$($refused.Count) order(s) refused by the pre-acceptance completeness review: $((@($refused) | ForEach-Object { $_.orderid }) -join ', ')."
+        exit 1
+    }
     exit 0
 }
 catch {

@@ -51,6 +51,13 @@
       "subject": "Your application is accepted, and a few details are still needed",
       "extra_message_required": true,
       "body": "Thank you for applying to Free For Charity, and we are sorry for how long this has taken. We have a deep backlog of applications and are working to activate more charities every week. First, are you still interested in receiving our services? Replying to this ticket in your client area at https://freeforcharity.org/hub tells us you are, and keeps your website moving.\n\nYour application has been accepted. It was submitted on an older version of our application form, which did not ask for everything we now use to build your website, so a few details are still missing or could not be confirmed. The specific items are listed below, along with the link to your website preview if one is ready. Where we ask for proof, a public web link (URL) that shows it is all we need; we do not need letters or documents. Please update the items in your application at https://freeforcharity.org/hub or reply to this ticket in your client area with them. Tickets are not watched around the clock, so the best way to keep things moving is to text Clarke Moyer at 520-222-8104."
+    },
+    "onboarding_still_interested": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "Are you still interested in Free For Charity services?",
+      "extra_message_required": true,
+      "body": "We're sorry for how long your application has waited in our backlog. Before we go further: are you still interested in receiving Free For Charity services? Just reply to this ticket in your client area at https://freeforcharity.org/hub to tell us. A reply is all we need to keep your application active.\n\nYou applied on an older version of our form, so a few things we now need are missing. They are listed below. Where we ask for proof, a public web link (URL) we can check is enough; we do not need letters or documents.\n\nThe fastest way to move forward is to text Clarke Moyer at 520-222-8104. We are working to activate more charities each week.\n\nIf we don't hear back within 30 days, we will close this application. You are welcome to apply again at any time."
     }
   }
 }

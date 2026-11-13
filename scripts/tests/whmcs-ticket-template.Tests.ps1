@@ -129,6 +129,16 @@ Describe 'Resolve-WhmcsOpenTicketTemplate (shipped config)' {
         $r.Message | Should -Match "`n`nPreview: https://freeforcharity\.github\.io/FFC-EX-example\.org/$"
     }
 
+    It 'opens onboarding_still_interested with the apology and the interest question' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_still_interested' -ExtraMessage 'Missing: organization name'
+        $first = ($r.Message -split "`n`n")[0]
+        $first | Should -Match 'sorry for how long'
+        $first | Should -Match 'still interested in receiving Free For Charity services'
+        $r.Message | Should -Match 'we do not need letters or documents'
+        $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
+        $r.Message | Should -Match 'within 30 days'
+    }
+
     It 'refuses onboarding_accepted_gaps without the gap list' {
         { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
     }

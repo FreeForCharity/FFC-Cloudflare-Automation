@@ -60,13 +60,18 @@
     },
     {
       "id": "205-templated",
-      "purpose": "Charity tickets from an allowlisted template only (onboarding_need_info, onboarding_accepted_gaps, preview_ready)",
+      "purpose": "Charity tickets from an allowlisted template only (onboarding_need_info, onboarding_accepted_gaps, onboarding_still_interested, preview_ready)",
       "workflow": "205-whmcs-ticket-open.yml",
       "environments": ["whmcs-prod"],
       "required": ["template", "client_id", "extra_message"],
       "inputs": {
         "template": {
-          "enum": ["onboarding_need_info", "onboarding_accepted_gaps", "preview_ready"]
+          "enum": [
+            "onboarding_need_info",
+            "onboarding_accepted_gaps",
+            "onboarding_still_interested",
+            "preview_ready"
+          ]
         },
         "client_id": { "pattern": "^[0-9]{1,9}$" },
         "extra_message": { "maxlen": 1500 },

@@ -213,7 +213,7 @@ def _run(cmd, cwd=None, check=True):
 _LABEL_RE = re.compile(r"\A[A-Za-z0-9 ._:/-]+\Z")
 
 
-def read_open_prs(repo, label):
+def read_open_prs(repo, label, base_branch=None):
     """Ask `gh` for the open PRs carrying `label`, oldest first.
 
     REST, never `gh pr list --json`. That spelling is a GraphQL client call, and
@@ -245,6 +245,13 @@ def read_open_prs(repo, label):
       concatenate cleanly across pages; an array-building or aggregate
       expression would be evaluated once per page and is the shape CLAUDE.md
       warns about.
+    * **A `base` filter, when the caller's base names a branch.** `GET /pulls`
+      returns every open PR whatever its base, so a PR stacked on another
+      branch was measured against `origin/main`: either a false "rebase first"
+      or a false conflict edge against every member of the SET. Filtered in jq
+      beside the label, not in the URL, for the dropped-parameter reason above.
+      A `--base` that is a bare SHA or a local ref names no branch to filter on,
+      so the set is left unfiltered and `main()` prints the commit it used.
 
     Sorted here rather than trusted from the endpoint: `GET /pulls` defaults to
     newest-first, the opposite of the landing order the caller wants, and the
@@ -257,14 +264,28 @@ def read_open_prs(repo, label):
             f"would change the jq expression it is interpolated into rather than "
             f"the value compared, and a filter nobody wrote selects the wrong set"
         )
+    if base_branch is not None and not _LABEL_RE.match(base_branch):
+        raise RuntimeError(
+            f"refusing to filter on base branch {base_branch!r}: it carries a "
+            f"character that would change the jq expression it is interpolated "
+            f"into rather than the value compared"
+        )
+    jq = '.[] | select(any(.labels[].name; . == "' + label + '"))'
+    if base_branch is not None:
+        # Client-side, for the same reason the label is: `base=` IS a documented
+        # `GET /pulls` parameter, but a parameter name REST does not recognise is
+        # dropped in silence, so a URL-side filter that stops working reads as a
+        # filter that is working. A PR stacked on another branch merged against
+        # `origin/main` yields either a false "rebase first" or false edges --
+        # measured as finding 5 of the #1731 review.
+        jq += ' | select(.base.ref == "' + base_branch + '")'
+    jq += ' | "\\(.created_at) \\(.number) \\(.head.sha)"'
     proc = _run(
         [
             "gh", "api", "--paginate",
             f"repos/{repo}/pulls?state=open&per_page=100",
             "--jq",
-            '.[] | select(any(.labels[].name; . == "'
-            + label
-            + '")) | "\\(.created_at) \\(.number) \\(.head.sha)"',
+            jq,
         ]
     )
     rows = []
@@ -276,9 +297,128 @@ def read_open_prs(repo, label):
         if len(parts) != 3:
             raise RuntimeError(f"unparseable open-PR row from the REST list: {line!r}")
         created, number, sha = parts
-        rows.append((created, int(number), sha))
+        # `parse_open_prs` guards this identical case and has a test for it; this
+        # path did not, so a non-numeric PR number raised a bare `ValueError`,
+        # which `main()` did not catch -- exit 1 ("a finding") having measured
+        # nothing. Finding 2 of the #1731 review, second half.
+        try:
+            number_int = int(number)
+        except ValueError:
+            raise RuntimeError(
+                f"unparseable open-PR row from the REST list: {line!r}"
+            ) from None
+        rows.append((created, number_int, sha))
     rows.sort(key=lambda r: (r[0], r[1]))
     return parse_open_prs(f"{number} {sha}" for _, number, sha in rows)
+
+
+def assert_disposable_worktree(worktree):
+    """Refuse a `--worktree` this script must not reset. Raises, never warns.
+
+    `checkout_base` runs `git checkout -f --detach`, and `-f` discards
+    uncommitted tracked changes. `--worktree` was taken from the caller and
+    never checked, so `--worktree .` against a live checkout silently destroyed
+    a developer's work and left them detached -- the blocking finding of the
+    #1731 review, and the one whose blast radius is somebody else's unpushed
+    work rather than a wrong answer.
+
+    Two checks, and they are not the same check:
+
+    1. **The tree is clean.** This is the one that stops the destruction:
+       `-f` can only lose what `git status --porcelain` would have listed, so a
+       clean tree has nothing to lose. Untracked files count -- a merge can be
+       refused by one (see `merge_ref`), and the script is about to write merge
+       commits over whatever is here.
+    2. **It is not the repository's primary worktree.** A clean primary
+       checkout loses no work, but it is still left detached, carrying this
+       script's `refs/ffc/*` refs and discarded merge commits, which is not
+       something a tool should do to the checkout somebody is working in. The
+       remedy is one command and the message names it.
+
+    Checked here rather than in `main()` so that every caller of the
+    measurement is covered, for the same reason `_MERGE_IDENTITY` lives in the
+    environment rather than at the `git merge` call sites.
+    """
+    inside = _run(
+        ["git", "rev-parse", "--is-inside-work-tree"], cwd=worktree, check=False
+    )
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise RuntimeError(
+            f"--worktree {worktree!r} is not a git worktree "
+            f"({(inside.stderr or '').strip()[:200]}) -- create a throwaway one "
+            f"with `git worktree add --detach <path> origin/main`"
+        )
+
+    git_dir = _run(["git", "rev-parse", "--git-dir"], cwd=worktree, check=False)
+    common = _run(["git", "rev-parse", "--git-common-dir"], cwd=worktree, check=False)
+    if git_dir.returncode != 0 or common.returncode != 0:
+        raise RuntimeError(
+            f"could not tell whether --worktree {worktree!r} is a linked worktree "
+            f"or the primary checkout; refusing to reset it"
+        )
+    resolved = [
+        os.path.realpath(os.path.join(worktree, p.stdout.strip()))
+        for p in (git_dir, common)
+    ]
+    if resolved[0] == resolved[1]:
+        raise RuntimeError(
+            f"--worktree {worktree!r} is the repository's primary checkout, not a "
+            f"linked worktree. This script runs `git checkout -f --detach` and "
+            f"writes throwaway merge commits; point it at a disposable tree -- "
+            f"`git worktree add --detach <path> origin/main`"
+        )
+
+    status = _run(["git", "status", "--porcelain"], cwd=worktree, check=False)
+    if status.returncode != 0:
+        raise RuntimeError(
+            f"could not read the status of --worktree {worktree!r} (git exited "
+            f"{status.returncode}): {(status.stderr or '').strip()[:200]} -- "
+            f"refusing to reset a tree whose contents are unknown"
+        )
+    dirty = [ln for ln in status.stdout.splitlines() if ln.strip()]
+    if dirty:
+        shown = ", ".join(ln.strip() for ln in dirty[:5])
+        raise RuntimeError(
+            f"--worktree {worktree!r} has {len(dirty)} uncommitted change(s) "
+            f"({shown}{' ...' if len(dirty) > 5 else ''}). `git checkout -f` would "
+            f"discard them -- commit, stash, or point --worktree at a disposable "
+            f"tree"
+        )
+
+
+def merge_ref(worktree, ref):
+    """Merge `ref` into HEAD. `True` merged, `False` a real content conflict.
+
+    Raises for any other non-zero exit, which is the point of the function.
+    Both legs of the sweep used to read *any* non-zero `git merge` as a
+    conflict, and git refuses a merge for reasons that are not conflicts: an
+    untracked file that would be overwritten, a local change that would be
+    overwritten, a missing committer identity (exit 128). Measured for the
+    first of those: it exits 1 with **no `MERGE_HEAD`**, indistinguishable by
+    return code from a genuine conflict, so it entered the graph as an edge and
+    suppressed a PR that would in fact have landed. Finding 4 of the #1731
+    review.
+
+    `MERGE_HEAD` is the discriminator: git writes it once the merge has
+    actually started, so it exists for a conflicted merge and not for one git
+    declined to begin. Failing closed on the difference is the module's
+    standing rule -- "we could not measure this pair" must not render as either
+    answer.
+    """
+    r = _run(["git", "merge", "--no-edit", ref], cwd=worktree, check=False)
+    if r.returncode == 0:
+        return True
+    started = _run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=worktree, check=False
+    )
+    _run(["git", "merge", "--abort"], cwd=worktree, check=False)
+    if started.returncode == 0:
+        return False
+    raise RuntimeError(
+        f"`git merge {ref}` in {worktree} exited {r.returncode} without starting a "
+        f"merge (no MERGE_HEAD), so this is not a content conflict: "
+        f"{(r.stderr or r.stdout or '').strip()[:300]}"
+    )
 
 
 def pr_ref(number):
@@ -385,6 +525,24 @@ def resolve_base(worktree, base):
                 f"would have been measured at whatever this worktree last saw, "
                 f"which is the stale-base defect this fetch exists to prevent"
             )
+        # `FETCH_HEAD`, not `origin/main`. The fetch only updates the
+        # remote-tracking ref *opportunistically*: with a restricted
+        # `remote.<name>.fetch` refspec -- a `--single-branch` clone is the
+        # common case -- the fetch succeeds and `rev-parse origin/main` returns
+        # the SHA the worktree already had. The stale base this function exists
+        # to prevent is then back, with output claiming a refresh, which is the
+        # worst shape because every pair is wrong in the same direction and the
+        # plan stays internally coherent. `git fetch` always writes
+        # `FETCH_HEAD`, so it names what was actually just fetched. Finding 6
+        # of the #1731 review.
+        r = _run(["git", "rev-parse", "FETCH_HEAD"], cwd=worktree, check=False)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"could not resolve {base} to a commit in {worktree}: the fetch of "
+                f"{branch} from {remote} succeeded but FETCH_HEAD does not resolve "
+                f"(git exited {r.returncode}): {(r.stderr or '').strip()[:300]}"
+            )
+        return r.stdout.strip()
     r = _run(["git", "rev-parse", base], cwd=worktree, check=False)
     if r.returncode != 0:
         raise RuntimeError(
@@ -463,66 +621,90 @@ def measure_conflicts(worktree, base, prs):
     is the one leg common to every pair, so a stale one is wrong everywhere at
     once and still reads as a coherent plan.
 
-    Returns `(base_sha, edges)` -- the plan is only meaningful next to the
-    commit it was computed against, so the caller is given both and prints both.
+    Refuses a `--worktree` it must not reset before anything destructive runs:
+    `assert_disposable_worktree` is the first statement, ahead of the fetches
+    and well ahead of the first `git checkout -f`.
+
+    Returns `(base_sha, edges, unmergeable)` -- the plan is only meaningful next
+    to the commit it was computed against, so the caller is given the base and
+    prints it, and `unmergeable` is the subset that does not merge into the base
+    at all. That subset used to raise, taking the plan for every other PR down
+    with it: the contract assigns "needs a rebase first" to **exit 1**, and the
+    whole purpose of the tool is to tell a landing session what it *can* land,
+    so one stale PR must not cost the other four their answer. Finding 3 of the
+    #1731 review. They are excluded from the pairwise sweep rather than
+    measured, because no pair involving them means anything.
     """
+    assert_disposable_worktree(worktree)
     base_sha = resolve_base(worktree, base)
     fetch_pr_heads(worktree, prs)
     numbers = [n for n, _ in prs]
 
     def merges_into_base(number):
         checkout_base(worktree, base_sha)
-        r = _run(["git", "merge", "--no-edit", pr_ref(number)], cwd=worktree, check=False)
-        if r.returncode != 0:
-            _run(["git", "merge", "--abort"], cwd=worktree, check=False)
-            return False
-        return True
+        return merge_ref(worktree, pr_ref(number))
 
     unmergeable = base_merge_failures(numbers, merges_into_base)
-    if unmergeable:
-        listed = ", ".join(f"#{n}" for n in unmergeable)
-        raise RuntimeError(
-            f"{listed} do not merge into {base} ({base_sha[:8]}) on their own, so no "
-            f"pair involving them can be measured -- rebase first"
-        )
+    measurable = [n for n in numbers if n not in set(unmergeable)]
 
     edges = []
-    for a, b in itertools.combinations(numbers, 2):
+    for a, b in itertools.combinations(measurable, 2):
         checkout_base(worktree, base_sha)
-        first = _run(["git", "merge", "--no-edit", pr_ref(a)], cwd=worktree, check=False)
-        if first.returncode != 0:
+        if not merge_ref(worktree, pr_ref(a)):
             # Unreachable after the up-front sweep unless a head moved under us,
             # which verify_fetched_head is there to catch. Fail closed anyway
             # rather than recording a base conflict as a content edge.
-            _run(["git", "merge", "--abort"], cwd=worktree, check=False)
             raise RuntimeError(
                 f"#{a} merged into {base} ({base_sha[:8]}) during the base sweep but "
                 f"not during the pairwise sweep -- a head moved mid-measurement"
             )
-        second = _run(["git", "merge", "--no-edit", pr_ref(b)], cwd=worktree, check=False)
-        if second.returncode != 0:
+        if not merge_ref(worktree, pr_ref(b)):
             edges.append((a, b))
-            _run(["git", "merge", "--abort"], cwd=worktree, check=False)
-    return base_sha, edges
+    return base_sha, edges, unmergeable
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default="FreeForCharity/FFC-Cloudflare-Automation")
     ap.add_argument("--label", default="agentic-os")
-    ap.add_argument("--worktree", required=True, help="an existing worktree this may reset")
+    ap.add_argument(
+        "--worktree",
+        required=True,
+        help=(
+            "a disposable LINKED worktree this may reset -- `git worktree add "
+            "--detach <path> origin/main`. Refused if it is dirty or is the "
+            "primary checkout; `git checkout -f` would discard uncommitted work"
+        ),
+    )
     ap.add_argument("--base", default="origin/main")
     args = ap.parse_args(argv)
 
+    spec = base_fetch_spec(args.base)
+    base_branch = spec[1] if spec is not None else None
+
     try:
-        prs = read_open_prs(args.repo, args.label)
+        prs = read_open_prs(args.repo, args.label, base_branch)
         if not prs:
             print(f"no open PRs labelled {args.label} -- nothing to plan")
             return 0
-        base_sha, edges = measure_conflicts(args.worktree, args.base, prs)
-        lands_free, needs_rebase = landing_plan([n for n, _ in prs], edges)
+        base_sha, edges, unmergeable = measure_conflicts(args.worktree, args.base, prs)
+        measurable = [n for n, _ in prs if n not in set(unmergeable)]
+        lands_free, _ = landing_plan(measurable, edges)
+        needs_rebase = [n for n, _ in prs if n not in set(lands_free)]
     except RuntimeError as exc:
         print(f"::error::could not compute a landing order: {exc}")
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Exit 2, not 1. The contract reserves exit 1 for "a finding", and
+        # catching only `RuntimeError` meant every other exception -- `gh` off
+        # PATH raising `FileNotFoundError`, a `ValueError` from a malformed row
+        # -- exited 1 having measured nothing, with no `::error::` line. A
+        # caller then cannot tell "the landing order has a problem" from "the
+        # tool never ran", which is this repo's own L50/L240 shape: a broken
+        # harness indistinguishable from a real detection. Finding 2 of the
+        # #1731 review. The wording differs from the RuntimeError branch on
+        # purpose, so the two causes stay apart in a log.
+        print(f"::error::the landing-order probe did not run: {type(exc).__name__}: {exc}")
         return 2
 
     print(f"open PRs labelled {args.label}: {len(prs)}")
@@ -531,6 +713,11 @@ def main(argv=None):
     for a, b in edges:
         print(f"  #{a} x #{b}: CONFLICT")
     print("lands free, in this order: " + ", ".join(f"#{n}" for n in lands_free))
+    if unmergeable:
+        print(
+            "does not merge into the base at all: "
+            + ", ".join(f"#{n}" for n in unmergeable)
+        )
     if needs_rebase:
         print("needs update-branch first: " + ", ".join(f"#{n}" for n in needs_rebase))
         print(

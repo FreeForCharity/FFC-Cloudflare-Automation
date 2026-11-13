@@ -872,6 +872,511 @@ def test_an_unparseable_REST_row_RAISES_rather_than_being_skipped():
         raise AssertionError("a two-field REST row was accepted; the SET is short by one PR")
 
 
+# --------------------------------------------------------------------------
+# The six findings of the #1731 substitute review (Copilot was out of credits;
+# the review was done by a Claude session at @clarkemoyer's direction, recorded
+# on #1737). Numbered as that review numbered them.
+# --------------------------------------------------------------------------
+
+
+class _GitStub:
+    """A stubbed `_run` that answers `git` by command shape.
+
+    Every test below drives real module code against it, so the thing under
+    test is the module's reaction to git, not a restatement of it. Anything the
+    stub is not told about answers exit 0 with empty output, which is the
+    permissive direction on purpose: a guard that only fires because the stub
+    refused everything would prove nothing.
+    """
+
+    def __init__(self, answers=None):
+        self.answers = answers or {}
+        self.calls = []
+
+    def __call__(self, cmd, cwd=None, check=True):
+        self.calls.append(list(cmd))
+        for shape, (rc, out, err) in self.answers.items():
+            if list(cmd)[: len(shape)] == list(shape):
+                return subprocess.CompletedProcess(cmd, rc, out, err)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+
+def _with_stub(stub, fn):
+    original = _mod._run
+    _mod._run = stub
+    try:
+        return fn()
+    finally:
+        _mod._run = original
+
+
+_CLEAN_LINKED_WORKTREE = {
+    ("git", "rev-parse", "--is-inside-work-tree"): (0, "true\n", ""),
+    ("git", "rev-parse", "--git-dir"): (0, "/repo/.git/worktrees/wt1731\n", ""),
+    ("git", "rev-parse", "--git-common-dir"): (0, "/repo/.git\n", ""),
+    ("git", "status", "--porcelain"): (0, "", ""),
+}
+
+
+def _guard(answers):
+    """Run `assert_disposable_worktree` against `answers`; return the raise text
+    or `None`. A non-`RuntimeError` is converted to an `AssertionError` so the
+    module roster cannot be truncated by it (L194)."""
+    stub = _GitStub(answers)
+
+    def run():
+        try:
+            _mod.assert_disposable_worktree("/tmp/wt")
+        except RuntimeError as e:
+            return str(e)
+        except Exception as e:  # pragma: no cover -- turned into a FAIL line
+            raise AssertionError(f"the guard raised {type(e).__name__}: {e}") from None
+        return None
+
+    return _with_stub(stub, run)
+
+
+# ---- Finding 1 (BLOCKING): --worktree was unvalidated ---------------------
+
+
+def test_a_DIRTY_worktree_is_REFUSED_before_git_checkout_minus_f_discards_it():
+    """The blocking finding. `checkout_base` runs `git checkout -f --detach`,
+    and `--worktree` came straight from the caller, so `--worktree .` against a
+    live checkout discarded uncommitted tracked work and left HEAD detached.
+    The blast radius is somebody's unpushed work, and the invocation that
+    reaches it is the obvious one."""
+    answers = dict(_CLEAN_LINKED_WORKTREE)
+    answers[("git", "status", "--porcelain")] = (
+        0,
+        " M scripts/check-open-pr-landing-order.py\n?? notes.md\n",
+        "",
+    )
+    msg = _guard(answers)
+    assert msg is not None, (
+        "a worktree with uncommitted changes was accepted; the next `git checkout "
+        "-f --detach` discards them with no warning and no way back"
+    )
+    assert "scripts/check-open-pr-landing-order.py" in msg, (
+        f"the refusal must name what would have been lost: {msg}"
+    )
+
+
+def test_the_PRIMARY_checkout_is_REFUSED_even_when_it_is_clean():
+    """Clean means nothing is destroyed, not that this is an acceptable tree to
+    use: the script still detaches HEAD, writes `refs/ffc/*` and leaves
+    throwaway merge commits in the checkout somebody is working in. A linked
+    worktree has a different `--git-dir` from its `--git-common-dir`; the
+    primary one does not."""
+    answers = dict(_CLEAN_LINKED_WORKTREE)
+    answers[("git", "rev-parse", "--git-dir")] = (0, "/repo/.git\n", "")
+    answers[("git", "rev-parse", "--git-common-dir")] = (0, "/repo/.git\n", "")
+    msg = _guard(answers)
+    assert msg is not None, (
+        "the repository's primary checkout was accepted as a disposable worktree"
+    )
+    assert "worktree add" in msg, (
+        f"the refusal must name the one-command remedy, or the next caller "
+        f"reaches for --force: {msg}"
+    )
+
+
+def test_a_path_that_is_not_a_git_worktree_AT_ALL_is_refused():
+    answers = {("git", "rev-parse", "--is-inside-work-tree"): (128, "", "fatal: not a git repository")}
+    assert _guard(answers) is not None, "a non-worktree path was accepted"
+
+
+def test_a_clean_LINKED_worktree_is_ACCEPTED():
+    """The polarity check. A guard that refuses everything trades a destroyed
+    working tree for a tool that never runs, and both of this module's earlier
+    fail-closed fixes carry the same check for the same reason."""
+    assert _guard(dict(_CLEAN_LINKED_WORKTREE)) is None, (
+        "a clean linked worktree was refused; the script cannot run at all"
+    )
+
+
+def test_an_UNREADABLE_worktree_status_is_refused_rather_than_assumed_clean():
+    """`git status` failing is "we do not know what is in this tree", and the
+    reassuring reading of an empty stdout is that it is clean. Same polarity as
+    every other read in this module: unknown is not a pass."""
+    answers = dict(_CLEAN_LINKED_WORKTREE)
+    answers[("git", "status", "--porcelain")] = (128, "", "fatal: bad object HEAD")
+    assert _guard(answers) is not None, (
+        "a worktree whose status could not be read was treated as clean"
+    )
+
+
+def test_the_WORKTREE_GUARD_runs_BEFORE_anything_destructive():
+    """Source-level ordering, because `measure_conflicts` shells out to git. A
+    guard placed after the fetch or the checkout is decoration: the thing it
+    protects has already happened. It must be the first statement."""
+    import inspect
+
+    src = inspect.getsource(_mod.measure_conflicts)
+    assert "assert_disposable_worktree(" in src, (
+        "measure_conflicts no longer validates --worktree, so `git checkout -f "
+        "--detach` runs against whatever path the caller passed"
+    )
+    guard_at = src.index("assert_disposable_worktree(worktree)")
+    for later in ("resolve_base(", "fetch_pr_heads(", "checkout_base("):
+        assert guard_at < src.index(later), (
+            f"{later} runs before the worktree guard, so the tree is already "
+            f"being written to by the time the guard could refuse it"
+        )
+
+
+# ---- Finding 4: a refused merge is not a content conflict -----------------
+
+
+def test_a_merge_BLOCKED_BY_AN_UNTRACKED_FILE_is_not_recorded_as_a_conflict():
+    """Measured: `git merge` refused by an untracked file that would be
+    overwritten exits **1 with no MERGE_HEAD**, identical by return code to a
+    real conflict. Both legs read any non-zero as a conflict, so it entered the
+    graph as an edge and suppressed a PR that would in fact have landed -- a
+    broken measurement rendered as a finding, this module's own failure class.
+    `MERGE_HEAD` is the discriminator: git writes it once the merge has
+    actually begun."""
+    stub = _GitStub(
+        {
+            ("git", "merge"): (1, "", "error: Untracked working tree file 'x' would be overwritten"),
+            ("git", "rev-parse", "-q", "--verify", "MERGE_HEAD"): (1, "", ""),
+        }
+    )
+
+    def run():
+        try:
+            _mod.merge_ref("/tmp/wt", "refs/ffc/pr1584")
+        except RuntimeError as e:
+            return str(e)
+        except Exception as e:
+            raise AssertionError(f"merge_ref raised {type(e).__name__}: {e}") from None
+        return None
+
+    msg = _with_stub(stub, run)
+    assert msg is not None, (
+        "a merge git REFUSED TO START was reported as a content conflict; the PR "
+        "it names is about to be held back for a conflict that does not exist"
+    )
+    assert "MERGE_HEAD" in msg, f"the raise must name the discriminator: {msg}"
+
+
+def test_a_REAL_content_conflict_is_still_reported_as_one():
+    """The polarity check: the discriminator must not turn every conflict into
+    an infrastructure error, or the tool measures nothing and exits 2."""
+    stub = _GitStub(
+        {
+            ("git", "merge"): (1, "CONFLICT (content): Merge conflict in docs/lessons-ledger.md", ""),
+            ("git", "rev-parse", "-q", "--verify", "MERGE_HEAD"): (0, "dead" + "0" * 36 + "\n", ""),
+        }
+    )
+    assert _with_stub(stub, lambda: _mod.merge_ref("/tmp/wt", "refs/ffc/pr1584")) is False, (
+        "a genuine conflict was not reported as one"
+    )
+    aborts = [c for c in stub.calls if c[:3] == ["git", "merge", "--abort"]]
+    assert aborts, f"a conflicted merge was left in the tree, un-aborted: {stub.calls}"
+
+
+def test_a_SUCCESSFUL_merge_returns_True_and_is_not_aborted():
+    stub = _GitStub()
+    assert _with_stub(stub, lambda: _mod.merge_ref("/tmp/wt", "refs/ffc/pr1584")) is True
+    assert not [c for c in stub.calls if c[:3] == ["git", "merge", "--abort"]], (
+        f"a successful merge was aborted, so the pairwise leg measured nothing: {stub.calls}"
+    )
+
+
+def test_BOTH_merge_sites_go_through_the_discriminator():
+    """There are two, as there were two checkout sites, and fixing only the
+    pairwise one would leave the base sweep recording a refused merge as "this
+    PR does not merge into main"."""
+    import inspect
+
+    src = inspect.getsource(_mod.measure_conflicts)
+    bad = [
+        ln.strip()
+        for ln in src.splitlines()
+        if '"merge"' in ln and "merge_ref" not in ln
+    ]
+    assert not bad, (
+        "a raw `git merge` whose return code is read directly is back in "
+        "measure_conflicts:\n  " + "\n  ".join(bad)
+    )
+    assert src.count("merge_ref(") == 3, (
+        f"expected three merge sites (base sweep, pair first leg, pair second "
+        f"leg) through the helper, found {src.count('merge_ref(')}"
+    )
+
+
+# ---- Finding 3: one unrebasable PR must not cost the others their plan ----
+
+
+def _run_main(argv, read_open_prs, measure_conflicts):
+    """Drive `main()` with its two network-touching steps stubbed, capturing
+    stdout. Returns `(rc, output)`."""
+    import contextlib
+    import io
+
+    originals = (_mod.read_open_prs, _mod.measure_conflicts)
+    _mod.read_open_prs, _mod.measure_conflicts = read_open_prs, measure_conflicts
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = _mod.main(argv)
+    finally:
+        _mod.read_open_prs, _mod.measure_conflicts = originals
+    return rc, buf.getvalue()
+
+
+def test_ONE_unrebasable_PR_does_not_take_the_other_PRs_plan_down_with_it():
+    """`measure_conflicts` raised on any PR that would not merge into the base,
+    which `main()` turned into **exit 2 with no plan at all** -- although the
+    contract assigns "needs a rebase first" to exit 1, and the whole point of
+    the tool is to tell a landing session what it CAN land. One stale PR taking
+    the other four down defeats it."""
+    prs = [(1584, "a" * 40), (1586, "b" * 40), (1587, "c" * 40)]
+    rc, out = _run_main(
+        ["--worktree", "/tmp/wt"],
+        lambda repo, label, base=None: prs,
+        lambda wt, base, p: ("f" * 40, [], [1586]),
+    )
+    assert rc == 1, f"expected exit 1 (a finding), got {rc}; output was:\n{out}"
+    assert "#1584" in out and "#1587" in out, (
+        f"the PRs that DO land were not reported; one unrebasable sibling cost "
+        f"them their plan:\n{out}"
+    )
+    plan_line = next(ln for ln in out.splitlines() if ln.startswith("lands free"))
+    assert "#1586" not in plan_line, (
+        f"a PR that does not merge into the base at all was placed in lands_free: {plan_line}"
+    )
+    assert "#1586" in out, f"the unrebasable PR was not reported at all:\n{out}"
+
+
+def test_measure_conflicts_RETURNS_the_unrebasable_set_rather_than_raising():
+    """The other half of finding 3, and the half `main()`'s stub cannot see.
+    Driven end to end against the git stub: #1586 conflicts with the base, the
+    other two do not. The old code raised here, so nothing downstream ran."""
+    prs = [(1584, "a" * 40), (1586, "b" * 40), (1587, "c" * 40)]
+    answers = dict(_CLEAN_LINKED_WORKTREE)
+    answers[("git", "rev-parse", "FETCH_HEAD")] = (0, "f" * 40 + "\n", "")
+    for number, sha in prs:
+        answers[("git", "rev-parse", _mod.pr_ref(number))] = (0, sha + "\n", "")
+    # Any merge that fails here has a MERGE_HEAD, i.e. is a real conflict.
+    answers[("git", "rev-parse", "-q", "--verify", "MERGE_HEAD")] = (0, "d" * 40 + "\n", "")
+    answers[("git", "merge", "--no-edit", _mod.pr_ref(1586))] = (1, "CONFLICT (content)", "")
+    stub = _GitStub(answers)
+
+    def run():
+        try:
+            return _mod.measure_conflicts("/tmp/wt", "origin/main", prs)
+        except RuntimeError as e:
+            raise AssertionError(
+                f"one PR that does not merge into the base aborted the whole "
+                f"measurement: {e}"
+            ) from None
+        except Exception as e:
+            raise AssertionError(f"measure_conflicts raised {type(e).__name__}: {e}") from None
+
+    base_sha, edges, unmergeable = _with_stub(stub, run)
+    assert base_sha == "f" * 40, f"unexpected base: {base_sha}"
+    assert unmergeable == [1586], f"expected #1586 as the only base failure: {unmergeable}"
+    assert edges == [], f"a PR excluded from the pairwise sweep still produced edges: {edges}"
+    paired = [c for c in stub.calls if c[:3] == ["git", "merge", "--no-edit"] and c[3] == _mod.pr_ref(1586)]
+    assert len(paired) == 1, (
+        f"#1586 was merged {len(paired)} times: it must be measured once against "
+        f"the base and then excluded, not carried into every pair"
+    )
+
+
+def test_a_SET_with_nothing_unrebasable_still_exits_0():
+    """Polarity: the clean case must stay exit 0, or every caller sees a
+    finding."""
+    prs = [(1584, "a" * 40), (1586, "b" * 40)]
+    rc, out = _run_main(
+        ["--worktree", "/tmp/wt"],
+        lambda repo, label, base=None: prs,
+        lambda wt, base, p: ("f" * 40, [], []),
+    )
+    assert rc == 0, f"a conflict-free SET did not exit 0: rc={rc}\n{out}"
+    assert "does not merge into the base" not in out, (
+        f"the base-failure line printed for an empty failure set:\n{out}"
+    )
+
+
+# ---- Finding 2: an infrastructure fault must not read as a finding --------
+
+
+def test_an_INFRASTRUCTURE_fault_exits_2_not_1():
+    """`main()` caught only `RuntimeError`, so `gh` off PATH -- a
+    `FileNotFoundError` -- propagated out of `main()`. Whatever a caller then
+    recorded, nothing distinguished "the landing order has a problem" from "the
+    tool never ran", which is this repo's L50/L240 shape."""
+
+    def boom(repo, label, base=None):
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+
+    rc, out = _run_main(
+        ["--worktree", "/tmp/wt"], boom, lambda wt, base, p: ("f" * 40, [], [])
+    )
+    assert rc == 2, (
+        f"an exception that is not a RuntimeError exited {rc}; exit 1 means 'a "
+        f"finding' and nothing was measured at all:\n{out}"
+    )
+    assert "::error::" in out, (
+        f"the failure was silent -- no ::error:: line, so a workflow log shows "
+        f"nothing:\n{out}"
+    )
+    assert "FileNotFoundError" in out, (
+        f"the ::error:: line does not name the cause, so the operator cannot "
+        f"tell which of the two exit-2 reasons they are looking at:\n{out}"
+    )
+
+
+def test_a_RuntimeError_still_exits_2_with_the_MEASUREMENT_wording():
+    """The two exit-2 causes stay apart in a log: one measured and could not
+    conclude, the other never ran."""
+    def boom(repo, label, base=None):
+        raise RuntimeError("could not read the open-PR list")
+
+    rc, out = _run_main(
+        ["--worktree", "/tmp/wt"], boom, lambda wt, base, p: ("f" * 40, [], [])
+    )
+    assert rc == 2, f"a RuntimeError no longer exits 2: {rc}"
+    assert "could not compute a landing order" in out, (
+        f"the measurement failure lost its own wording:\n{out}"
+    )
+    assert "did not run" not in out, (
+        f"a measured failure is being reported as a harness failure:\n{out}"
+    )
+
+
+def test_a_NON_NUMERIC_pr_number_from_REST_raises_RuntimeError_not_ValueError():
+    """The other half of finding 2. `parse_open_prs` guards this and has a test
+    for it; the REST reader called `int()` bare, so the `ValueError` fell
+    through `main()`'s `RuntimeError`-only handler into the same gap."""
+    try:
+        _capture_open_pr_read("2026-10-09T16:32:05Z not-a-number dd16ff6a\n", allow_raise=True)
+    except RuntimeError as e:
+        assert "not-a-number" in str(e), f"the raise must quote the row: {e}"
+    except Exception as e:
+        raise AssertionError(
+            f"a non-numeric PR number raised {type(e).__name__}, which main() does "
+            f"not catch: {e}"
+        ) from None
+    else:
+        raise AssertionError("a non-numeric PR number was accepted")
+
+
+# ---- Finding 5: the SET must be filtered on the base branch ---------------
+
+
+def _capture_base_filtered_read(stdout, base_branch):
+    stub = _GitStub({("gh",): (0, stdout, "")})
+    result = _with_stub(
+        stub,
+        lambda: _mod.read_open_prs(
+            "FreeForCharity/FFC-Cloudflare-Automation", "agentic-os", base_branch
+        ),
+    )
+    assert len(stub.calls) == 1, f"expected one list call, got {stub.calls}"
+    return stub.calls[0], result
+
+
+def test_the_open_PR_read_FILTERS_ON_THE_BASE_BRANCH():
+    """`GET /pulls` returns every open PR whatever its base, so a PR stacked on
+    another branch was merged against `origin/main`: either a false "rebase
+    first" or false edges against every member of the SET."""
+    cmd, _ = _capture_base_filtered_read("2026-10-09T16:32:05Z 1584 dd16ff6a\n", "main")
+    jq = cmd[cmd.index("--jq") + 1]
+    assert ".base.ref" in jq, (
+        f"the open-PR read does not filter on the base branch, so a stacked PR "
+        f"is measured against a base it was never opened against: {jq}"
+    )
+    assert '"main"' in jq, f"the base branch is not the one compared against: {jq}"
+    assert "base=" not in " ".join(cmd), (
+        f"the base filter moved into the URL, where REST drops an unrecognised "
+        f"parameter in silence: {cmd}"
+    )
+
+
+def test_a_BASE_THAT_NAMES_NO_BRANCH_leaves_the_SET_unfiltered():
+    """A bare SHA is a commit the caller pinned deliberately and names no
+    branch to filter on. Inventing one would be worse than not filtering."""
+    cmd, _ = _capture_base_filtered_read("2026-10-09T16:32:05Z 1584 dd16ff6a\n", None)
+    jq = cmd[cmd.index("--jq") + 1]
+    assert ".base.ref" not in jq, f"a base filter was invented for a SHA base: {jq}"
+
+
+def test_main_DERIVES_the_base_branch_from_its_own_base_argument():
+    """The wiring: a filter nothing passes is the same as no filter, and the
+    two tests above would both still pass with `main()` never calling it."""
+    seen = {}
+
+    def read(repo, label, base=None):
+        seen["base"] = base
+        return [(1584, "a" * 40)]
+
+    _run_main(
+        ["--worktree", "/tmp/wt", "--base", "upstream/release"],
+        read,
+        lambda wt, base, p: ("f" * 40, [], []),
+    )
+    assert seen.get("base") == "release", (
+        f"main() passed {seen.get('base')!r} as the base branch; the SET is not "
+        f"filtered on the branch the plan is computed against"
+    )
+
+
+# ---- Finding 6: a fetch does not guarantee the tracking ref moved ---------
+
+
+def test_the_base_is_pinned_to_FETCH_HEAD_not_to_the_TRACKING_REF():
+    """`git fetch <remote> <branch>` updates `refs/remotes/<remote>/<branch>`
+    only opportunistically: under a restricted `remote.*.fetch` refspec -- a
+    `--single-branch` clone is the ordinary case -- the fetch succeeds and
+    `rev-parse origin/main` returns the SHA the worktree already had. The
+    stale-base defect `resolve_base` exists to prevent is then back, with
+    output claiming a refresh, and every pair is wrong in the same direction so
+    the plan still reads as coherent. `FETCH_HEAD` names what was just
+    fetched."""
+    fresh = "f" * 40
+    stale = "5" * 40
+    stub = _GitStub(
+        {
+            ("git", "rev-parse", "FETCH_HEAD"): (0, fresh + "\n", ""),
+            ("git", "rev-parse", "origin/main"): (0, stale + "\n", ""),
+        }
+    )
+    sha = _with_stub(stub, lambda: _mod.resolve_base("/tmp/wt", "origin/main"))
+    assert sha == fresh, (
+        f"resolve_base returned {sha[:8]}, the stale tracking ref, although the "
+        f"fetch had just brought {fresh[:8]} -- the plan would be computed "
+        f"against a base that no longer exists while reporting a refresh"
+    )
+
+
+def test_a_FETCH_HEAD_that_does_not_resolve_raises_rather_than_falling_back():
+    """Falling back to the tracking ref here would reinstate the defect under a
+    different name, and the fallback would fire precisely in the restricted-
+    refspec case the FETCH_HEAD read exists for."""
+    stub = _GitStub(
+        {
+            ("git", "rev-parse", "FETCH_HEAD"): (128, "", "fatal: ambiguous argument"),
+            ("git", "rev-parse", "origin/main"): (0, "5" * 40 + "\n", ""),
+        }
+    )
+
+    def run():
+        try:
+            return _mod.resolve_base("/tmp/wt", "origin/main")
+        except RuntimeError as e:
+            return str(e)
+        except Exception as e:
+            raise AssertionError(f"resolve_base raised {type(e).__name__}: {e}") from None
+
+    out = _with_stub(stub, run)
+    assert isinstance(out, str) and "FETCH_HEAD" in out, (
+        f"an unresolvable FETCH_HEAD did not raise; resolve_base returned {out!r}"
+    )
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

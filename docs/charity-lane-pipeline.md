@@ -83,15 +83,16 @@ flowchart TD
 1. **Verdicts:** the conductor dispatches `232. WHMCS - Charity-Lane Verdicts` (ungated,
    `whmcs-prod-read`). It returns one PII-free row per Pending pid 16 / 33 order: ACCEPT, NEED_INFO
    or ESCALATE, with reason codes. The checks are the machine-checkable part of the inventory §5
-   set: organization Facebook and LinkedIn pages answer, the ToS and US attestations are ticked, the
-   track matches the legal-status answer, the EIN is present (and a confirmed 501(c)(3) for pid 33),
-   and there is no duplicate client, org or domain. Every order is then screened with FraudLabs Pro
-   exactly as `228` does it (228's `fraudlabspro-prod-read` environment and key), deciding on the
-   FraudLabs status alone: `APPROVE` passes, `REJECT` is ESCALATE `FRAUD_FLAGGED`, `REVIEW` is
-   ESCALATE `FRAUD_REVIEW`, and a failed or missing lookup is ESCALATE `FRAUD_CHECK_FAILED`. The
-   score is reported but never decisive: a high score on a $0 onboarding order is the documented
-   false-positive pattern (#813). The decision table is the `finalize` job's; the WHMCS job's own
-   report is unscreened and is transport only.
+   set: organization Facebook and LinkedIn pages answer (a well-formed LinkedIn organization page
+   that LinkedIn will not show a bot is INFO, not a blocker, since 2026-11-12), the ToS and US
+   attestations are ticked, the track matches the legal-status answer, the EIN is present (and a
+   confirmed 501(c)(3) for pid 33), and there is no duplicate client, org or domain. Every order is
+   then screened with FraudLabs Pro exactly as `228` does it (228's `fraudlabspro-prod-read`
+   environment and key), deciding on the FraudLabs status alone: `APPROVE` passes, `REJECT` is
+   ESCALATE `FRAUD_FLAGGED`, `REVIEW` is ESCALATE `FRAUD_REVIEW`, and a failed or missing lookup is
+   ESCALATE `FRAUD_CHECK_FAILED`. The score is reported but never decisive: a high score on a $0
+   onboarding order is the documented false-positive pattern (#813). The decision table is the
+   `finalize` job's; the WHMCS job's own report is unscreened and is transport only.
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts
@@ -194,6 +195,13 @@ existing reviewer environments. It does so **only** through `scripts/charity_lan
 The policy file is the authority; changing it changes what an unattended agent may approve, so it is
 a policy change for Clarke. `.claude/settings.json` allows only the script's subcommands, not raw
 `pending_deployments` calls.
+
+**Since 2026-11-12 the script runs inside GitHub Actions as workflow 753** (gate broker,
+[charity-intake-autonomy.md](charity-intake-autonomy.md)), because cloud sessions cannot approve
+gates and the local Conductor is retired. A session or scheduled task asks for a gated step by
+dispatching `753-charity-lane-gate-broker.yml` with `mode=run`, `rule=<id>` and `inputs_json`. 753
+also runs Gate 1/2 itself every day (`advance`: 232, then up to three accepts) and the weekly sites
+list (`sequence weekly-sites-list`).
 
 ## Real problems (the only escalations)
 

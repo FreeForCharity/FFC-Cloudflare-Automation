@@ -49,6 +49,13 @@
       "maxLength": 80
     },
     {
+      "key": "footerStreetAddress",
+      "productFields": ["footer-street-address"],
+      "productLabelPatterns": ["^public street address for your website footer$"],
+      "type": "publicStreetAddress",
+      "maxLength": 120
+    },
+    {
       "key": "mission",
       "clientField": "Brief mission statement",
       "productFields": ["mission"],
@@ -165,7 +172,12 @@
       "type": "url",
       "maxLength": 500,
       "hosts": ["linkedin.com"],
-      "rejectPathPatterns": ["^/in/", "^/pub/"]
+      "rejectPathPatterns": [
+        "^/in/",
+        "^/pub/",
+        "^/?$",
+        "^/(home|feed|mynetwork|messaging|notifications)(/|$)"
+      ]
     },
     {
       "key": "instagramUrl",
@@ -201,7 +213,8 @@
       "productLabelPatterns": ["^zeffy donation form url$"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["zeffy.com"]
+      "hosts": ["zeffy.com"],
+      "rejectPathPatterns": ["^/([a-z]{2}(-[A-Za-z]{2})?/)?o/", "^/([a-z]{2}(-[A-Za-z]{2})?/?)?$"]
     },
     {
       "key": "volunteerUrl",
@@ -210,7 +223,8 @@
       "productLabelPatterns": ["^idealist volunteer page url$"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["idealist.org"]
+      "hosts": ["idealist.org"],
+      "rejectPathPatterns": ["^/([a-z]{2}(-[A-Za-z]{2})?/?)?$"]
     },
     {
       "key": "foundingYear",
@@ -242,7 +256,9 @@
       "productLabelPatterns": ["guidestar", "candid"],
       "type": "url",
       "maxLength": 500,
-      "hosts": ["guidestar.org", "candid.org"]
+      "hosts": ["guidestar.org", "candid.org"],
+      "rejectHosts": ["app.candid.org"],
+      "rejectPathPatterns": ["^/user/", "^/?$"]
     },
     {
       "key": "templateChoice",
@@ -262,6 +278,7 @@
     {
       "key": "maintainerGithub",
       "productFields": ["technical-github"],
+      "productLabelPatterns": ["^technical contact github username \\(your website maintainer\\)$"],
       "type": "githubUser"
     },
     {
@@ -305,18 +322,23 @@
     {
       "key": "leader1Name",
       "productFields": ["site-leader-1"],
+      "productLabelPatterns": [
+        "^board (chair ?/ ?president|president ?/ ?chair) - full name to show on your website$"
+      ],
       "type": "text",
       "maxLength": 100
     },
     {
       "key": "leader2Name",
       "productFields": ["site-leader-2"],
+      "productLabelPatterns": ["^board secretary - full name to show on your website$"],
       "type": "text",
       "maxLength": 100
     },
     {
       "key": "leader3Name",
       "productFields": ["site-leader-3"],
+      "productLabelPatterns": ["^board treasurer - full name to show on your website$"],
       "type": "text",
       "maxLength": 100
     }

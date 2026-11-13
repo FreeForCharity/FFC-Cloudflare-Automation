@@ -294,6 +294,128 @@ def test_every_rule_matches_its_workflow_dispatch_inputs():
         assert not missing, f"{rule['id']}: {rule['workflow']} never uses {sorted(missing)}"
 
 
+# --- 753 gate broker: advance / sequence / JSON inputs (2026-11-12) ------------
+
+
+def _report(rows, screened=True):
+    return {"schema": "charity-lane-verdicts/v2", "fraud_check": "screened" if screened else "not_run", "verdicts": rows}
+
+
+def _row(oid, gate=1, verdict="ACCEPT", fraud="pass"):
+    return {"order_id": oid, "client_id": 9, "gate": gate, "verdict": verdict, "fraud_check": fraud}
+
+
+def test_advance_accepts_only_screened_passing_accept_rows():
+    plan = gate.select_accepts(
+        POLICY,
+        _report([_row(5), _row(6, verdict="NEED_INFO"), _row(7, fraud="review"), _row(8, verdict="ESCALATE"), _row(9, gate=2)]),
+        3,
+    )
+    assert plan == [
+        ("226-approve-one", {"mode": "approve", "orderids": "5"}),
+        ("211-accept-one", {"order_id": "9", "action": "accept", "dry_run": "false"}),
+    ], plan
+
+
+def test_advance_refuses_an_unscreened_report():
+    try:
+        gate.select_accepts(POLICY, _report([_row(5)], screened=False), 3)
+    except gate.PolicyError:
+        return
+    raise AssertionError("an unscreened verdicts report must never produce an accept")
+
+
+def test_advance_caps_accepts_oldest_first():
+    plan = gate.select_accepts(POLICY, _report([_row(40), _row(12), _row(31), _row(7)]), 3)
+    assert [i["orderids"] for _, i in plan] == ["7", "12", "31"], plan
+
+
+def test_advance_ignores_gate_zero_rows():
+    assert gate.select_accepts(POLICY, _report([_row(5, gate=0)]), 3) == []
+
+
+def test_policy_advance_cap_is_the_testing_period_limit():
+    cap = POLICY["advance"]["max_accepts"]
+    assert 1 <= cap <= 3, f"advance.max_accepts={cap}; raising it past 3 is a policy decision for Clarke"
+    verdicts = gate.find_rule(POLICY, POLICY["advance"]["verdicts_rule"])
+    assert verdicts["environments"] == [], "the verdicts rule must stay read-only (ungated)"
+
+
+def test_every_sequence_step_validates_against_its_rule():
+    for name, steps in POLICY["sequences"].items():
+        for st in steps:
+            gate.validate_inputs(gate.find_rule(POLICY, st["rule"]), dict(st.get("inputs") or {}))
+
+
+def test_703_rule_only_runs_without_priming_601():
+    assert not refused("703-generate", {"prime_wpmudev": "false"})
+    assert refused("703-generate", {"prime_wpmudev": "true"})
+    assert refused("703-generate", {})
+
+
+def test_inputs_from_env_parses_a_json_object():
+    import os
+
+    os.environ["T_GATE"] = '{"domain": "example.org", "dry_run": false, "n": 3}'
+    try:
+        assert gate.inputs_from_env("T_GATE") == {"domain": "example.org", "dry_run": "false", "n": "3"}
+        for bad in ("[1]", "not json", '{"a": {"b": 1}}', '{"a": null}'):
+            os.environ["T_GATE"] = bad
+            try:
+                gate.inputs_from_env("T_GATE")
+            except gate.PolicyError:
+                continue
+            raise AssertionError(f"inputs_from_env accepted {bad!r}")
+    finally:
+        os.environ.pop("T_GATE", None)
+
+
+def test_sequence_dry_run_dispatches_nothing():
+    import contextlib
+    import io
+
+    calls = []
+    real = gate.gh
+    gate.gh = lambda *a, **k: calls.append(a)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert gate.cmd_sequence(POLICY, "weekly-sites-list", True, 10) == 0
+    finally:
+        gate.gh = real
+    assert calls == [], calls
+
+
+def test_unknown_sequence_is_refused():
+    try:
+        gate.cmd_sequence(POLICY, "no-such-sequence", True, 10)
+    except gate.PolicyError:
+        return
+    raise AssertionError("an unknown sequence name must be refused")
+
+
+def test_only_753_uses_the_broker_environment():
+    hits = []
+    for wf in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+        if "charity-lane-broker" in wf.read_text(encoding="utf-8"):
+            hits.append(wf.name)
+    assert hits == ["753-charity-lane-gate-broker.yml"], (
+        f"the ungated broker environment (it holds an approval-capable token) is named by {hits}; "
+        "only 753 may use it"
+    )
+
+
+def test_753_refuses_non_main_refs_and_pins_its_schedules():
+    text = (REPO_ROOT / ".github" / "workflows" / "753-charity-lane-gate-broker.yml").read_text(encoding="utf-8")
+    assert 'if [ "$REF" != "refs/heads/main" ]' in text
+    assert "ref: main" in text
+    assert "'20 14 * * *') MODE=advance" in text
+    assert "'10 8 * * 1')  MODE=sequence; RULE=weekly-sites-list" in text
+    # inputs reach the script through env, never interpolated into the shell body
+    body = text.split("- name: Broker", 1)[1]
+    run_body = body.split("run: |", 1)[1]
+    assert "${{" not in run_body, "753's Broker step must read inputs from env, not interpolate them into the script"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

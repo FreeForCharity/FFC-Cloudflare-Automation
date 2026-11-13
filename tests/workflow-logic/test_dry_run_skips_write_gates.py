@@ -213,6 +213,11 @@ KNOWN_UNGUARDED = {
     # REHEARSAL-INSIDE: the dry run is the preview that the LIVE run's preflight
     # requires as evidence within 48h. Skipping it defeats the control.
     ("736-repo-archive.yml", "archive"),
+    # REHEARSAL-INSIDE: 753's dry run IS the plan. It validates the policy
+    # rules and, for `advance`, dispatches the read-only 232 and reads its
+    # verdicts, which needs the broker PAT. `charity-lane-broker` has no
+    # reviewer, so nothing parks; a dry run approves nothing by construction.
+    ("753-charity-lane-gate-broker.yml", "broker"),
 }
 
 # Jobs where skipping on a dry run would be actively wrong, with the reason.
@@ -228,6 +233,11 @@ REHEARSAL_INSIDE_THE_GATED_JOB = {
         "736's preflight requires a successful dry_run=true run within 48h as "
         "evidence before a live archive. A skipped job still leaves a green run "
         "to find, but produces none of the preview the operator must review."
+    ),
+    ("753-charity-lane-gate-broker.yml", "broker"): (
+        "the dry run is the broker's plan: it validates every policy step and, "
+        "for advance, reads 232's verdicts with the broker PAT. A skip term "
+        "would make the default dispatch (dry_run=true) a no-op."
     ),
 }
 

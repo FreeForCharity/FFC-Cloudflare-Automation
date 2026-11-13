@@ -252,15 +252,36 @@ Describe 'Get-CharityLaneVerdict - Gate 1 (pid 16 / 33)' {
         (Get-CharityLaneVerdict -Application $app -Context $script:Ctx).reason_codes | Should -Contain 'LINKEDIN_URL_MISSING'
     }
 
-    It 'ESCALATEs (never NEED_INFO) when a social page does not answer 2xx/3xx: <Status>' -ForEach @(
+    It 'ESCALATEs (never NEED_INFO) when the Facebook page does not answer 2xx/3xx: <Status>' -ForEach @(
+        @{ Status = 999 }, @{ Status = 404 }, @{ Status = 400 }, @{ Status = $null }
+    ) {
+        $app = New-Gate1App
+        $app.urlProbes[$script:Fb] = $Status
+        $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Contain 'FACEBOOK_URL_UNVERIFIED'
+    }
+
+    It 'does not block on a well-formed LinkedIn org page LinkedIn will not show a bot: <Status>' -ForEach @(
         @{ Status = 999 }, @{ Status = 404 }, @{ Status = 400 }, @{ Status = $null }
     ) {
         $app = New-Gate1App
         $app.urlProbes[$script:Li] = $Status
         $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
-        $r.verdict | Should -Be 'ESCALATE'
+        $r.verdict | Should -Not -Be 'ESCALATE'
+        $r.verdict | Should -Not -Be 'NEED_INFO'
         $r.reason_codes | Should -Contain 'LINKEDIN_URL_UNVERIFIED'
         $r.reason_codes | Should -Not -Contain 'LINKEDIN_URL_NOT_ORG_PAGE'
+    }
+
+    It 'reduces a pasted LinkedIn admin or tab URL to the public page: <Url>' -ForEach @(
+        @{ Url = 'https://www.linkedin.com/company/bright-future-foundation/admin/dashboard/' },
+        @{ Url = 'https://www.linkedin.com/company/bright-future-foundation/home/' },
+        @{ Url = 'https://linkedin.com/company/bright-future-foundation?trk=x' }
+    ) {
+        $page = Get-LaneSocialPageUrl -Fields (New-Gate1App -Override @{ 'linkedin-page|Charity LinkedIn Page URL' = $Url }).fields -Kind 'linkedin'
+        $page.Code | Should -BeNullOrEmpty
+        $page.Url | Should -Be $script:Li
     }
 
     It 'ESCALATEs when the social pages were never probed' {

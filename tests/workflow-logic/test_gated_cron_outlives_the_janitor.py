@@ -89,13 +89,11 @@ GATED_ENVS = {
 # Keep this a CLOSED set: `test_the_reap_dominated_set_is_exactly_the_occupants`
 # fails both when a new workflow acquires the shape and when a listed one is
 # fixed, so neither direction can drift silently.
-REAP_DOMINATED = {
-    # 703 fires weekly (7d) against max_age_days=7. 7 of its last 11 scheduled
-    # runs were reaped by 734 at created+8d; see this module's docstring.
-    # Tracked for an operator decision — do not remove without changing 703's
-    # cron, 734's threshold, or 703's triggers.
-    "703-sites-list-generate.yml",
-}
+REAP_DOMINATED: set[str] = set(
+    # Empty since 2026-11-12: 703 lost its own cron. Its weekly run is now
+    # dispatched by 753 (gate broker), which approves the gate under policy rule
+    # `703-generate` within minutes, so nothing waits for 734 to reap it.
+)
 
 
 def _janitor_max_age_days() -> int:
@@ -314,36 +312,27 @@ def test_every_reap_dominated_entry_still_has_the_shape():
         )
 
 
-def test_703_is_the_measured_instance():
-    """Pin the specific numbers the docstring's measurement rests on.
+def test_703_left_the_shape_by_moving_its_schedule_to_the_broker():
+    """703 was the measured instance (7 of 11 weekly runs reaped by 734).
 
-    If 703's cron or 734's threshold moves, the evidence in the docstring stops
-    describing the tree and this fails — the citation-drift problem, applied to
-    two numbers in two different files rather than to a line number.
+    The operator decision this module was filed for was taken on 2026-11-12:
+    703 has no cron of its own, and 753 dispatches it every Monday as the
+    `weekly-sites-list` sequence and approves its gate under policy. Pin both
+    halves, so re-adding a cron to 703 (or dropping the sequence) fails here
+    rather than silently reintroducing the reaped-every-week shape.
     """
+    import json
+
     name = "703-sites-list-generate.yml"
-    occupants = _scheduled_gated_workflows()
-    assert name in occupants, (
-        f"{name} is no longer scheduled + reviewer-gated; this module's "
-        "docstring measurement no longer describes the tree. Re-measure before "
-        "editing, and update REAP_DOMINATED."
+    assert name not in _scheduled_gated_workflows(), (
+        f"{name} is scheduled and gated again. Its weekly run belongs to 753's "
+        "`weekly-sites-list` sequence; a cron here parks at github-prod until 734 reaps it."
     )
-    info = occupants[name]
-    assert info["crons"] == ["0 8 * * 1"], (
-        f"{name}: cron changed to {info['crons']} (was ['0 8 * * 1'], a 7-day "
-        "period). Re-derive the period-vs-threshold comparison and the "
-        "docstring's run table."
-    )
-    assert "github-prod" in info["gated"], (
-        f"{name}: expected the github-prod gate, got {info['gated']}."
-    )
-    period = _min_period_days(info["crons"])
-    max_age = _janitor_max_age_days()
-    assert period is not None and period >= max_age, (
-        f"{name}: period {period}d is now SHORTER than max_age_days={max_age}, "
-        "so it is no longer reap-dominated. Remove it from REAP_DOMINATED — the "
-        "operator decision this module was filed for has been taken."
-    )
+    policy = json.loads((REPO_ROOT / "config" / "charity-lane-gate-policy.json").read_text(encoding="utf-8"))
+    steps = [st["rule"] for st in policy["sequences"]["weekly-sites-list"]]
+    assert steps == ["601-export", "703-generate"], steps
+    broker = (WORKFLOWS / "753-charity-lane-gate-broker.yml").read_text(encoding="utf-8")
+    assert "weekly-sites-list" in broker and "cron: '10 8 * * 1'" in broker
 
 
 def test_the_janitor_reaps_rather_than_reporting_on_the_scheduled_path():

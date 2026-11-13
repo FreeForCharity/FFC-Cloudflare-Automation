@@ -278,6 +278,7 @@
     {
       "key": "maintainerGithub",
       "productFields": ["technical-github"],
+      "productLabelPatterns": ["^technical contact github username \\(your website maintainer\\)$"],
       "type": "githubUser"
     },
     {

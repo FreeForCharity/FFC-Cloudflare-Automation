@@ -79,6 +79,15 @@ $script:SiteFieldTypes = @('email', 'phone', 'location', 'text', 'hexColor', 'ur
 $script:SiteFieldPublicStreetSlug = 'footer-street-address'
 $script:SiteFieldPublicStreetLabel = '(?i)^public street address for your website footer$'
 
+# The maintainer's GitHub username. Its label says "Technical Contact", so the
+# `contact` deny fragment refused it and 701 provisioned sites with no
+# maintainer. The form asks for it so FFC can invite that account to the
+# site's (public) repository, so it is published on acceptance anyway. Only
+# this exact label is waived, only on a githubUser field, whose validator
+# emits a bare username and nothing else; the same contact's email, phone and
+# LinkedIn stay denied.
+$script:SiteFieldMaintainerGithubLabel = '(?i)^technical contact github username \(your website maintainer\)$'
+
 # --- pure, testable helpers (dot-source stops below) -----------------------
 
 function Get-SiteFieldNormNames {
@@ -134,6 +143,7 @@ function Test-SiteFieldDeniedLabel {
     param([AllowEmptyString()][string]$Label, [string[]]$DeniedPatterns)
     if ([string]$Label -match $script:SiteFieldPublicLeaderLabel) { return $false }
     if ([string]$Label -match $script:SiteFieldPublicStreetLabel) { return $false }
+    if ([string]$Label -match $script:SiteFieldMaintainerGithubLabel) { return $false }
     $l = [regex]::Replace([string]$Label, '(?i)\bpublic e-?mail address\b', 'public email')
     return Test-SiteFieldDeniedName -Name $l -DeniedPatterns $DeniedPatterns
 }
@@ -176,6 +186,9 @@ function Read-SiteFieldsConfig {
         }
         $patterns = @($f.productLabelPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
         foreach ($p in $patterns) { $null = [regex]::new($p) }
+        if ($type -ne 'githubUser' -and ($patterns -contains $script:SiteFieldMaintainerGithubLabel.Substring(4))) {
+            throw "Site-fields config: field '$key' uses the maintainer GitHub label pattern but is not of type githubUser."
+        }
         $fields.Add([pscustomobject]@{
                 key                  = $key
                 type                 = $type
@@ -484,6 +497,8 @@ function Get-SiteFieldProductCandidates {
         foreach ($a in $Set.answers) {
             $label = Get-SiteFieldLabelText $a.name
             if ($label -notmatch "(?i)$pat") { continue }
+            # The maintainer-username waiver holds only for a githubUser field.
+            if ($Field.type -ne 'githubUser' -and $label -match $script:SiteFieldMaintainerGithubLabel) { continue }
             if (Test-SiteFieldDeniedLabel -Label $label -DeniedPatterns $DeniedPatterns) { continue }
             $out.Add($a.value)
         }

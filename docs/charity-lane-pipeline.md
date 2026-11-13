@@ -93,6 +93,32 @@ flowchart TD
    ESCALATE `FRAUD_CHECK_FAILED`. The score is reported but never decisive: a high score on a $0
    onboarding order is the documented false-positive pattern (#813). The decision table is the
    `finalize` job's; the WHMCS job's own report is unscreened and is transport only.
+
+   **Pre-acceptance completeness review (since 2026-11-13, blocking).** Orders 875 and 876 were
+   accepted with admin links in required fields, one person in all three officer slots and a GitHub
+   username that does not exist, because nothing checked the website half of the application.
+   Clarke: "Make sure that we are absolutely not approving applications that are not complete." So
+   every pid 16 / 33 row also runs `scripts/charity-lane-completeness.ps1`, the inventory §5
+   standard in one place:
+   - every required website field answered with a usable value, read exactly as `234` reads it (an
+     admin, dashboard, login or generic home-page link counts as unanswered): legal name, mission,
+     founding year, footer email / phone / city & state, template choice, domain ownership, tagline,
+     descriptions, program 1, Facebook and LinkedIn pages, maintainer GitHub username, the three
+     officers' website names, and for pid 33 the Zeffy, Idealist and Candid links;
+   - the Zeffy, Idealist, Candid and current-website links open (404 / 410 = NEED_INFO; any other
+     failure = ESCALATE `LINK_UNVERIFIED`; Zeffy's Cloudflare managed challenge is INFO
+     `LINK_BOT_WALL`, as LinkedIn's 999 is);
+   - the maintainer's GitHub account exists (`GITHUB_USER_NOT_FOUND`; a failed lookup is ESCALATE);
+   - three different officers (`OFFICERS_NOT_DISTINCT`), each with their own personal LinkedIn
+     profile (`OFFICER_LINKEDIN_*`), and the officers' consent ticked.
+
+   A row with no review is ESCALATE `COMPLETENESS_NOT_CHECKED`. Each NEED_INFO code carries the
+   plain-English `applicant` line the need-info ticket uses. `226 approve` runs the same review for
+   every order it is asked to accept and refuses (and fails the run) on any blocking code, so a
+   by-hand accept is gated too; there is no override. The content half of §5b (does the current
+   website describe the same organization, mission and leaders as the application) is a judgment, so
+   the conductor does it before every accept (routine step 2).
+
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts

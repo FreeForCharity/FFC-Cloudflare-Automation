@@ -70,16 +70,31 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    rows whose fraud screening ran (the `finalize` job's table, or the `charity-lane-verdicts`
    artifact). Never act on the `charity-lane-verdicts-unscreened` report, and if `finalize` did not
    run, treat every order as ESCALATE.
-2. **Gate 1/2 decisions.** At most 3 accepts per run (testing period).
-   - **ACCEPT, pid 16/33:**
+2. **Gate 1/2 decisions.** At most 3 accepts per run (testing period). Never accept an incomplete
+   application (Clarke, 2026-11-13). Every pid 16/33 row already carries the pre-acceptance
+   completeness review (`scripts/charity-lane-completeness.ps1`): every required website field
+   answered with a usable value, the Zeffy, Idealist, Candid and current-site links opened, the
+   maintainer's GitHub account confirmed, and three different officers, each with their own LinkedIn
+   profile, named and consenting. A row that fails any of it is NEED_INFO or ESCALATE, never ACCEPT,
+   and `226 approve` re-runs the same review and refuses the order if it fails, so no accept path
+   skips it.
+   - **ACCEPT, pid 16/33:** first do the content review (application inventory section 5b, "existing
+     website + intake-form content review"). Read 234's fields for the client (mission, programs,
+     officers, current website) and open the current website when one is given. Accept only when the
+     site and the application describe the same organization, mission and leaders. A mismatch, or a
+     current site that is clearly someone else's, is `DECISION NEEDED` with what differs; do not
+     accept. Then
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.
+     If 226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names.
    - **ACCEPT, pid 40:**
      `charity_lane_gate.py run --rule 211-accept-one --input order_id=<id> --input action=accept --input dry_run=false`.
    - **NEED_INFO** [`onboarding_need_info` template, #1632]: once per order per 7 days, run
      `205-templated` with `template=onboarding_need_info`, the `client_id`, and `extra_message` =
      the missing items in plain English, one per line (for example "Missing: your organization's
-     LinkedIn page (a personal profile was given)"). Translate reason codes; never paste codes or
-     anyone's personal details into the ticket. Record the codes on the ledger.
+     LinkedIn page (a personal profile was given)"). For every completeness code, use its
+     `applicant` line from `$script:LaneCompletenessCodes` in
+     `scripts/charity-lane-completeness.ps1`, verbatim. Never paste codes or anyone's personal
+     details into the ticket. Record the codes on the ledger.
    - **ESCALATE:** a `DECISION NEEDED` line with the order id, org name and reason codes.
 3. **Find what already exists, then queue** [workflow 750]. Before opening any `[CHARITY-LANE]`
    item, and before provisioning, establish whether this charity is already known and where it lives

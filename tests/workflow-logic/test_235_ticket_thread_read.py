@@ -2,8 +2,9 @@
 
 235 reads full ticket threads in a PUBLIC repo. The claims that carry weight:
 
-  * READ-ONLY on the existing lane: `whmcs-prod-read` with `scope: read` on the
-    READ_ALL_FFC_AZURE_* identity; the callee sends only read actions.
+  * READ-ONLY, behind an approval: the gated `whmcs-prod` environment with
+    `scope: read` on the READ_ALL_FFC_AZURE_* identity; the callee sends only
+    read actions.
   * NO PLAINTEXT LEAVES THE JOB: every input arrives through env:, the upload
     step names a fixed path (no input reaches it), and the artifact is the
     encrypted envelope only.
@@ -90,9 +91,10 @@ def test_gated_lane_and_read_scope():
     by promoting the credential: `whmcs-prod` is the lane every WRITE workflow
     uses, and the obvious way to make OIDC work there is to switch to
     `scope: write` on the WR_ALL identity, which would hand a read-only
-    workflow a writer PAT. 222 already pairs `environment: whmcs-prod` with
-    `scope: read` on READ_ALL, so no credential change is needed, and this test
-    fails if a later edit takes the easy route.
+    workflow a writer PAT. The reader identity instead needs its own federated
+    credential for `environment:whmcs-prod` (no other workflow pairs the two --
+    222's whmcs-prod job uses WR_ALL), and this test fails if a later edit takes
+    the easy route.
     """
     job = _job()
     assert job["environment"] == "whmcs-prod", job["environment"]

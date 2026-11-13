@@ -124,6 +124,23 @@ Describe 'Invoke-TicketThreadRead' {
     It 'refuses more tickets than the cap' {
         { Invoke-TicketThreadRead -TicketIds @(1, 2, 3) -InvokeApi $script:Api -MaxTickets 2 } | Should -Throw -ExpectedMessage '*at most 2*'
     }
+    It 'delivers an empty thread and no notes as empty arrays, never [null]' {
+        foreach ($shape in @($null, '', [pscustomobject]@{ reply = @() })) {
+            $empty = {
+                param([hashtable]$Body)
+                switch ($Body.action) {
+                    'GetTicket' { [pscustomobject]@{ result = 'success'; ticketid = '5'; replies = $shape } }
+                    'GetTicketNotes' { [pscustomobject]@{ result = 'success'; notes = [pscustomobject]@{ note = @() } } }
+                }
+            }
+            $doc = Invoke-TicketThreadRead -TicketIds @(5) -InvokeApi $empty
+            $json = $doc | ConvertTo-Json -Depth 8 -Compress
+            $json | Should -Not -BeLike '*null*'
+            $json | Should -BeLike '*"replies":`[`]*'
+            $json | Should -BeLike '*"notes":`[`]*'
+            @($doc.tickets[0].replies).Count | Should -Be 0
+        }
+    }
     It 'stops paging GetTickets once the cap is exceeded' {
         $script:Pages = 0
         $many = {

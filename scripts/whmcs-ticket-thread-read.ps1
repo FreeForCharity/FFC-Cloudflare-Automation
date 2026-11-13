@@ -189,24 +189,26 @@ function ConvertTo-ThreadRecord {
     #>
     [OutputType([pscustomobject])]
     param([Parameter(Mandatory = $true)]$Ticket, $Notes)
-    $replies = @(Get-WhmcsNodeList -Node (Get-ThreadProp $Ticket 'replies') -ChildName 'reply') | ForEach-Object {
-        [pscustomobject]@{
-            replyid     = [string](Get-ThreadProp $_ 'replyid')
-            date        = [string](Get-ThreadProp $_ 'date')
-            from_admin  = [string](Get-ThreadProp $_ 'admin')
-            name        = [string](Get-ThreadProp $_ 'name')
-            email       = [string](Get-ThreadProp $_ 'email')
-            message     = [string](Get-ThreadProp $_ 'message')
-            attachments = [string](Get-ThreadProp $_ 'attachment')
-        }
-    }
-    $noteList = @(Get-WhmcsNodeList -Node (Get-ThreadProp $Notes 'notes') -ChildName 'note') | ForEach-Object {
-        [pscustomobject]@{
-            date    = [string](Get-ThreadProp $_ 'date')
-            admin   = [string](Get-ThreadProp $_ 'admin')
-            message = [string](Get-ThreadProp $_ 'message')
-        }
-    }
+    # Whole pipeline inside @(), as whmcs-charity-lane-verdicts.ps1 does, so an
+    # empty thread is an empty array by construction (pinned by Pester).
+    $replies = @(Get-WhmcsNodeList -Node (Get-ThreadProp $Ticket 'replies') -ChildName 'reply' | ForEach-Object {
+            [pscustomobject]@{
+                replyid     = [string](Get-ThreadProp $_ 'replyid')
+                date        = [string](Get-ThreadProp $_ 'date')
+                from_admin  = [string](Get-ThreadProp $_ 'admin')
+                name        = [string](Get-ThreadProp $_ 'name')
+                email       = [string](Get-ThreadProp $_ 'email')
+                message     = [string](Get-ThreadProp $_ 'message')
+                attachments = [string](Get-ThreadProp $_ 'attachment')
+            }
+        })
+    $noteList = @(Get-WhmcsNodeList -Node (Get-ThreadProp $Notes 'notes') -ChildName 'note' | ForEach-Object {
+            [pscustomobject]@{
+                date    = [string](Get-ThreadProp $_ 'date')
+                admin   = [string](Get-ThreadProp $_ 'admin')
+                message = [string](Get-ThreadProp $_ 'message')
+            }
+        })
     return [pscustomobject]@{
         id        = [string](Get-ThreadProp $Ticket 'ticketid')
         tid       = [string](Get-ThreadProp $Ticket 'tid')

@@ -66,7 +66,10 @@ on:
         required: false
         type: string
       footer_address:
-        description: 'Footer mailing address (optional; you can paste multi-line text).'
+        description:
+          'Footer location (optional): "City, ST", or a public street line then "City, ST" (e.g.
+          "123 Main St, Raleigh, NC"), or a full address with a US ZIP. Never a volunteer''s home or
+          the IRS address.'
         required: false
         type: string
       footer_ein:
@@ -342,6 +345,29 @@ jobs:
               return lines.join('\n');
             }
 
+            // The issue form's footer location fields. The labels were renamed from
+            // "Footer Mailing ..." on 2026-11-13; an issue filed on the older form is still
+            // read under its old headings.
+            function readFooterLocationFields() {
+              const pick = (current, legacy) => {
+                const now = normalizeInput(extractSection(current));
+                if (now) return { value: now, label: current };
+                const old = normalizeInput(extractSection(legacy));
+                return { value: old, label: old ? legacy : current };
+              };
+              const line1 = pick('Footer Street Address (optional)', 'Footer Mailing Address Line 1');
+              const city = pick('Footer City', 'Footer Mailing City');
+              const state = pick('Footer State', 'Footer Mailing State/Province');
+              const postal = pick('Footer ZIP Code (optional)', 'Footer Mailing Postal Code');
+              return {
+                line1: line1.value,
+                city: city.value,
+                state: state.value,
+                postal: postal.value,
+                labels: { line1: line1.label, city: city.label, state: state.label, postal: postal.label },
+              };
+            }
+
             function buildUrlLine(key, url) {
               const u = normalizeInput(url);
               if (!u) return null;
@@ -421,12 +447,95 @@ jobs:
 
             const hasUsZip = (value) => /\b\d{5}(?:-\d{4})?\b/.test(String(value || ''));
 
-            // A charity-confirmed footer location of the form "City, ST" or "City, State",
-            // which is what the pid 33 application's "City & state to show in your website
-            // footer" field collects. No digits allowed, so a street address never passes
-            // as a location; a full address still needs a ZIP.
-            const isCityState = (value) =>
-              /^[A-Za-z][A-Za-z .'-]*,\s*[A-Za-z][A-Za-z .]*$/.test(String(value || '').trim());
+            // Footer address rule (docs/charity-intake-autonomy.md): the footer always shows
+            // City and State, and a street line only when the charity gave a PUBLIC street
+            // address on the application. So a footer address is one of:
+            //   "City, ST"                      (the application's City & state answer)
+            //   "<street>, City, ST"            (plus its optional public street address)
+            //   anything carrying a US ZIP      (a full postal address, as before)
+            // "City ST" without the comma is accepted too, the same as 234 accepts it, and
+            // normalised to "City, ST". The state must be a real US state, DC or territory,
+            // by code or name, so a stray "Apt B" can never be read as the state.
+            const US_STATES = {
+              AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+              CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia',
+              FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
+              IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana',
+              ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota',
+              MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada',
+              NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
+              NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon',
+              PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota',
+              TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia',
+              WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+              PR: 'Puerto Rico', GU: 'Guam', VI: 'U.S. Virgin Islands', AS: 'American Samoa',
+              MP: 'Northern Mariana Islands',
+            };
+            const stateNames = Object.values(US_STATES)
+              .map(n => n.toLowerCase().replace(/\./g, ''))
+              .sort((a, b) => b.length - a.length);
+            const isUsState = (value) => {
+              const v = String(value || '').trim().replace(/\./g, '').replace(/\s+/g, ' ');
+              if (/^[A-Za-z]{2}$/.test(v)) return Object.prototype.hasOwnProperty.call(US_STATES, v.toUpperCase());
+              return stateNames.includes(v.toLowerCase());
+            };
+            const cityRe = /^[A-Za-z][A-Za-z .'-]*$/;
+
+            // "City, ST" / "City, State" / "City ST" / "City State" -> "City, ST|State", or null.
+            function splitCityState(value) {
+              const v = String(value || '').trim().replace(/\s+/g, ' ');
+              const comma = v.match(/^([^,]+),\s*([^,]+)$/);
+              if (comma) {
+                const city = comma[1].trim();
+                const state = comma[2].trim();
+                return cityRe.test(city) && isUsState(state) ? `${city}, ${state}` : null;
+              }
+              const code = v.match(/^(.+?)\s+([A-Za-z]{2}|[A-Za-z]\.[A-Za-z]\.)$/);
+              if (code && cityRe.test(code[1]) && isUsState(code[2])) return `${code[1]}, ${code[2]}`;
+              const lower = v.toLowerCase();
+              for (const name of stateNames) {
+                if (lower.endsWith(` ${name}`)) {
+                  const city = v.slice(0, v.length - name.length).trim();
+                  if (cityRe.test(city)) return `${city}, ${v.slice(v.length - name.length)}`;
+                }
+              }
+              return null;
+            }
+
+            // The street line, as 234's publicStreetAddress type accepts it: a number and a
+            // letter (a house number or PO box), and no email address or link.
+            const isStreetLine = (value) => {
+              const v = String(value || '').trim();
+              return /\d/.test(v) && /[A-Za-z]/.test(v) && !/@|https?:\/\/|www\./i.test(v);
+            };
+
+            // Returns the normalised footer address, '' for none, or null when it is not a
+            // US ZIP address, a City/State location, or a street line plus City/State.
+            function normalizeFooterAddress(value) {
+              const v = String(value || '').trim();
+              if (!v) return '';
+              if (hasUsZip(v)) return v;
+              const countryRe = /^(united states( of america)?|usa?|u\.s\.(a\.)?)$/i;
+              const lines = v.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+              while (lines.length > 1 && countryRe.test(lines[lines.length - 1])) lines.pop();
+              if (lines.length > 1) {
+                const location = splitCityState(lines[lines.length - 1]);
+                const street = lines.slice(0, -1).join(', ');
+                return location && isStreetLine(street) ? `${street}\n${location}` : null;
+              }
+              const parts = lines[0].split(',').map(s => s.trim()).filter(Boolean);
+              while (parts.length > 1 && countryRe.test(parts[parts.length - 1])) parts.pop();
+              const whole = splitCityState(parts.join(', '));
+              if (whole) return whole;
+              // Try "<street>, City, ST" first, then "<street>, City ST".
+              for (const take of [2, 1]) {
+                if (parts.length <= take) continue;
+                const location = splitCityState(parts.slice(-take).join(', '));
+                const street = parts.slice(0, -take).join(', ');
+                if (location && isStreetLine(street)) return `${street}, ${location}`;
+              }
+              return null;
+            }
 
             const isHttpsUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
 
@@ -468,22 +577,18 @@ jobs:
               footerEmail = normalizeInput(extractSection('Footer Contact Email'));
               footerPhone = normalizeInput(extractSection('Footer Contact Phone'));
 
-              const addressLine1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
-              const addressCity = normalizeInput(extractSection('Footer Mailing City'));
-              const addressState = normalizeInput(extractSection('Footer Mailing State/Province'));
-              const addressPostal = normalizeInput(extractSection('Footer Mailing Postal Code'));
+              const footerLocationFields = readFooterLocationFields();
 
-              // Only stamp the country when an address was actually provided, so
-              // admin-minimal runs that omit the address don't end up with a
-              // country-only string that fails the best-effort ZIP validation.
-              const hasAnyAddress = !!(addressLine1 || addressCity || addressState || addressPostal);
+              // Only stamp the country on a full postal address (one with a ZIP). A
+              // City, State footer, with or without a street line, stays exactly that,
+              // the same shape the charity-lane path (234 -> 701) produces.
               footerAddress = buildAddress({
-                line1: addressLine1,
+                line1: footerLocationFields.line1,
                 line2: '',
-                city: addressCity,
-                state: addressState,
-                postal: addressPostal,
-                country: hasAnyAddress ? 'United States' : '',
+                city: footerLocationFields.city,
+                state: footerLocationFields.state,
+                postal: footerLocationFields.postal,
+                country: footerLocationFields.postal ? 'United States' : '',
               });
 
               footerEin = normalizeInput(extractSection('EIN / Tax ID'));
@@ -722,40 +827,53 @@ jobs:
               return;
             }
 
-            // Address requirement: must map to a real location (issue form).
-            // Require Street/PO Box + City/State/ZIP and a valid US ZIP format.
+            // Footer location (issue form). City and State are required; the street line
+            // and ZIP are optional, because the footer shows a street address only when
+            // the charity chose to publish one. A ZIP, when given, must be a US ZIP.
             if (!bestEffort) {
-              const line1 = normalizeInput(extractSection('Footer Mailing Address Line 1'));
-              const city = normalizeInput(extractSection('Footer Mailing City'));
-              const state = normalizeInput(extractSection('Footer Mailing State/Province'));
-              const postal = normalizeInput(extractSection('Footer Mailing Postal Code'));
-
+              const loc = readFooterLocationFields();
               for (const [label, value] of [
-                ['Footer Mailing Address Line 1', line1],
-                ['Footer Mailing City', city],
-                ['Footer Mailing State/Province', state],
-                ['Footer Mailing Postal Code', postal],
+                [loc.labels.city, loc.city],
+                [loc.labels.state, loc.state],
               ]) {
                 if (isDisallowedValue(value)) {
                   core.setFailed(`Invalid value for required address field: ${label}. Please provide a real value (not N/A).`);
                   return;
                 }
               }
-
-              if (!hasUsZip(postal)) {
-                core.setFailed('Footer Mailing Postal Code must be a valid US ZIP code (e.g., 85001 or 85001-1234).');
+              if (isNA(loc.line1)) {
+                core.setFailed(`Invalid value: ${loc.labels.line1} cannot be N/A. Leave it blank to show City and State only.`);
                 return;
               }
-            } else {
-              // Manual dispatch uses a freeform address input. If provided, it must be
-              // either a full address with a US ZIP, or a "City, State" location (the
-              // application's public footer location, which the charity confirmed).
-              if (!isDisallowedValue(footerAddress)) {
-                if (!hasUsZip(footerAddress) && !isCityState(footerAddress)) {
-                  core.setFailed('Footer address must include a valid US ZIP code (e.g., 85001 or 85001-1234), or be a "City, State" location.');
-                  return;
-                }
+              if (isNA(loc.postal)) {
+                core.setFailed(`Invalid value: ${loc.labels.postal} cannot be N/A. Leave it blank if you have none to show.`);
+                return;
               }
+              if (!splitCityState(`${loc.city}, ${loc.state}`)) {
+                core.setFailed(`Footer City and State must be a US city and state (e.g., Raleigh and NC), got "${loc.city}, ${loc.state}".`);
+                return;
+              }
+              if (loc.line1 && !isStreetLine(loc.line1)) {
+                core.setFailed(`${loc.labels.line1} must be one street line with a number (e.g., 123 Main St Suite 4, or PO Box 12), or left blank.`);
+                return;
+              }
+              if (loc.postal && !hasUsZip(loc.postal)) {
+                core.setFailed(`${loc.labels.postal} must be a valid US ZIP code (e.g., 85001 or 85001-1234), or left blank.`);
+                return;
+              }
+            } else if (!isDisallowedValue(footerAddress)) {
+              // Manual dispatch / admin-minimal: a freeform address. It must be a full
+              // address with a US ZIP, a "City, ST" location, or a street line followed
+              // by "City, ST" (the application's public street address plus its City &
+              // state answer). "City ST" without the comma is normalised to "City, ST".
+              const normalized = normalizeFooterAddress(footerAddress);
+              if (normalized === null) {
+                core.setFailed(
+                  'Footer address must be "City, ST", "<street>, City, ST", or a full address with a valid US ZIP code (e.g., 85001 or 85001-1234).',
+                );
+                return;
+              }
+              footerAddress = normalized;
             }
 
             // Leadership is displayed on the site. Require at least one leader line for full issue-based runs.
@@ -877,6 +995,19 @@ jobs:
             // the reusable "98. Repo - Add Collaborator" workflow, which re-validates
             // and adds each one best-effort.
             const loginRe = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+            // The technical contact IS the site's maintainer. A value that is not a GitHub
+            // username (a profile link, an email address, a typo) used to be dropped here in
+            // silence, and the repo was then created with no maintainer at all. Fail instead,
+            // naming the value, so the username is corrected before anything is created.
+            // (The requester falls back to the actor, which can be a bot, so it stays best effort.)
+            if (technicalPocGitHubUsername && !loginRe.test(technicalPocGitHubUsername)) {
+              core.setFailed(
+                `Invalid value: Technical POC GitHub Username "${technicalPocGitHubUsername}" is not a GitHub username. ` +
+                  'Enter only the username, for example jane-doe: letters, numbers and single hyphens, up to 39 characters. ' +
+                  'Not a link and not an email address.',
+              );
+              return;
+            }
             const maintainersCsv = [...new Set(
               [requesterGitHubUsername, technicalPocGitHubUsername]
                 .map(s => String(s || '').trim().replace(/^@/, ''))
@@ -1777,7 +1908,7 @@ jobs:
           $pendingLabels = [ordered]@{
             email = 'Public contact email'
             phone = 'Public phone number'
-            address = 'Mailing or office address (a city and state is enough)'
+            address = 'City and state for your footer (a public street address is optional: an office, commercial mailbox or registered-agent address, never a volunteer''s home)'
             ein = 'EIN (IRS tax ID)'
             guidestar = 'Candid / GuideStar profile link'
             social = 'Social media links'

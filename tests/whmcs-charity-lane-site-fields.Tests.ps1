@@ -537,6 +537,15 @@ Describe 'Validators' {
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
             @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }
+            # Editor / manager screens and back-office hosts (public-links rule, 2026-11-13).
+            @{ k = 'facebookUrl'; v = 'https://business.facebook.com/latest/home?asset_id=1'; why = 'url_host_not_public' }
+            @{ k = 'facebookUrl'; v = 'https://www.facebook.com/brightfuture/manage/'; why = 'url_path_is_admin' }
+            @{ k = 'facebookUrl'; v = 'https://www.facebook.com/professional_dashboard/'; why = 'url_path_is_admin' }
+            @{ k = 'youtubeUrl'; v = 'https://studio.youtube.com/channel/UC123/videos'; why = 'url_host_not_public' }
+            @{ k = 'instagramUrl'; v = 'https://www.instagram.com/accounts/edit/'; why = 'url_path_is_admin' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/settings/'; why = 'url_path_is_admin' }
+            @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/donation-form/bff/edit'; why = 'url_path_is_admin' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/dashboard'; why = 'url_path_is_admin' }
         ) {
             (Test-SiteFieldValue -Value $v -Field (Get-Field $k)).reason | Should -Be $why
         }

@@ -25,24 +25,27 @@ settings) per [`../docs/apply-email-templates.md`](../docs/apply-email-templates
 template has no code and no promotion mechanism supplies one, that is a production bug to escalate**
 — the public onboarding journey promises the code arrives in this email.
 
-## `_new` files: corrected gated-journey versions (PENDING)
+## `_new` files: corrected gated-journey versions
 
 Files ending in `_new` are the **gated-journey-corrected** versions produced for
 [#678](https://github.com/FreeForCharity/FFC-Cloudflare-Automation/issues/678). They reorder the
-journey to be website-first (site validated on its GitHub Pages address **before** the domain order)
-and are **PENDING application in the WHMCS admin** — production still sends the old versions until
-each `_new` body is pasted in per
-[`../docs/apply-email-templates.md`](../docs/apply-email-templates.md).
+journey to be website-first (site validated on its GitHub Pages address **before** the domain
+order). Their status differs by template:
 
-| Current (live)                 | Corrected (pending)                |
-| ------------------------------ | ---------------------------------- |
-| `tmpl_115.html`                | `tmpl_115_new.html`                |
-| `tmpl_116.html`                | `tmpl_116_new.html`                |
-| `welcome_A_domain_pid39.html`  | `welcome_A_domain_pid39_new.html`  |
-| `welcome_C_website_pid40.html` | `welcome_C_website_pid40_new.html` |
-| `welcome_B_email_product.html` | (no correction pending)            |
-| `welcome_B1_m365.html`         | (no correction pending)            |
-| `welcome_B2_google.html`       | (no correction pending)            |
+| Old file (historical)          | Corrected file                     | Status                                                                |
+| ------------------------------ | ---------------------------------- | --------------------------------------------------------------------- |
+| `tmpl_115.html`                | `tmpl_115_new.html`                | **Applied live** 2026-10-14 (see below); the old file is history only |
+| `tmpl_116.html`                | `tmpl_116_new.html`                | **Applied live** 2026-10-14 (see below); the old file is history only |
+| `welcome_A_domain_pid39.html`  | `welcome_A_domain_pid39_new.html`  | Pending application in the WHMCS admin                                |
+| `welcome_C_website_pid40.html` | `welcome_C_website_pid40_new.html` | Pending application in the WHMCS admin                                |
+| `welcome_B_email_product.html` | (no correction pending)            | No correction pending                                                 |
+| `welcome_B1_m365.html`         | (no correction pending)            | No correction pending                                                 |
+| `welcome_B2_google.html`       | (no correction pending)            | No correction pending                                                 |
+
+`tmpl_115.html` and `tmpl_116.html` are the **pre-2026-10-14** bodies (they still link the pid 39
+domain order) and each carries a `HISTORICAL` comment on its first line. Do not apply them. A
+pending `_new` body goes live only once it is pasted in per
+[`../docs/apply-email-templates.md`](../docs/apply-email-templates.md).
 
 ## 2026-10-14: build-first onboarding (applied live)
 
@@ -63,14 +66,31 @@ is no longer a separate step. These changes were made **directly in the WHMCS ad
   "Maintaining your charity's website?" line linking the site-owner guides, training track and
   common edits.
 
+## 2026-11-13: not yet mirrored here
+
+The live templates have moved past this mirror in two places, and neither is copied here yet. Both
+will be mirrored from the **live WHMCS export**, not written from memory, so this folder never
+claims text production does not send:
+
+- **16 Order Confirmation** and **7 Support Ticket Opened**: stock templates, never mirrored.
+- The new **"What happens next"** block for 115, 116 and 16 (review time, the GitHub invitation, the
+  preview link, the domain, charity email, and how to get help). Until the export is mirrored,
+  `tmpl_115_new.html` / `tmpl_116_new.html` show the 2026-10-14 bodies without that block.
+
+One edit here runs **ahead** of live: on 2026-11-13 the broken sentence in `tmpl_116_new.html`'s
+"What comes after your domain" paragraph was fixed to "Once your domain points at your website,
+we'll help you set up your charity email on Microsoft 365 or Google Workspace (the nonprofit email
+programs require an active website to qualify)." Apply that sentence in the admin too, unless the
+live "What happens next" rewrite has already replaced the paragraph.
+
 ## Template ID / product mapping
 
 ### Onboarding acceptance emails (sent when an application product activates)
 
-| WHMCS template ID | File                                  | Product                                                   |
-| ----------------- | ------------------------------------- | --------------------------------------------------------- |
-| **115**           | `tmpl_115.html` / `tmpl_115_new.html` | pid **16** — FFC Pre-501c3 Nonprofit / Charity Onboarding |
-| **116**           | `tmpl_116.html` / `tmpl_116_new.html` | pid **33** — FFC 501c3 Nonprofit / Charity Onboarding     |
+| WHMCS template ID | File                                                   | Product                                                   |
+| ----------------- | ------------------------------------------------------ | --------------------------------------------------------- |
+| **115**           | `tmpl_115_new.html` (old: `tmpl_115.html`, historical) | pid **16** — FFC Pre-501c3 Nonprofit / Charity Onboarding |
+| **116**           | `tmpl_116_new.html` (old: `tmpl_116.html`, historical) | pid **33** — FFC 501c3 Nonprofit / Charity Onboarding     |
 
 (Product ids match `config/whmcs-onboarding-products.json` at the repo root.)
 

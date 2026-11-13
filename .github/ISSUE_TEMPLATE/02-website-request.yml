@@ -32,7 +32,7 @@ body:
         - Do not enter `N/A` in any field.
         - We use automation + volunteers. Support is **best effort**.
         - Primary hosting is **GitHub Pages** (static site).
-        - We only support US charities; address is displayed and must map.
+        - We only support US charities; the footer always shows your city and state.
 
   - type: markdown
     attributes:
@@ -86,7 +86,7 @@ body:
         ## Key Limitations (FYI)
         - **Hosting**: GitHub Pages (static). No server-side apps or databases in this workflow.
         - **DNS**: This workflow can create the repo even if DNS is not yet controlled by FFC Cloudflare.
-        - **Address**: Displayed in the footer and used for map links. Must be a real US mailing address.
+        - **Footer location**: Your footer always shows your city and state, plus a public street address only if you give one below.
         - **Links**: Footer social links must use **https://**.
 
   - type: input
@@ -239,27 +239,31 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## Footer Mailing Address
-        This address is displayed in the footer.
+        ## Footer location
+        Your footer always shows your city and state. If you give a public street address on the
+        application, we add it too. Use an office, commercial mailbox or registered-agent address,
+        never a volunteer's home.
 
-        We require an address that maps to a real location.
-        At minimum, you must provide a real **City**, **State**, and **ZIP code**.
-        We only support US charities; **Country is hard-coded to United States**.
+        **City** and **State** are required. The street line and ZIP code are optional; leave them
+        blank to show City and State only. We only support US charities.
 
   - type: input
     id: address_line1
     attributes:
-      label: Footer Mailing Address Line 1
-      description: Street address or PO Box. Include suite/unit here if applicable.
-      placeholder: 4030 Wake Forrest Road Suite 349
+      label: Footer Street Address (optional)
+      description: |
+        Public street address or PO Box, one line. Include suite/unit here if applicable.
+        Use an office, commercial mailbox or registered-agent address, never a volunteer's home.
+        Leave blank to show City and State only.
+      placeholder: 4030 Wake Forest Road Suite 349
     validations:
-      required: true
+      required: false
 
   - type: input
     id: address_city
     attributes:
-      label: Footer Mailing City
-      description: City for the footer address.
+      label: Footer City
+      description: City to show in the footer.
       placeholder: Raleigh
     validations:
       required: true
@@ -267,20 +271,20 @@ body:
   - type: input
     id: address_state
     attributes:
-      label: Footer Mailing State/Province
-      description: State or province for the footer address.
-      placeholder: NC (2-letter)
+      label: Footer State
+      description: US state to show in the footer (2-letter code or full name).
+      placeholder: NC
     validations:
       required: true
 
   - type: input
     id: address_postal
     attributes:
-      label: Footer Mailing Postal Code
-      description: US ZIP code (e.g., 85001 or 85001-1234).
+      label: Footer ZIP Code (optional)
+      description: US ZIP code (e.g., 85001 or 85001-1234). Optional.
       placeholder: '27609'
     validations:
-      required: true
+      required: false
 
   - type: input
     id: ein

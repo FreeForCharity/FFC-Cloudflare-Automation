@@ -267,7 +267,11 @@ function Test-GuidestarUrl {
 }
 
 function Test-FacebookPageUrl {
-    # A facebook.com page URL (any facebook.com host).
+    # A PUBLIC facebook.com page URL (any facebook.com host except the Meta
+    # Business Suite / Ads Manager back office). An admin, editor or dashboard
+    # link is not a page anyone can open, so it is not a page URL here either:
+    # business.facebook.com/..., /<page>/manage/, /professional_dashboard/,
+    # /settings/, /edit/ (public-links rule, 2026-11-13; orders 875/876).
     [OutputType([bool])]
     param([string]$Value)
     $candidate = Get-HrefOrRaw -Value $Value
@@ -276,6 +280,8 @@ function Test-FacebookPageUrl {
     if (-not [Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$u)) { return $false }
     if (@('http', 'https') -notcontains $u.Scheme) { return $false }
     if (-not [regex]::IsMatch($u.Host, '(^|\.)facebook\.com$', 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($u.Host, '(^|\.)(business|adsmanager)\.facebook\.com$', 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($u.AbsolutePath, '/(wp-)?admin(/|$)|/(professional_)?dashboard(/|$)|/edit(/|$)|/manage(/|$)|/settings(/|$)', 'IgnoreCase')) { return $false }
     # A bare facebook.com root with no page path is not a page.
     return ($u.AbsolutePath.Trim('/').Length -gt 0)
 }

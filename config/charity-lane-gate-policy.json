@@ -121,8 +121,12 @@
             "No domain yet"
           ]
         },
-        "requester_github_username": { "pattern": "^[A-Za-z0-9-]{0,39}$" },
-        "technical_poc_github_username": { "pattern": "^[A-Za-z0-9-]{0,39}$" },
+        "requester_github_username": {
+          "pattern": "^([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})?$"
+        },
+        "technical_poc_github_username": {
+          "pattern": "^([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})?$"
+        },
         "social_links": { "maxlen": 1000 },
         "leadership_lines": { "maxlen": 1000 },
         "mission": { "maxlen": 2000 },

@@ -1,0 +1,195 @@
+name: '753. Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH]'
+run-name:
+  'Charity-Lane Gate Broker (${{ inputs.mode || github.event.schedule }}) (dry_run=${{
+  inputs.dry_run || false }})'
+
+# Runs scripts/charity_lane_gate.py inside GitHub Actions, so the charity-lane
+# pipeline and the weekly sites list no longer need an operator's PC or an
+# agent session that can call `pending_deployments` (cloud sessions get 403).
+# Approved by Clarke 2026-11-12 ("yes do all of this", project thread "Make
+# charity intake run autonomously"). Design and threat model:
+# docs/charity-intake-autonomy.md.
+#
+# What it may do is exactly config/charity-lane-gate-policy.json on `main`:
+#   * dispatch one rule's workflow with inputs validated against that rule,
+#     identify the single run it created, and approve only the environments the
+#     rule lists (live-site check first for Cloudflare writes);
+#   * never approve a run it did not dispatch;
+#   * post every approval and refusal to the ledger issue.
+#
+# Three entry points:
+#   * workflow_dispatch mode=run      one rule, inputs as a JSON object;
+#   * schedule / mode=advance         Gate 1/2: run 232 verdicts, accept each
+#                                     fraud-screened ACCEPT (max 3 per run);
+#   * schedule / mode=sequence        the weekly sites list: 601 then 703.
+#
+# The credential is a fine-grained PAT held in Key Vault, scoped to this repo
+# (Actions RW, Deployments RW, Issues RW, Contents R). The environment
+# `charity-lane-broker` has NO reviewer and a deployment branch policy of
+# `main` only, so the only code that can hold the PAT is reviewed code on main.
+# test_only_753_uses_the_broker_environment (CI) fails any other workflow that names
+# that environment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description:
+          'run = one rule; advance = Gate 1/2 accept loop; sequence = a named policy sequence'
+        required: true
+        type: choice
+        options:
+          - run
+          - advance
+          - sequence
+        default: run
+      rule:
+        description:
+          'mode=run: the policy rule id (e.g. 701-provision). mode=sequence: the sequence name (e.g.
+          weekly-sites-list).'
+        required: false
+        type: string
+        default: ''
+      inputs_json:
+        description:
+          'mode=run: the target workflow inputs as one JSON object, e.g.
+          {"domain":"example.org","dry_run":"false"}'
+        required: false
+        type: string
+        default: '{}'
+      dry_run:
+        description: 'advance / sequence only: plan and validate, approve nothing'
+        required: false
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+  schedule:
+    # Gate 1/2 advance, daily, inside US business hours so a charity's
+    # acceptance email lands while someone can answer it.
+    - cron: '20 14 * * *'
+    # Weekly sites list (replaces 703's own Monday cron, which parked at the
+    # github-prod gate until janitor 734 reaped it).
+    - cron: '10 8 * * 1'
+
+permissions:
+  contents: read
+  id-token: write
+
+# One broker at a time: two brokers dispatching the same workflow would each see
+# two candidate runs and refuse, which is safe but wasteful.
+concurrency:
+  group: charity-lane-gate-broker
+  cancel-in-progress: false
+
+jobs:
+  broker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: charity-lane-broker
+    steps:
+      - name: Refuse anything but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::753 runs only from main (got $REF). The policy it enforces is the one reviewed on main."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+
+      # Dedicated identity "FFC Application Intake", NOT the shared kv-writer:
+      # this environment has no reviewer, so its Azure identity holds Key Vault
+      # Secrets User on the broker PAT secret alone and can read nothing else.
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.INTAKE_FFC_AZURE_KV_CLIENT_ID }}
+          tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Load the broker PAT from Key Vault
+        id: load_pat
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az keyvault secret show --vault-name kv-ffc-admin-prod-cbm \
+            --name wr-all-ffc-charity-lane-broker-github-pat --query value -o tsv)"
+          if [ -z "$token" ]; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat came back empty from Key Vault."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          # Liveness, not just presence (#1102): probe GET /user, separating a
+          # rate limit from a revoked token. Status code only; the token never
+          # reaches output. A 200 proves authentication, not scope.
+          hdrs="$(mktemp)"
+          code="$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/user || true)"
+          # A 403 with rate-limit headers is a live, throttled token, not a dead one.
+          remaining="$(awk 'tolower($1) == "x-ratelimit-remaining:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          retry_after="$(awk 'tolower($1) == "retry-after:" { gsub(/\r/, "", $2); print $2 }' "$hdrs" | tail -n 1)"
+          rm -f "$hdrs"
+          if [ "$code" = "403" ] && { [ "$remaining" = "0" ] || [ -n "$retry_after" ]; }; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat returned 403 from GET /user with x-ratelimit-remaining='$remaining' retry-after='$retry_after' -- that is a rate limit, not a credential fault. The token is live: do not remint it, re-run once the window resets."
+            exit 1
+          fi
+          if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat returned $code from GET /user: the token is revoked, expired, or its access was removed -- it is not missing, and it is not throttled (the rate-limit headers were checked first). Key Vault returned a value. Remedy is a new version of the secret in kv-ffc-admin-prod-cbm, not a role change."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::wr-all-ffc-charity-lane-broker-github-pat could not be verified: GET /user answered $code (000 means the request never completed). Refusing to continue with an unverified credential rather than failing later inside a script."
+            exit 1
+          fi
+          d="GHTOKEN_EOF_${RANDOM}${RANDOM}"
+          { echo "GH_TOKEN<<${d}"; echo "$token"; echo "${d}"; } >> "$GITHUB_ENV"
+
+      - name: Broker
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          MODE: ${{ inputs.mode }}
+          RULE: ${{ inputs.rule }}
+          GATE_INPUTS_JSON: ${{ inputs.inputs_json }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          if [ "$EVENT" = "schedule" ]; then
+            case "$SCHEDULE" in
+              '20 14 * * *') MODE=advance; DRY_RUN=false ;;
+              '10 8 * * 1')  MODE=sequence; RULE=weekly-sites-list; DRY_RUN=false ;;
+              *) echo "::error::unknown schedule '$SCHEDULE'"; exit 1 ;;
+            esac
+          fi
+          flag=()
+          if [ "$DRY_RUN" = "true" ]; then flag=(--dry-run); fi
+          case "$MODE" in
+            run)
+              if [ -z "$RULE" ]; then echo "::error::mode=run needs a rule id"; exit 2; fi
+              python3 scripts/charity_lane_gate.py run --rule "$RULE" --inputs-env GATE_INPUTS_JSON
+              ;;
+            advance)
+              python3 scripts/charity_lane_gate.py advance "${flag[@]}"
+              ;;
+            sequence)
+              if [ -z "$RULE" ]; then echo "::error::mode=sequence needs a sequence name in 'rule'"; exit 2; fi
+              python3 scripts/charity_lane_gate.py sequence "$RULE" "${flag[@]}"
+              ;;
+            *) echo "::error::unknown mode '$MODE'"; exit 2 ;;
+          esac
+          rc=$?
+          case "$rc" in
+            0) echo "Broker finished." ;;
+            2) echo "::error::REFUSED by policy; nothing was dispatched." ;;
+            3) echo "::error::Dispatched but the run could not be identified; nothing approved. Do not re-dispatch." ;;
+            *) echo "::error::Broker error (exit $rc)." ;;
+          esac
+          exit "$rc"

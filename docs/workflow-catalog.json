@@ -1653,7 +1653,7 @@
         "cloudflare-prod-write",
         "github-prod"
       ],
-      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
+      "description": "Serialize runs PER DOMAIN: a second dispatch for the same domain queues behind the first instead of racing it. The group used to be global, so one charity's run waiting hours at a gate held every other charity, and GitHub keeps only one pending run per group, so a third dispatch cancelled the queued second. Issue-triggered runs key on the issue number (the domain is parsed later).",
       "safetyLevel": "Writes (gated)",
       "approvalEnv": "\u2705 cloudflare-prod-write / \u2705 github-prod",
       "guard": "`repo` chained behind `dns` approval; dispatch input `skip_dns` (default false) reports the zone as not controlled for the run, so `dns`/`dns_preview`/`verify` skip and the repo is built on the default Pages URL with no CNAME (for a domain already serving a live site)",
@@ -1686,7 +1686,6 @@
       ],
       "file": "703-sites-list-generate.yml",
       "triggers": [
-        "schedule",
         "workflow_dispatch"
       ],
       "environments": [
@@ -1695,7 +1694,7 @@
       "description": "Generates the merged FFC sites list from the WHMCS / Cloudflare / WPMUDEV exports plus the curated base list, runs per-domain health checks, and commits both sites-list/sites_list.csv and sites-list/sites_list.json.  This repo owns the export environments (whmcs-prod, cloudflare-prod-read, wpmudev-prod) and the GitHub PAT (CBM_TOKEN in github-prod) needed to dispatch the sibling export workflows, so generation lives here. Downstream consumers (e.g. ffcadmin.org) pull the published files from this repo.",
       "safetyLevel": "Writes (data PR only)",
       "approvalEnv": "\u2705 github-prod",
-      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon 08:00Z + dispatch; serialized concurrency group; loads `wr-all-cbm-ffc-copilot-mcp-github-pat` \u2192 **held on credential scope**, not on a taxonomy gap (#915)",
+      "guard": "dispatches read-only exports 201/108/601 (601 waits on its own wpmudev-prod gate); regenerates `sites-list/` CSV+JSON; opens a data PR (never pushes to `main`); weekly Mon via 753 (`weekly-sites-list`: 601 first, then 703 with `prime_wpmudev=false`) + dispatch; serialized concurrency group; loads `wr-all-cbm-ffc-copilot-mcp-github-pat` \u2192 **held on credential scope**, not on a taxonomy gap (#915)",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },
@@ -2425,6 +2424,27 @@
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 github-prod (apply job only)",
       "guard": "dry_run default true; at most 10 named `FFC-EX-*` repos per run; ungated `plan` job (job token, read-only: public, not archived, merge commits allowed, no `merge_queue` rule yet); `apply` creates only the `config/merge-queue-ruleset.json` ruleset (the one 44 FFC-EX repos already carry), never edits or deletes another ruleset or setting, and re-reads the branch rules to confirm",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
+      "number": 753,
+      "title": "Repo - Charity-Lane Gate Broker (policy-bound approvals)",
+      "apis": [
+        "GH"
+      ],
+      "file": "753-charity-lane-gate-broker.yml",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "charity-lane-broker"
+      ],
+      "description": "Runs scripts/charity_lane_gate.py inside GitHub Actions, so the charity-lane pipeline and the weekly sites list no longer need an operator's PC or an agent session that can call `pending_deployments` (cloud sessions get 403). Approved by Clarke 2026-11-12 (\"yes do all of this\", project thread \"Make charity intake run autonomously\"). Design and threat model: docs/charity-intake-autonomy.md.  What it may do is exactly config/charity-lane-gate-policy.json on `main`: * dispatch one rule's workflow with inputs validated against that rule, identify the single run it created, and approve only the environments the rule lists (live-site check first for Cloudflare writes); * never approve a run it did not dispatch; * post every approval and refusal to the ledger issue.  Three entry points: * workflow_dispatch mode=run      one rule, inputs as a JSON object; * schedule / mode=advance         Gate 1/2: run 232 verdicts, accept each fraud-screened ACCEPT (max 3 per run); * schedule / mode=sequence        the weekly sites list: 601 then 703.  The credential is a fine-grained PAT held in Key Vault, scoped to this repo (Actions RW, Deployments RW, Issues RW, Contents R). The environment `charity-lane-broker` has NO reviewer and a deployment branch policy of `main` only, so the only code that can hold the PAT is reviewed code on main. test_only_753_uses_the_broker_environment (CI) fails any other workflow that names that environment.",
+      "safetyLevel": "Writes (policy approvals)",
+      "approvalEnv": "charity-lane-broker (no reviewer, `main` only)",
+      "guard": "approves environment gates only for runs it dispatched itself, only for the environments one rule in `config/charity-lane-gate-policy.json` lists, after validating every input against that rule (closed set, enum/pattern/maxlen); Cloudflare writes need the live-site check; never 113, 120 with DNS, 211 cancel/fraud, 226 reconcile or multi-order, a paid domain order, or any m365-prod write; daily `advance` accepts at most `advance.max_accepts` (3) fraud-screened ACCEPT orders; weekly `sequence weekly-sites-list` runs 601 then 703; refuses any ref but `main`; inputs reach the script via env; every approval and refusal is posted to #1608; loads `wr-all-ffc-charity-lane-broker-github-pat` (fine-grained, this repo only); only 753 may name the environment (test_charity_lane_gate.py); approved by Clarke 2026-11-12",
       "category": "GitHub (Website + Repo)",
       "categoryCode": "GH"
     },

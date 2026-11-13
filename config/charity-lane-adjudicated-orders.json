@@ -32,6 +32,12 @@
       "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
     },
     {
+      "orderid": "861",
+      "adjudicatedOn": "2026-11-13",
+      "reason": "older form; ticket asks them to confirm their own EIN of record",
+      "decision": "Clarke, project thread 'Research pending charity applications', 2026-11-13: adjudicate the identified orders, accept, then send the gap ticket"
+    },
+    {
       "orderid": "863",
       "adjudicatedOn": "2026-11-13",
       "reason": "older form",

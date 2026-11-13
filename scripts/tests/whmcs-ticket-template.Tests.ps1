@@ -56,9 +56,30 @@ Describe 'config/whmcs-ticket-templates.json' {
     It 'keeps every client-visible body free of contact details (no PII)' {
         foreach ($p in $script:Config.templates.PSObject.Properties) {
             if ([bool]$p.Value.internal) { continue }
-            $body = [string]$p.Value.body
+            # FFC's own published urgent line (text or call Clarke Moyer) is the one
+            # number a client-visible body may carry; it is not an applicant's PII.
+            $body = ([string]$p.Value.body).Replace('520-222-8104', '')
             $body | Should -Not -Match '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -Because "$($p.Name) is client-visible"
             $body | Should -Not -Match '\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}' -Because "$($p.Name) is client-visible"
+        }
+    }
+
+    It 'sends applicants to the client area, never to an email reply or support@' {
+        # Email replies do not reach tickets yet (no mailbox import), and the
+        # support@ mailbox is not connected (SUPPORT wording, 2026-11-13).
+        foreach ($p in $script:Config.templates.PSObject.Properties) {
+            if ([bool]$p.Value.internal) { continue }
+            $body = [string]$p.Value.body
+            $body | Should -Not -Match 'support@' -Because "$($p.Name) is client-visible"
+            foreach ($m in [regex]::Matches($body, '(?i)reply to this ticket[^.]*')) {
+                $m.Value | Should -Match 'in your client area' -Because "$($p.Name): $($m.Value)"
+            }
+        }
+    }
+
+    It 'gives the urgent text-or-call line on the support acknowledgements' {
+        foreach ($name in @('ack_new_request', 'ack_break_fix')) {
+            [string]$script:Config.templates.$name.body | Should -Match 'Tickets are not watched around the clock, so if your site is down or something is urgent, text or call Clarke Moyer at 520-222-8104\.'
         }
     }
 

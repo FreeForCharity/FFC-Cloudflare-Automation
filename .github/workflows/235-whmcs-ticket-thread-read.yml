@@ -1,0 +1,111 @@
+name: '235. WHMCS - Ticket Thread Read (full text, encrypted) [WHMCS]'
+# Fixed text on purpose: run-name is rendered in the PUBLIC run list before any
+# input validation, so interpolating a free-text input would publish whatever
+# was pasted into it.
+run-name: 'WHMCS Ticket Thread Read (encrypted)'
+
+# Read-only. Reads the FULL thread of one or more WHMCS tickets -- every
+# message (GetTicket) plus FFC's internal notes (GetTicketNotes) -- so a reply
+# can be written from the actual conversation. 208 exports subjects only and
+# 233 never emits thread text, because this repo is PUBLIC.
+#
+# So the threads leave this job only as ciphertext: AES-256-GCM, with the
+# content key wrapped (RSA-OAEP-SHA256) to `recipient_public_key`, a key whose
+# private half only the requester holds. Make one with
+#   python3 scripts/whmcs-ticket-thread-decrypt.py keygen --out <private.pem>
+# and decrypt the artifact with the same script's `decrypt`. The log and job
+# summary carry ticket/message COUNTS and the key fingerprint only.
+#
+# GATED `whmcs-prod` lane with the READ-scoped credential. Full ticket TEXT is a
+# different category from the subjects/counts the ungated reads emit, so this one
+# waits for a human approval (Clarke, 2026-11-12). It keeps `scope: read` on the
+# READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity, as 219/221/232/233 do.
+# NO other workflow pairs `whmcs-prod` with the reader: every other whmcs-prod
+# job logs in as the writer. So this needs a federated credential
+# `repo:FreeForCharity/FFC-Cloudflare-Automation:environment:whmcs-prod` on
+# ffc-admin-kv-reader -- an Azure AD change, see docs/azure-oidc-federated-credentials.md.
+# Until it exists, azure/login fails AADSTS700213 AFTER the gate is approved.
+# Every input reaches the script through env:, never the script text.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_ids:
+        description:
+          'WHMCS internal ticket ids, comma separated (the `id` column of 208, not the 6-digit
+          client-facing number). Optional if client_id is set.'
+        required: false
+        type: string
+        default: ''
+      client_id:
+        description: 'Optional: WHMCS client id (digits) -- reads every ticket of that client'
+        required: false
+        type: string
+        default: ''
+      recipient_public_key:
+        description:
+          'base64 DER RSA public key (>= 3072 bits) from `whmcs-ticket-thread-decrypt.py keygen`.
+          NEVER a private key.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  thread_read:
+    runs-on: windows-latest
+    environment: whmcs-prod
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      # `scope: read` AND the READ_ALL_* identity must both be set: scope alone would
+      # still authenticate as ffc-admin-kv-writer.
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Read and encrypt ticket threads (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          TICKET_IDS: ${{ inputs.ticket_ids }}
+          CLIENT_ID: ${{ inputs.client_id }}
+          RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Fixed-text refusals only: a bad value is never echoed into this public log.
+          $clientId = 0
+          if (-not [string]::IsNullOrWhiteSpace($env:CLIENT_ID)) {
+            if ($env:CLIENT_ID -notmatch '^\d{1,9}$' -or -not [int]::TryParse($env:CLIENT_ID, [ref]$clientId) -or $clientId -lt 1) {
+              Write-Output '::error::client_id must be a positive integer (digits only).'
+              exit 1
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TICKET_IDS) -and $clientId -lt 1) {
+            Write-Output '::error::Give ticket_ids, client_id, or both.'
+            exit 1
+          }
+
+          # Fixed output path under RUNNER_TEMP; the upload step names the same
+          # literal path, so no input reaches either consumer.
+          $out = Join-Path $env:RUNNER_TEMP 'whmcs-ticket-threads\whmcs-ticket-threads.enc.json'
+          # In-process call (`&`, not `pwsh -File`): PowerShell's own binder, so an
+          # empty value can never shift the arguments (ledger L214).
+          & .\scripts\whmcs-ticket-thread-read.ps1 -ApiUrl $env:WHMCS_API_URL -TicketIds $env:TICKET_IDS -ClientId $clientId -RecipientPublicKey $env:RECIPIENT_PUBLIC_KEY -OutputFile $out
+          if ($LASTEXITCODE -ne 0) { throw "Ticket thread read failed (exit $LASTEXITCODE)." }
+
+      - name: Upload encrypted threads
+        uses: actions/upload-artifact@v7
+        with:
+          name: whmcs-ticket-threads-encrypted
+          path: ${{ runner.temp }}/whmcs-ticket-threads/whmcs-ticket-threads.enc.json
+          if-no-files-found: error
+          retention-days: 1

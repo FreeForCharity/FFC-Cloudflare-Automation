@@ -56,9 +56,30 @@ Describe 'config/whmcs-ticket-templates.json' {
     It 'keeps every client-visible body free of contact details (no PII)' {
         foreach ($p in $script:Config.templates.PSObject.Properties) {
             if ([bool]$p.Value.internal) { continue }
-            $body = [string]$p.Value.body
+            # FFC's own published urgent line (text or call Clarke Moyer) is the one
+            # number a client-visible body may carry; it is not an applicant's PII.
+            $body = ([string]$p.Value.body).Replace('520-222-8104', '')
             $body | Should -Not -Match '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -Because "$($p.Name) is client-visible"
             $body | Should -Not -Match '\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}' -Because "$($p.Name) is client-visible"
+        }
+    }
+
+    It 'sends applicants to the client area, never to an email reply or support@' {
+        # Email replies do not reach tickets yet (no mailbox import), and the
+        # support@ mailbox is not connected (SUPPORT wording, 2026-11-13).
+        foreach ($p in $script:Config.templates.PSObject.Properties) {
+            if ([bool]$p.Value.internal) { continue }
+            $body = [string]$p.Value.body
+            $body | Should -Not -Match 'support@' -Because "$($p.Name) is client-visible"
+            foreach ($m in [regex]::Matches($body, '(?i)reply to this ticket[^.]*')) {
+                $m.Value | Should -Match 'in your client area' -Because "$($p.Name): $($m.Value)"
+            }
+        }
+    }
+
+    It 'gives the urgent text-or-call line on the support acknowledgements' {
+        foreach ($name in @('ack_new_request', 'ack_break_fix')) {
+            [string]$script:Config.templates.$name.body | Should -Match 'Tickets are not watched around the clock, so if your site is down or something is urgent, text or call Clarke Moyer at 520-222-8104\.'
         }
     }
 
@@ -91,6 +112,35 @@ Describe 'Resolve-WhmcsOpenTicketTemplate (shipped config)' {
 
     It 'refuses onboarding_need_info without the gap list' {
         { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_need_info' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
+    }
+
+    It 'builds onboarding_accepted_gaps with the backlog apology, the older-form note and the text line' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage 'Preview: https://freeforcharity.github.io/FFC-EX-example.org/'
+        $r.Subject | Should -Be '[Application] Your application is accepted, and a few details are still needed'
+        $r.Message | Should -Match 'sorry for how long this has taken'
+        # Clarke 2026-11-13: the first paragraph asks whether they are still
+        # interested, and a reply counts as interest; proof is a URL, never a letter.
+        ($r.Message -split "`n`n")[0] | Should -Match 'still interested in receiving our services'
+        ($r.Message -split "`n`n")[0] | Should -Match 'Replying to this ticket in your client area'
+        $r.Message | Should -Match 'we do not need letters or documents'
+        $r.Message | Should -Match 'activate more charities every week'
+        $r.Message | Should -Match 'older version of our application form'
+        $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
+        $r.Message | Should -Match "`n`nPreview: https://freeforcharity\.github\.io/FFC-EX-example\.org/$"
+    }
+
+    It 'opens onboarding_still_interested with the apology and the interest question' {
+        $r = Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_still_interested' -ExtraMessage 'Missing: organization name'
+        $first = ($r.Message -split "`n`n")[0]
+        $first | Should -Match 'sorry for how long'
+        $first | Should -Match 'still interested in receiving Free For Charity services'
+        $r.Message | Should -Match 'we do not need letters or documents'
+        $r.Message | Should -Match 'text Clarke Moyer at 520-222-8104'
+        $r.Message | Should -Match 'within 30 days'
+    }
+
+    It 'refuses onboarding_accepted_gaps without the gap list' {
+        { Resolve-WhmcsOpenTicketTemplate -ConfigPath $script:ConfigPath -Name 'onboarding_accepted_gaps' -ExtraMessage '' } | Should -Throw '*requires extra_message*'
     }
 
     It 'refuses a reply-only template (no subject)' {

@@ -88,6 +88,9 @@ jobs:
           WHMCS_API_URL: ${{ inputs.api_url }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           FRAUD_ORDER_ID_FIELD: ${{ inputs.fraud_order_id_field }}
+          # Read-only: the completeness review confirms each maintainer's GitHub
+          # account exists (GET /users/<name>); the token only lifts the rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
 

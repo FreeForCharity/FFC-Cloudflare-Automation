@@ -155,6 +155,15 @@ Describe 'Field validators' {
         Test-FacebookPageUrl -Value 'https://facebook.com/'         | Should -BeFalse
     }
 
+    It 'Test-FacebookPageUrl refuses admin, editor and dashboard links' {
+        Test-FacebookPageUrl -Value 'https://www.facebook.com/profile.php?id=100064' | Should -BeTrue
+        Test-FacebookPageUrl -Value 'https://business.facebook.com/latest/home?asset_id=1' | Should -BeFalse
+        Test-FacebookPageUrl -Value 'https://adsmanager.facebook.com/adsmanager/manage' | Should -BeFalse
+        Test-FacebookPageUrl -Value 'https://www.facebook.com/somepage/manage/' | Should -BeFalse
+        Test-FacebookPageUrl -Value 'https://www.facebook.com/professional_dashboard/' | Should -BeFalse
+        Test-FacebookPageUrl -Value 'https://www.facebook.com/somepage/settings/' | Should -BeFalse
+    }
+
     It 'Test-TruthyTick recognizes affirmatives only' {
         Test-TruthyTick -Value 'Yes'      | Should -BeTrue
         Test-TruthyTick -Value 'I agree'  | Should -BeTrue

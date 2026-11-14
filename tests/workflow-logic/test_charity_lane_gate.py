@@ -68,6 +68,10 @@ def test_205_requires_allowlisted_template():
     # would be approved into a guaranteed-failed run; refuse it at validation.
     assert refused("205-templated", {"template": "onboarding_need_info", "client_id": "42"})
     assert refused("205-templated", {"template": "preview_ready", "client_id": "42"})
+    assert not refused("205-templated", {"template": "onboarding_accepted_gaps", "client_id": "42", "extra_message": "Preview: https://example.org/ Missing: organization LinkedIn page"})
+    assert refused("205-templated", {"template": "onboarding_accepted_gaps", "client_id": "42"})
+    assert not refused("205-templated", {"template": "onboarding_still_interested", "client_id": "42", "extra_message": "Missing: organization name"})
+    assert refused("205-templated", {"template": "onboarding_still_interested", "client_id": "42"})
     assert refused("205-templated", {"template": "need_info", "client_id": "42"})  # reply-only support template
     assert refused("205-templated", {"template": "international_techsoup", "client_id": "42"})
     assert refused("205-templated", {"subject": "hi", "message": "free text", "client_id": "42"})
@@ -92,6 +96,17 @@ def test_domain_pattern_rejects_injection():
 
 def test_701_template_allowlist():
     assert refused("701-provision", {"domain": "a.org", "template_repo": "someone/else"})
+
+
+def test_701_github_usernames_follow_githubs_own_rule():
+    # Same rule 701 applies (^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$):
+    # no leading, trailing or doubled hyphen. The policy used to allow all three,
+    # and 701 then dropped the login, creating a repo with no maintainer.
+    for key in ("technical_poc_github_username", "requester_github_username"):
+        for good in ("", "jane-doe", "J4ne", "a" * 39):
+            assert not refused("701-provision", {"domain": "a.org", key: good}), (key, good)
+        for bad in ("-jane", "jane-", "ja--ne", "a" * 40, "jane@example.org", "@jane"):
+            assert refused("701-provision", {"domain": "a.org", key: bad}), (key, bad)
 
 
 # --- run identification ------------------------------------------------------

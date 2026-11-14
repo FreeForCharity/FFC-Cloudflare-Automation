@@ -267,8 +267,10 @@ function Remove-SiteFieldEmbeddedContact {
 # Paths that are an account's own back office, never a public page, on any
 # host: an applicant pasting the URL they were looking at (LinkedIn
 # /company/x/admin/dashboard/, a Zeffy or Idealist admin screen) must not
-# reach a public footer (orders 875/876, 2026-11-12).
-$script:SiteFieldAdminPath = '(?i)/(wp-)?admin(/|$)|/dashboard(/|$)'
+# reach a public footer (orders 875/876, 2026-11-12). Editor and manager
+# screens count too (a Facebook page's /manage/ or /professional_dashboard/,
+# Instagram's /accounts/edit/, any /edit/ or /settings/ screen).
+$script:SiteFieldAdminPath = '(?i)/(wp-)?admin(/|$)|/(professional_)?dashboard(/|$)|/edit(/|$)|/manage(/|$)|/settings(/|$)'
 
 # Click-tracking query parameters, dropped rather than published
 # (Facebook share links carry ?mibextid=..., ads carry utm_*).

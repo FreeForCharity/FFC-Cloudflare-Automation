@@ -114,6 +114,13 @@ Describe 'Shipped allowlist (config/charity-lane-site-fields.json)' {
         { Read-SiteFieldsConfig -ConfigObject $c } | Should -Throw '*label pattern*'
     }
 
+    It 'waives the contact guard only for the maintainer GitHub label on a githubUser field' {
+        (Get-Field 'maintainerGithub').type | Should -Be 'githubUser'
+        $pat = '^technical contact github username \(your website maintainer\)$'
+        $c = Copy-ConfigWith { param($c) $c.fields += [pscustomobject]@{ key = 'sneakyContact'; productFields = @('tagline-2'); productLabelPatterns = @($pat); type = 'text' } }
+        { Read-SiteFieldsConfig -ConfigObject $c } | Should -Throw '*githubUser*'
+    }
+
     It 'validates the public street address (<v>)' -ForEach @(
         @{ v = '123 Main St, Suite 4'; ok = $true }
         @{ v = 'PO Box 77'; ok = $true }
@@ -383,12 +390,18 @@ Describe 'Live pid 33 display labels (GetClientsProducts returns the label, HTML
         $script:LiveResult.missing | Should -Contain 'leader2Name'   # no Secretary question in this fixture
     }
 
-    It 'leaves the contact-labelled fields missing (the deny guard still holds)' {
-        $script:LiveResult.missing | Should -Contain 'maintainerGithub'
+    It 'fills the maintainer GitHub username from its "Technical Contact" label' {
+        $script:LiveResult.fields.maintainerGithub | Should -Be 'techperson'
+    }
+
+    It 'does not let a non-githubUser field read the maintainer label' {
+        $f = [pscustomobject]@{ key = 'x'; type = 'text'; productFields = @(); productLabelPatterns = @('github username') }
+        $set = New-Set -ProductPid 33 -ServiceId 680 -Answers $script:LiveAnswers
+        (Get-SiteFieldProductCandidates -Field $f -Set $set -DeniedPatterns $script:Config.deniedNamePatterns).Count | Should -Be 0
     }
 
     It 'never prints a personal, board or contact value (<_>)' -ForEach @(
-        'janet.applicantson', '555-867-5309', 'linkedin.com/in/', 'tech.person', '555-000-1111', 'techperson',
+        'janet.applicantson', '555-867-5309', 'linkedin.com/in/', 'tech.person', '555-000-1111',
         'roberta.board', '217-555-0199', '555-222-3333'
     ) {
         $script:LiveJson | Should -Not -BeLike "*$_*"
@@ -524,6 +537,15 @@ Describe 'Validators' {
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
             @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }
+            # Editor / manager screens and back-office hosts (public-links rule, 2026-11-13).
+            @{ k = 'facebookUrl'; v = 'https://business.facebook.com/latest/home?asset_id=1'; why = 'url_host_not_public' }
+            @{ k = 'facebookUrl'; v = 'https://www.facebook.com/brightfuture/manage/'; why = 'url_path_is_admin' }
+            @{ k = 'facebookUrl'; v = 'https://www.facebook.com/professional_dashboard/'; why = 'url_path_is_admin' }
+            @{ k = 'youtubeUrl'; v = 'https://studio.youtube.com/channel/UC123/videos'; why = 'url_host_not_public' }
+            @{ k = 'instagramUrl'; v = 'https://www.instagram.com/accounts/edit/'; why = 'url_path_is_admin' }
+            @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/settings/'; why = 'url_path_is_admin' }
+            @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/donation-form/bff/edit'; why = 'url_path_is_admin' }
+            @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/dashboard'; why = 'url_path_is_admin' }
         ) {
             (Test-SiteFieldValue -Value $v -Field (Get-Field $k)).reason | Should -Be $why
         }

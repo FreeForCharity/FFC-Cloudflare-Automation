@@ -74,6 +74,9 @@ BeforeAll {
             urlProbes            = @{ $script:Fb = 200; $script:Li = 302 }
             otherClientsSameOrg  = 0
             domainOwnerClientIds = @()
+            # The pre-acceptance completeness review's codes (232's runner
+            # attaches them). @() = reviewed and complete.
+            completeness         = @()
         }
         if ($ProductPid -eq 33) {
             $merged = @{ 'What is the legal status of your organization?' = '501c(3) Nonprofit' }
@@ -222,6 +225,23 @@ Describe 'Get-CharityLaneVerdict - Gate 1 (pid 16 / 33)' {
         $r.readiness_score | Should -BeOfType [int]
         $r.fraud_check | Should -Be 'pending'
         $r.fraud_score | Should -BeNullOrEmpty
+    }
+
+    It 'never ACCEPTs a Gate 1 row whose completeness review did not run' {
+        $app = New-Gate1App
+        $app.PSObject.Properties.Remove('completeness')
+        $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+        $r.reason_codes | Should -Contain 'COMPLETENESS_NOT_CHECKED'
+        $r.verdict | Should -Be 'ESCALATE'
+    }
+
+    It 'carries the completeness codes into the verdict (NEED_INFO for a fixable gap, ESCALATE for an unopened link)' {
+        $r = Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ completeness = @('DONATION_URL_NOT_PUBLIC', 'OFFICERS_NOT_DISTINCT') }) -Context $script:Ctx
+        $r.reason_codes | Should -Contain 'DONATION_URL_NOT_PUBLIC'
+        $r.reason_codes | Should -Contain 'OFFICERS_NOT_DISTINCT'
+        $r.verdict | Should -Be 'NEED_INFO'
+        (Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ completeness = @('LINK_UNVERIFIED') }) -Context $script:Ctx).verdict | Should -Be 'ESCALATE'
+        (Get-CharityLaneVerdict -Application (New-Gate1App -Set @{ completeness = @('LINK_BOT_WALL') }) -Context $script:Ctx).verdict | Should -Be 'ACCEPT'
     }
 
     It 'ACCEPTs a complete pid 33 application whose EIN ProPublica lists as a 501(c)(3)' {

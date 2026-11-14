@@ -1559,6 +1559,80 @@ RULES = [
          "gh api repos/O/R/issues -f title=x --jq .number", SILENT),
     ]),
 
+    Rule("tee-into-head-truncates", '[#255]', WARN_TIER,
+         label='guard_bash / run-255 `tee FILE | head` truncation:', cases=[
+        # The exact pipeline run 255 issued, which reported a backlog of 79
+        # against a true 183 and published the 79.
+        ("the run-255 command warns",
+         "gh api --paginate \"repos/o/r/issues?labels=agentic-os\" --jq '.[]|.number' "
+         "| tee \"$SP/aos.txt\" | head -25", WARN),
+        ("bare head with no count warns", "cmd | tee out.txt | head", WARN),
+        ("head further downstream still warns",
+         "cmd | tee out.txt | grep -E foo | head -5", WARN),
+        ("an absolute head path warns", "cmd | tee out.txt | /usr/bin/head -3", WARN),
+        # An `a`-prefixed TARGET is not `tee -a`. Every fixture above writes
+        # `out.txt` or the QUOTED "$SP/aos.txt", so both spellings of the
+        # motivating incident looked covered while the unquoted one -- the
+        # likelier one to type -- was silently excluded as an append flag.
+        ("an unquoted a-prefixed target warns", "cmd | tee aos.txt | head -25", WARN),
+        ("an a-prefixed path warns", "cmd | tee alpha/run.log | head -3", WARN),
+        ("an option cluster before an a-target warns",
+         "cmd | tee -i aos.txt | head -5", WARN),
+        # `tee` is anchored to the COMMAND position, so these pin the half of
+        # that change which ADDS coverage: an unanchored pattern carried no
+        # path alternative, so a `tee` invoked by path was missed outright --
+        # a real truncation, silently unflagged.
+        ("an absolute tee path warns", "cmd | /usr/bin/tee out.txt | head -5", WARN),
+        # ...and these pin the prefixes that anchoring would otherwise cost.
+        ("sudo tee in the first stage warns", "sudo tee FILE | head -3", WARN),
+        ("sudo tee in a later stage warns", "cmd | sudo tee /etc/f | head -3", WARN),
+        ("an env-prefixed tee warns", "cmd | env FOO=1 tee f | head -3", WARN),
+        ("an stdbuf-prefixed tee warns", "cmd | stdbuf -o0 tee f | head -3", WARN),
+        # `|&` is a real pipe (bash shorthand for `2>&1 |`), so it truncates
+        # exactly like `|`. The splitter used to exclude it, which merged the
+        # stages either side into one: the middle case below was silent, and
+        # the first warned only because the unsplit stage still contained the
+        # WORD `tee`. These three pin `|&` as a pipe in its own right.
+        ("|& into tee then | head warns", "cmd |& tee out.txt | head -5", WARN),
+        ("| into tee then |& head warns", "cmd | tee out.txt |& head -5", WARN),
+        ("|& on both sides warns", "cmd |& tee out.txt |& head -5", WARN),
+        # Allows. `tail` reads its whole input, so it cannot cut tee short --
+        # this is the discriminator that proves the rule is about head, not
+        # about `tee` appearing in a pipeline at all.
+        ("tee into tail is silent", "cmd | tee out.txt | tail -25", SILENT),
+        ("tee with no later stage is silent", "cmd | tee out.txt", SILENT),
+        ("head BEFORE tee is silent -- nothing downstream to truncate",
+         "cmd | head -25 | tee out.txt", SILENT),
+        ("head alone is silent", "cmd | head -25", SILENT),
+        ("tee -a is deliberately excluded", "cmd | tee -a out.txt | head -5", SILENT),
+        ("tee --append is excluded too", "cmd | tee --append out.txt | head -5", SILENT),
+        ("a clustered -ai is excluded", "cmd | tee -ai out.txt | head -5", SILENT),
+        ("tee -a with an a-prefixed target is still excluded",
+         "cmd | tee -a aos.txt | head -5", SILENT),
+        ("a separate statement is not the same pipeline",
+         "cmd > out.txt; head -25 out.txt", SILENT),
+        ("the word tee inside a quoted string is silent",
+         "echo 'pipe tee into head' | head -2", SILENT),
+        # The UNQUOTED spelling of the case above. `_strip_quoted` neutralises
+        # only the quoted form, so the suite's single guard against this class
+        # was testing the one spelling that was never at risk; the unquoted
+        # word -- `tee` as an ARGUMENT to another command -- warned although
+        # no `tee` runs at all. These are the regression pins for the
+        # command-position anchor.
+        ("tee as an argument to grep is silent", "cmd | grep tee | head -5", SILENT),
+        ("the unquoted word tee is silent", "echo pipe tee into head | head -2", SILENT),
+        ("tee inside a filename is silent", "cat notes-tee.txt | head -5", SILENT),
+        ("|| is not a pipe", "cmd | tee out.txt || head -1 fallback.txt", SILENT),
+        # ...and `||` stays excluded now that `|&` splits: it is a control
+        # operator and pipes nothing, so this is the discriminator proving
+        # the `&?` did not simply loosen the splitter.
+        ("|| after an a-target is still not a pipe",
+         "cmd | tee aos.txt || head -1 fallback.txt", SILENT),
+        ("tee -a with |& is still excluded", "cmd | tee -a out.txt |& head -5", SILENT),
+        # The tier itself: a warned command must still be ALLOWED to run.
+        ("warned pipeline is still allowed", "cmd | tee out.txt | head -25", ALLOW),
+    ]),
+
     Rule("gh-api-classic-branch-protection", '[#1518]', WARN_TIER,
          label='guard_bash / #1518 classic branch-protection read:', cases=[
         ("the canonical call warns",

@@ -4,17 +4,17 @@
     "ack_new_request": {
       "internal": false,
       "subject_prefix": "[New Request]",
-      "body": "Thank you for contacting Free For Charity support. We have received your request and a volunteer will follow up shortly. If you have additional details (the affected domain, screenshots, or steps to reproduce), please reply to this ticket and they will be added to the record."
+      "body": "Thank you for contacting Free For Charity support. We have received your request. A volunteer replies by email, usually within 3 days. If you have additional details (the affected domain, screenshots, or steps to reproduce), please reply to this ticket in your client area at freeforcharity.org/hub and they will be added to the record. Tickets are not watched around the clock, so if your site is down or something is urgent, text or call Clarke Moyer at 520-222-8104."
     },
     "ack_break_fix": {
       "internal": false,
       "subject_prefix": "[Break/Fix]",
-      "body": "Thank you for reporting this issue with your site. We have logged it as a break/fix request and a volunteer is reviewing it. We will reply here with progress. If the site is fully down, please confirm the affected domain so we can prioritize."
+      "body": "Thank you for reporting this issue with your site. We have logged it as a break/fix request and a volunteer is reviewing it. We will reply here with progress, and a volunteer usually replies within 3 days. If the site is fully down, please confirm the affected domain so we can prioritize. Tickets are not watched around the clock, so if your site is down or something is urgent, text or call Clarke Moyer at 520-222-8104."
     },
     "need_info": {
       "internal": false,
       "subject_prefix": "[Info Needed]",
-      "body": "To continue with your request we need a little more information. Could you please reply with the affected domain, what you expected to happen, and what actually happened (including any error message)? Once we have that we can proceed."
+      "body": "To continue with your request we need a little more information. Could you please reply to this ticket in your client area at freeforcharity.org/hub with the affected domain, what you expected to happen, and what actually happened (including any error message)? Once we have that we can proceed."
     },
     "internal_note": {
       "internal": true,
@@ -36,14 +36,28 @@
       "subject_prefix": "[Website Preview]",
       "subject": "Your new website is ready to review",
       "extra_message_required": true,
-      "body": "Good news: a preview of your organization's new website is ready for you to review. The preview link is below. Please open it on both a phone and a computer and read through every section, including the contact details, links and team names. When you are done, reply to this ticket with any changes you would like (the more specific the better, for example which section and what it should say instead), or reply \"approved\" if everything looks right. The preview is on a temporary web address; your own domain is set up only after you approve. Thank you for the work your organization does."
+      "body": "Good news: a preview of your organization's new website is ready for you to review. The preview link is below. Please open it on both a phone and a computer and read through every section, including the contact details, links and team names. When you are done, reply to this ticket in your client area at freeforcharity.org/hub with any changes you would like (the more specific the better, for example which section and what it should say instead), or reply \"approved\" if everything looks right. The preview is on a temporary web address; your own domain is set up only after you approve. Thank you for the work your organization does."
     },
     "onboarding_need_info": {
       "internal": false,
       "subject_prefix": "[Application]",
       "subject": "A few details are needed to continue your application",
       "extra_message_required": true,
-      "body": "Thank you for applying to Free For Charity. Before we can approve your application and start your website, we need a few details that are missing or could not be confirmed. The specific items are listed below. Please update them in your application at https://freeforcharity.org/hub (or reply to this ticket with them), and we will continue automatically once they are in place. If anything here looks wrong, reply and a volunteer will take a look."
+      "body": "Thank you for applying to Free For Charity. Before we can approve your application and start your website, we need a few details that are missing or could not be confirmed. The specific items are listed below. Please update them in your application at https://freeforcharity.org/hub (or reply to this ticket in your client area with them), and we will continue automatically once they are in place. If anything here looks wrong, reply to this ticket in your client area and a volunteer will take a look."
+    },
+    "onboarding_accepted_gaps": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "Your application is accepted, and a few details are still needed",
+      "extra_message_required": true,
+      "body": "Thank you for applying to Free For Charity, and we are sorry for how long this has taken. We have a deep backlog of applications and are working to activate more charities every week. First, are you still interested in receiving our services? Replying to this ticket in your client area at https://freeforcharity.org/hub tells us you are, and keeps your website moving.\n\nYour application has been accepted. It was submitted on an older version of our application form, which did not ask for everything we now use to build your website, so a few details are still missing or could not be confirmed. The specific items are listed below, along with the link to your website preview if one is ready. Where we ask for proof, a public web link (URL) that shows it is all we need; we do not need letters or documents. Please update the items in your application at https://freeforcharity.org/hub or reply to this ticket in your client area with them. Tickets are not watched around the clock, so the best way to keep things moving is to text Clarke Moyer at 520-222-8104."
+    },
+    "onboarding_still_interested": {
+      "internal": false,
+      "subject_prefix": "[Application]",
+      "subject": "Are you still interested in Free For Charity services?",
+      "extra_message_required": true,
+      "body": "We're sorry for how long your application has waited in our backlog. Before we go further: are you still interested in receiving Free For Charity services? Just reply to this ticket in your client area at https://freeforcharity.org/hub to tell us. A reply is all we need to keep your application active.\n\nYou applied on an older version of our form, so a few things we now need are missing. They are listed below. Where we ask for proof, a public web link (URL) we can check is enough; we do not need letters or documents.\n\nThe fastest way to move forward is to text Clarke Moyer at 520-222-8104. We are working to activate more charities each week.\n\nIf we don't hear back within 30 days, we will close this application. You are welcome to apply again at any time."
     }
   }
 }

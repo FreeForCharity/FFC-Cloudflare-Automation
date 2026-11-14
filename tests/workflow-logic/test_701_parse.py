@@ -370,9 +370,178 @@ def test_manual_footer_address_accepts_a_city_state_location():
         r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_address": good}}))
         assert r["failed"] is None, (good, r)
         assert json.loads(r["outputs"]["footer_address_json"]) == good, (good, r)
-    for bad in ("12 Main St, Springfield", "Springfield", "PO Box 5, Lincoln, NE"):
+    for bad in ("12 Main St, Springfield", "Springfield", "Main Street, Lincoln, NE",
+                "Apt B, Springfield, Narnia", "a@example.org, Lincoln, NE"):
         r = run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_address": bad}}))
         assert r["failed"] and "ZIP" in r["failed"], (bad, r)
+
+
+def _manual_address(value: str) -> dict:
+    return run_parse(ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "footer_address": value}}))
+
+
+def test_manual_footer_address_accepts_a_street_line_then_city_state_without_a_zip():
+    # The footer address rule: the application's optional PUBLIC street address
+    # followed by its City & state answer. Neither carries a ZIP, and the
+    # onboarding routine passes them as "<street>, <City, ST>".
+    for good, want in (
+        ("123 Main St, Raleigh, NC", "123 Main St, Raleigh, NC"),
+        ("123 Main St, Suite 4, Raleigh, NC", "123 Main St, Suite 4, Raleigh, NC"),
+        ("PO Box 5, Lincoln, NE", "PO Box 5, Lincoln, NE"),
+        ("123 Main St\nRaleigh, NC", "123 Main St\nRaleigh, NC"),
+        ("123 Main St\nRaleigh, NC\nUnited States", "123 Main St\nRaleigh, NC"),
+        ("4030 Wake Forest Road Suite 349, Raleigh, North Carolina",
+         "4030 Wake Forest Road Suite 349, Raleigh, North Carolina"),
+    ):
+        r = _manual_address(good)
+        assert r["failed"] is None, (good, r)
+        assert json.loads(r["outputs"]["footer_address_json"]) == want, (good, r)
+
+
+def test_manual_footer_location_without_a_comma_is_normalised_like_234_accepts_it():
+    # 234's location type takes "Raleigh NC"; 701 used to refuse it. It is now
+    # accepted and normalised to the "City, ST" shape the footer shows.
+    for good, want in (
+        ("Raleigh NC", "Raleigh, NC"),
+        ("Wake Forest North Carolina", "Wake Forest, North Carolina"),
+        ("123 Main St, Raleigh NC", "123 Main St, Raleigh, NC"),
+        ("123 Main St, Apt B, Raleigh NC", "123 Main St, Apt B, Raleigh, NC"),
+    ):
+        r = _manual_address(good)
+        assert r["failed"] is None, (good, r)
+        assert json.loads(r["outputs"]["footer_address_json"]) == want, (good, r)
+
+
+def _issue_with(sections: list[str], admin_minimal: bool = False) -> dict:
+    labels = [{"name": "website-request"}]
+    if admin_minimal:
+        labels.append({"name": "admin-provision"})
+    payload = {
+        "action": "assigned",
+        "issue": {
+            "number": 9,
+            "title": "[WEBSITE REQUEST] example.org",
+            "body": "\n\n".join(["### Website Domain (no http://)\n\nexample.org", *sections]),
+            "labels": labels,
+            "user": {"login": "reporter"},
+        },
+    }
+    return run_parse(ctx("issues", payload))
+
+
+def test_issue_form_footer_location_needs_only_city_and_state():
+    r = _issue_with(
+        [
+            "### Footer Street Address (optional)\n\n_No response_",
+            "### Footer City\n\nRaleigh",
+            "### Footer State\n\nNC",
+            "### Footer ZIP Code (optional)\n\n_No response_",
+        ],
+        admin_minimal=True,
+    )
+    assert r["failed"] is None, r
+    assert json.loads(r["outputs"]["footer_address_json"]) == "Raleigh, NC", r
+
+    r = _issue_with(
+        [
+            "### Footer Street Address (optional)\n\n123 Main St",
+            "### Footer City\n\nRaleigh",
+            "### Footer State\n\nNC",
+        ],
+        admin_minimal=True,
+    )
+    assert r["failed"] is None, r
+    assert json.loads(r["outputs"]["footer_address_json"]) == "123 Main St\nRaleigh, NC", r
+
+
+FULL_REQUEST_SECTIONS = [
+    "### Organization Name (as displayed)\n\nExample Pantry",
+    "### Footer Contact Email\n\ninfo@example.org",
+    "### Footer Contact Phone\n\n(520) 555-0100",
+    "### EIN / Tax ID\n\n12-3456789",
+    "### IRS 501(c)(3) Status\n\nNot yet / pending (pre-501(c)(3))",
+    "### Technical POC GitHub Username\n\njane-doe",
+    "### Facebook URL\n\nhttps://www.facebook.com/examplepantry",
+    "### X / Twitter URL\n\nhttps://x.com/examplepantry",
+    "### LinkedIn URL\n\nhttps://www.linkedin.com/company/examplepantry",
+    "### GitHub URL\n\nhttps://github.com/examplepantry",
+    "### Board / Leadership\n\nAna Smith | President\nBo Lee | Secretary\nCy Diaz | Treasurer",
+]
+
+
+def test_issue_form_full_request_no_longer_requires_a_street_or_zip():
+    city_state = ["### Footer City\n\nRaleigh", "### Footer State\n\nNC"]
+    r = _issue_with([*FULL_REQUEST_SECTIONS, *city_state])
+    assert r["failed"] is None, r
+    assert json.loads(r["outputs"]["footer_address_json"]) == "Raleigh, NC", r
+
+    r = _issue_with([*FULL_REQUEST_SECTIONS, "### Footer City\n\nRaleigh"])
+    assert r["failed"] and "Footer State" in r["failed"], r
+
+    r = _issue_with([*FULL_REQUEST_SECTIONS, *city_state, "### Footer ZIP Code (optional)\n\n2760"])
+    assert r["failed"] and "ZIP" in r["failed"], r
+
+    r = _issue_with([*FULL_REQUEST_SECTIONS, *city_state, "### Footer Street Address (optional)\n\nMain Street"])
+    assert r["failed"] and "street line" in r["failed"], r
+
+    r = _issue_with([*FULL_REQUEST_SECTIONS, "### Footer City\n\nRaleigh", "### Footer State\n\nNarnia"])
+    assert r["failed"] and "US city and state" in r["failed"], r
+
+
+def test_issue_filed_on_the_old_mailing_address_form_still_parses():
+    r = _issue_with(
+        [
+            *FULL_REQUEST_SECTIONS,
+            "### Footer Mailing Address Line 1\n\n12 Main St",
+            "### Footer Mailing City\n\nSpringfield",
+            "### Footer Mailing State/Province\n\nIL",
+            "### Footer Mailing Postal Code\n\n62701",
+        ]
+    )
+    assert r["failed"] is None, r
+    assert json.loads(r["outputs"]["footer_address_json"]) == "12 Main St\nSpringfield, IL, 62701\nUnited States", r
+
+
+def test_footer_location_labels_match_the_issue_template():
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "701-website-provision.yml").read_text(
+        encoding="utf-8"
+    )
+    template = yaml.safe_load(
+        (root / ".github" / "ISSUE_TEMPLATE" / "02-website-request.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    inputs = {b["attributes"]["label"]: b for b in template["body"] if b.get("type") == "input"}
+    for label, required in (
+        ("Footer Street Address (optional)", False),
+        ("Footer City", True),
+        ("Footer State", True),
+        ("Footer ZIP Code (optional)", False),
+    ):
+        assert f"'{label}'" in workflow, f"parser does not read {label!r}"
+        assert label in inputs, f"issue template is missing the {label!r} field"
+        assert bool(inputs[label].get("validations", {}).get("required")) is required, label
+    text = (root / ".github" / "ISSUE_TEMPLATE" / "02-website-request.yml").read_text(encoding="utf-8")
+    assert "Wake Forrest" not in text
+    assert "Footer Mailing Address" not in text
+
+
+def test_an_invalid_maintainer_username_fails_instead_of_dropping_the_maintainer():
+    for bad in ("https://github.com/jane-doe", "jane@example.org", "-jane", "jane-", "ja--ne", "a" * 40):
+        r = run_parse(
+            ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "technical_poc_github_username": bad}})
+        )
+        assert r["failed"] and "is not a GitHub username" in r["failed"], (bad, r)
+        assert "maintainers_csv" not in r["outputs"], (bad, r)
+    for good in ("jane-doe", "@jane-doe", "J4ne", "a" * 39):
+        r = run_parse(
+            ctx("workflow_dispatch", {"inputs": {"domain": "example.org", "technical_poc_github_username": good}})
+        )
+        assert r["failed"] is None, (good, r)
+        assert good.lstrip("@") in r["outputs"]["maintainers_csv"].split(" "), (good, r)
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 

@@ -81,6 +81,54 @@ function Resolve-WhmcsAccessKey {
     return $null
 }
 
+function Get-WhmcsTransientLabel {
+    <#
+    .SYNOPSIS
+        Classify text as a transient WHMCS/transport failure and return a FIXED label.
+
+    .DESCRIPTION
+        SECURITY (#1753). Duplicated from scripts/whmcs-api-common.ps1, which this
+        script deliberately mirrors rather than dot-sources (it is self-contained, as
+        its copies of Resolve-WhmcsCredentials and friends already are). Keep the two
+        in step; scripts/tests/whmcs-api-transient-retry.Tests.ps1 asserts both files
+        are free of the pre-fix shapes.
+
+        The retry loop below logs its reason with Write-Warning and repeats it in the
+        terminal throw. This repository is public, so those Actions logs are
+        world-readable, and WHMCS responses carry ticket text, donor email addresses,
+        client names and billing figures. This function returns a label from a closed
+        set of literals and NEVER any part of $Text.
+
+        The status-code rules are shape-anchored. The original signature ended in
+        \b(429|502|503|504)\b, which - applied to a serialized JSON body - matched any
+        numeric field holding one of those values (a ticket id, a client id, an
+        invoice total), because ':' and '}' satisfy \b.
+
+        Returns $null when nothing matches; callers must treat that as permanent.
+    #>
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+
+    # %S% is substituted with .Replace, not -f: the pattern contains [^0-9]{0,40},
+    # and -f would read '{0,40}' as 'argument 0, width 40'.
+    $statusShape = 'status code[^0-9]{0,40}%S%\b|returned an error:\s*\(?%S%\)?|HTTP(?:/[0-9.]+)?\s+%S%\b'
+
+    $rules = [ordered]@{
+        'bot-protection challenge' = 'Imunify360|bot-protection'
+        'rate limited'             = 'too many requests|' + $statusShape.Replace('%S%', '429')
+        'gateway error'            = 'Bad Gateway|Gateway Time-?out|' + $statusShape.Replace('%S%', '(?:502|504)')
+        'service unavailable'      = 'Service Unavailable|temporarily unavailable|' + $statusShape.Replace('%S%', '503')
+        # Subsumes .NET's 'The operation has timed out'.
+        'request timed out'        = 'timed out'
+    }
+
+    foreach ($label in $rules.Keys) {
+        if ($Text -match $rules[$label]) { return $label }
+    }
+    return $null
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -112,7 +160,10 @@ function Invoke-WhmcsApi {
     # IPs. Retry that transient signature (and a few transient HTTP conditions) with exponential
     # backoff, matching scripts/whmcs-api-common.ps1. Genuine auth/permission errors do not match
     # and still fail fast.
-    $transientRe = 'Imunify360|bot-protection|too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
+    #
+    # SECURITY (#1753): $transientReason reaches a PUBLIC Actions log via the Write-Warning below
+    # and the terminal throw, so it only ever holds a fixed label from Get-WhmcsTransientLabel -
+    # never a response body, a field value or an exception string.
     $maxAttempts = 5
     $parsedMax = 0
     if ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]$parsedMax) -and $parsedMax -ge 1) {
@@ -131,8 +182,9 @@ function Invoke-WhmcsApi {
                     $resp = $raw | ConvertFrom-Json -ErrorAction Stop
                 }
                 catch {
-                    if ($raw -match $transientRe) {
-                        $transientReason = 'bot-protection challenge (non-JSON response)'
+                    $rawLabel = Get-WhmcsTransientLabel $raw
+                    if ($rawLabel) {
+                        $transientReason = "$rawLabel (non-JSON response)"
                     }
                     else {
                         $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
@@ -151,23 +203,25 @@ function Invoke-WhmcsApi {
                     if ($resp.message) { $msg = $resp.message }
                     elseif ($resp.errormessage) { $msg = $resp.errormessage }
                     elseif ($resp.error) { $msg = $resp.error }
-                    if ([string]::IsNullOrWhiteSpace($msg)) {
-                        $keys = @()
-                        try { $keys = @($resp.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
-                        $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '<no properties>' }
 
-                        $diag = $null
-                        try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
-                        if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
-                            $diag = $diag.Substring(0, 800) + '...'
-                        }
-
-                        $msg = "Unknown WHMCS API error. Response keys: $keysText" + $(if ($diag) { " Response: $diag" } else { '' })
-                    }
-                    if ($msg -match $transientRe) {
-                        $transientReason = $msg
+                    # Classify on the error MESSAGE only, never on a serialization of the
+                    # response. A body that parsed as JSON is not a bot-protection challenge -
+                    # those arrive as non-JSON and are handled above - so there is nothing
+                    # transient to find by serializing it, and serializing it is what leaked
+                    # it (#1753).
+                    $msgLabel = Get-WhmcsTransientLabel $msg
+                    if ($msgLabel) {
+                        $transientReason = $msgLabel
                     }
                     else {
+                        if ([string]::IsNullOrWhiteSpace($msg)) {
+                            # Key NAMES are schema and stay; the body does not. Field values are
+                            # donor and client data, and this string is logged (#1753).
+                            $keys = @()
+                            try { $keys = @($resp.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
+                            $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '(no properties)' }
+                            $msg = "Unknown WHMCS API error. Response keys: $keysText"
+                        }
                         throw "WHMCS API error: $msg"
                     }
                 }
@@ -178,9 +232,11 @@ function Invoke-WhmcsApi {
             }
         }
         catch {
-            $em = "$($_.Exception.Message)"
-            if ($em -match $transientRe) {
-                $transientReason = $em
+            # The label, not the exception text: a WebException message can carry a response
+            # fragment, and this reason is logged (#1753).
+            $emLabel = Get-WhmcsTransientLabel "$($_.Exception.Message)"
+            if ($emLabel) {
+                $transientReason = $emLabel
             }
             else {
                 throw

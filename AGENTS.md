@@ -279,15 +279,45 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
     FFC Cloudflare Automation Claude project. A thread session in that project which Clarke started
     or is working in is a **live session** under this rule: it may mark PRs ready and enqueue them
     under the merge condition above. A **scheduled task** is a scheduled worker wherever it runs,
-    the project included, so it never enqueues. Environment gates and the reserved lanes below stay
-    with @clarkemoyer. Read "the Conductor" elsewhere in this file as history: #719 and #1608 are no
-    longer written by a supervisor, and `747` reports `conductor-silence` as context only.
-  - **Reserved lanes stay with @clarkemoyer:** `.github/workflows/`, `.github/actions/`,
-    `.claude/hooks/` (#1027); any PR whose effect is a Tier 2 action in
-    `docs/human-intervention-map.md` (money, live-site DNS cutover, deletes or cancels, identity
-    tenants); and any PR that decides policy rather than implements it (privacy or legal wording,
-    for example). Leave those green and say so; do not enqueue them unless Clarke, in a live
-    session, says to.
+    the project included, so it never enqueues, except a data-only PR (Merge categories, 3).
+    Environment gates and the Clarke lanes below stay with @clarkemoyer. Read "the Conductor"
+    elsewhere in this file as history: #719 and #1608 are no longer written by a supervisor, and
+    `747` reports `conductor-silence` as context only.
+  - **Merge categories (Clarke, 2026-11-15): what Claude enqueues without asking, and what still
+    waits for him.** Clarke approved these so that basic merges do not wait on his yes. Every
+    category still needs the merge condition above on the current head. Check the lane first with
+    `python3 scripts/classify-merge-lane.py --pr <n>` (exit 0 = AGENT, 1 = CLARKE, 2 = could not
+    evaluate, which counts as CLARKE). It reads the PR's own file list and patches, and answers
+    CLARKE whenever it cannot see something.
+
+    **Claude enqueues these without asking** (a live session; category 3 also a scheduled run):
+    1. **Docs:** Markdown, `docs/`, `.claude/skills/`, `.claude/routines/`.
+    2. **Code:** `scripts/`, `tests/` and other code that changes no workflow file.
+    3. **Data:** PRs that change only automated data files (`sites-list/`, `data/`), such as the
+       sites list and dependabot refreshes. This is the one category a **scheduled run** may also
+       enqueue; the checker reports it as `scheduled run may enqueue: yes`.
+    4. **Workflow logic:** a `.github/workflows/` edit whose changed lines touch no permission,
+       environment, secret, variable, trigger, action reference or `continue-on-error`, in a
+       workflow that holds no write credential (no environment outside `*-read`, no secret but
+       `GITHUB_TOKEN`). The required-check and guard workflows (722, 723, 726, 727, 728) may only
+       gain lines.
+    5. **Additive hooks:** `.claude/hooks/` or `.githooks/` changes that delete no line. Adding a
+       guard cannot weaken one.
+
+    **Still waits for Clarke** (leave it green and say so; enqueue only when Clarke, in a live
+    session, says to): 6. Workflow changes to permissions, environments, secrets, variables,
+    triggers or action versions; any edit to a workflow that holds a write credential; new, deleted
+    or renamed workflows; `.github/actions/`; `.claude/settings*`; `.mcp.json`; any deleted line in
+    a hook. 7. Any PR whose effect is a Tier 2 action in `docs/human-intervention-map.md` (money,
+    live-site DNS cutover, deletes or cancels, identity tenants); the application quality gate
+    (`config/charity-lane-gate-policy.json`, `config/charity-lane-adjudicated-orders.json`,
+    `scripts/charity_lane_gate.py`, `scripts/charity-lane-completeness.ps1`); policy wording
+    (privacy, legal, text applicants see); and these merge rules, including the checker itself.
+
+    The checker cannot see the two judgment calls in 7 (a Tier 2 effect, policy wording), so an
+    AGENT verdict is necessary, not sufficient: read the diff for those before enqueueing. A PR
+    Clarke asked for in a thread carries his approval for its own changes, whatever its category.
+
   - **Marking ready from a cloud session** (the GitHub proxy has no GraphQL):
     `gh api -X POST repos/<owner>/<repo>/pulls/<n>/ccr/ready_for_review`. From a local session:
     `gh pr ready <n>`. Neither turns on auto-merge, and neither should be followed by anything that
@@ -809,11 +839,11 @@ enqueue, under the merge condition in **Who merges** (a live session may enqueue
 condition), so a sweep that finds green, resolved PRs still in draft has found worker work, not a
 Conductor wait.
 
-**A PR in a reserved lane is never worker-landing-work, whatever its state.** `.claude/hooks/` is
-reviewed and merged by @clarkemoyer alone (#1027), so a hooks PR cannot be landed by a worker even
-when it is green, resolved and 0 behind. Treat a lane check as the **first** filter, ahead of the
-four-part test: on 2026-09-15 all four open `agentic-os` PRs (#1297, #1310, #1312, #1313) were hooks
-PRs, which is a cap held entirely by work no worker could ever move.
+**A PR in a Clarke lane is never worker-landing-work, whatever its state.** Run
+`scripts/classify-merge-lane.py` as the **first** filter, ahead of the four-part test. Until
+2026-11-15 every `.claude/hooks/` PR was Clarke's alone (#1027); on 2026-09-15 all four open
+`agentic-os` PRs (#1297, #1310, #1312, #1313) were hooks PRs, a cap held entirely by work no worker
+could move. Hooks PRs that only add lines are now category 5 (see **Merge categories**).
 
 **"Escalate to a human" must name a destination a human actually reads.** #719 alone is not one —
 that is its own tracked defect (**#1269**: 739's silence alarm fired 4 times correctly into #719

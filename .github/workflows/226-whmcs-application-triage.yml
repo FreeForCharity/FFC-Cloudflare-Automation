@@ -73,6 +73,9 @@ jobs:
           WHMCS_API_URL: ${{ inputs.api_url }}
           TRIAGE_MODE: ${{ inputs.mode || 'report' }}
           TRIAGE_ORDERIDS: ${{ inputs.orderids }}
+          # approve mode runs the completeness review, which confirms the
+          # maintainer's GitHub account exists; the token only lifts the rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
 

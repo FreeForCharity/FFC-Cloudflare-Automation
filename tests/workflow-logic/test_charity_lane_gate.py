@@ -68,6 +68,10 @@ def test_205_requires_allowlisted_template():
     # would be approved into a guaranteed-failed run; refuse it at validation.
     assert refused("205-templated", {"template": "onboarding_need_info", "client_id": "42"})
     assert refused("205-templated", {"template": "preview_ready", "client_id": "42"})
+    assert not refused("205-templated", {"template": "onboarding_accepted_gaps", "client_id": "42", "extra_message": "Preview: https://example.org/ Missing: organization LinkedIn page"})
+    assert refused("205-templated", {"template": "onboarding_accepted_gaps", "client_id": "42"})
+    assert not refused("205-templated", {"template": "onboarding_still_interested", "client_id": "42", "extra_message": "Missing: organization name"})
+    assert refused("205-templated", {"template": "onboarding_still_interested", "client_id": "42"})
     assert refused("205-templated", {"template": "need_info", "client_id": "42"})  # reply-only support template
     assert refused("205-templated", {"template": "international_techsoup", "client_id": "42"})
     assert refused("205-templated", {"subject": "hi", "message": "free text", "client_id": "42"})

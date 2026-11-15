@@ -205,6 +205,11 @@ $script:LaneReasonCodes = [ordered]@{
     FRAUD_REVIEW                  = @{ severity = 'ESCALATE'; description = 'FraudLabs Pro verdict REVIEW.' }
 }
 
+# Gate 1 pre-acceptance completeness review (scripts/charity-lane-completeness.ps1,
+# loaded with the triage library): the full standard, with the plain-English
+# `applicant` line the onboarding_need_info ticket uses for each code.
+foreach ($k in $script:LaneCompletenessCodes.Keys) { $script:LaneReasonCodes[$k] = $script:LaneCompletenessCodes[$k] }
+
 # Every fraud code: Merge-LaneFraudOutcome replaces whichever of these a row
 # carries, so applying an outcome is idempotent.
 $script:LaneFraudCodes = @('FRAUD_CHECK_NOT_RUN', 'FRAUD_CHECK_FAILED', 'FRAUD_FLAGGED', 'FRAUD_REVIEW')
@@ -657,6 +662,13 @@ function Get-CharityLaneVerdict {
             }
         }
         $readiness = [int](Get-ApplicationScore -Application $scoreInput).ffcReadinessScore
+
+        # Pre-acceptance completeness review: the runner attaches its codes as
+        # `completeness`. No review => COMPLETENESS_NOT_CHECKED (ESCALATE), so a
+        # row can never ACCEPT without it.
+        $completeness = Get-LaneProp -Object $Application -Name 'completeness'
+        if ($null -eq $completeness) { $codes.Add('COMPLETENESS_NOT_CHECKED') }
+        else { foreach ($c in @($completeness)) { if ($c -and -not $codes.Contains([string]$c)) { $codes.Add([string]$c) } } }
     }
     else {
         $attestPresent = @($fields | Where-Object { [string]$_.name -match $script:LaneFieldPatterns.Gate2Attest }).Count -gt 0
@@ -1071,6 +1083,7 @@ try {
     Write-Host "Pending charity-lane items: $($pendingLane.Count)"
 
     $clientCache = @{}; $einCache = @{}; $urlCache = @{}; $probeCache = @{}; $einFieldIdCache = @{}
+    $reviewLinkCache = @{}; $reviewGithubCache = @{}
     $orgLookupCache = @{}; $domainLookupCache = @{}
     $rows = foreach ($svc in $pendingLane) {
         $clientId = [string]$svc.clientid
@@ -1089,9 +1102,21 @@ try {
             urlProbes            = @{}
             otherClientsSameOrg  = $null
             domainOwnerClientIds = $null
+            completeness         = $null
         }
 
         if ((Get-LaneGate -ProductPid $app.pid) -eq 1) {
+            # Pre-acceptance completeness review (links opened, GitHub account
+            # confirmed, officers, required website fields). Offline runs get
+            # the pure review with no lookups, which reports every link and
+            # account as unverified (ESCALATE): never a silent pass.
+            if ($skipNet) {
+                $app.completeness = @(Get-LaneCompletenessCodes -Fields $app.fields -ProductPid $app.pid)
+            }
+            else {
+                $app.completeness = @((Invoke-LaneCompletenessReview -Fields $app.fields -ProductPid $app.pid -LinkCache $reviewLinkCache -GithubCache $reviewGithubCache).Codes)
+            }
+
             $org = Get-LaneOrgName -CompanyName $app.companyName -ApplicantFullName $app.applicantFullName -Fields $app.fields
 
             if (-not $skipNet) {

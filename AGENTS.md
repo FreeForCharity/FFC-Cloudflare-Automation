@@ -314,6 +314,14 @@ gate (and the 601 prompt that follows), merge the data PR, then run and merge th
     `scripts/charity_lane_gate.py`, `scripts/charity-lane-completeness.ps1`); policy wording
     (privacy, legal, text applicants see); and these merge rules, including the checker itself.
 
+    **When Copilot does not review (Clarke, 2026-11-15).** For a PR in categories 1 to 5 only, a
+    Claude code review of the current head stands in for condition 2 when Copilot has not started
+    (no `copilot-pull-request-reviewer` check run) 60 minutes after the last push or re-request.
+    Record it as a PR comment that names the head SHA, says it stands in for Copilot, and lists the
+    findings; fix any real finding before enqueueing. A Copilot `failure` (a refusal) is not
+    covered: report it. Measured cause: Copilot posted no review on this repo after 2026-11-10, and
+    re-requests drew no check run.
+
     The checker cannot see the two judgment calls in 7 (a Tier 2 effect, policy wording), so an
     AGENT verdict is necessary, not sufficient: read the diff for those before enqueueing. A PR
     Clarke asked for in a thread carries his approval for its own changes, whatever its category.

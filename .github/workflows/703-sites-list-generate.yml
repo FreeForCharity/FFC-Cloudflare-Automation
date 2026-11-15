@@ -161,7 +161,10 @@ jobs:
           #
           # NOTE: both display names AND file names get renumbered periodically,
           # so keep these in sync with .github/workflows/ (last synced 2026-09-08).
-          for wf in 201-whmcs-export-domains.yml 108-export-summary.yml; do
+          # 232 (charity-lane verdicts) is read-only on the ungated
+          # `whmcs-prod-read` and `fraudlabspro-prod-read` lanes; its report
+          # feeds sites-list/pending_applications.{csv,json}.
+          for wf in 201-whmcs-export-domains.yml 108-export-summary.yml 232-whmcs-charity-lane-verdicts.yml; do
             echo "Dispatching $wf on main ..."
             gh workflow run "$wf" --repo "$REPO" --ref main
           done
@@ -235,6 +238,14 @@ jobs:
           download_latest         201-whmcs-export-domains.yml  whmcs_domains            tmp_data/whmcs_domains
           download_latest         108-export-summary.yml        domain_summary           tmp_data/domain_summary
           download_latest_success 601-wpmudev-export-sites.yml  wpmudev-domain-inventory tmp_data/wpmudev-domain-inventory
+          download_latest         232-whmcs-charity-lane-verdicts.yml charity-lane-verdicts tmp_data/charity-lane-verdicts
+
+          # FFC-EX repo names, so a pending application whose desired domain
+          # already has a repo links to it. Paginated: the org has >100 repos.
+          mkdir -p tmp_data
+          gh api --paginate "orgs/FreeForCharity/repos?per_page=100&type=all" --jq '.[].name' \
+            > tmp_data/ffc_repos.txt \
+            || { echo "::warning::Could not list FreeForCharity repos; pending applications will carry only curated repo links."; : > tmp_data/ffc_repos.txt; }
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -248,6 +259,22 @@ jobs:
       - name: Generate sites list (CSV + JSON)
         run: node scripts/update-sites-data.mjs
 
+      # Pending applications are not domain-keyed, so they live in their own
+      # files beside the sites list (Clarke, 2026-11-13: org name, score and
+      # gaps, public). No 232 report this run -> keep last week's files rather
+      # than publish an empty list.
+      - name: Generate pending applications (CSV + JSON)
+        run: |
+          set -euo pipefail
+          report=tmp_data/charity-lane-verdicts/charity-lane-verdicts.json
+          if [ ! -s "$report" ]; then
+            echo "::warning::No 232 charity-lane verdicts report this run; sites-list/pending_applications.* left unchanged."
+            exit 0
+          fi
+          node scripts/pending-applications-public.mjs --verdicts "$report" \
+            --curated sites-list/pending_applications_curated.csv \
+            --repos tmp_data/ffc_repos.txt --out-dir sites-list
+
       # main is protected (changes via PR + merge queue only), so publish the
       # regenerated data as a pull request rather than pushing directly. Using
       # CBM_TOKEN (a PAT) so the PR can trigger required checks.
@@ -259,6 +286,8 @@ jobs:
           add-paths: |
             sites-list/sites_list.csv
             sites-list/sites_list.json
+            sites-list/pending_applications.csv
+            sites-list/pending_applications.json
           commit-message: 'chore(sites-list): automated regeneration (CSV + JSON)'
           branch: data/sites-list-auto
           delete-branch: true

@@ -56,9 +56,8 @@ on:
       dry_run:
         description: 'Plan only: render every ticket, open none'
         required: false
-        type: choice
-        options: ['true', 'false']
-        default: 'true'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -119,7 +118,7 @@ jobs:
 
   send:
     needs: plan
-    if: inputs.dry_run == 'false'
+    if: inputs.dry_run == false
     runs-on: windows-latest
     environment: whmcs-prod
     permissions:

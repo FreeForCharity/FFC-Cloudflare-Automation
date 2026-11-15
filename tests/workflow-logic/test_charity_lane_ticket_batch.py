@@ -69,6 +69,13 @@ def test_build_validates_and_carries_client_and_preview():
     assert plan[0]["inputs"]["extra_message"].startswith("Preview: https://example.org/")
 
 
+def test_build_sends_for_real():
+    # 205 defaults to dry_run=true, so a batch that left it out would "send" nothing.
+    rows = [{"order_id": 753, "client_id": 432, "reason_codes": ["TAGLINE_MISSING"]}]
+    plan = batch.build(report(rows), "onboarding_accepted_gaps", ["753"], [], {}, {})
+    assert plan[0]["inputs"]["dry_run"] == "false"
+
+
 def test_build_refuses_a_missing_order_or_an_unscreened_report_or_a_bad_template():
     rows = [{"order_id": 1, "client_id": 2, "reason_codes": []}]
     for args in (

@@ -621,13 +621,104 @@ def test_an_unreadable_success_history_alerts_rather_than_suppressing():
     assert any("success history" in w for w in r["warnings"]), r
 
 
-def test_the_success_lookup_is_only_spent_on_the_suppression_path():
-    # It is one extra REST call against a 5,000/hr pool shared with every other
-    # agent, 48 sweeps a day. It must cost nothing on the ordinary paths.
+def test_the_success_lookup_is_never_spent_when_no_line_is_written():
+    # The budget contract, at the boundary that actually bounds the cost. It is one
+    # extra REST call against a 5,000/hr pool shared with every other agent, and the
+    # sweep runs 48x a day — so what matters is that the lookup rides on WRITING A
+    # LINE, which happens at most once per failing run, and never on a sweep that
+    # writes nothing.
+    #
+    # This test used to assert the lookup was spent ONLY on the declined-gate
+    # suppression path, which also forbade it on the path that needs it most: an
+    # ordinary failing job, whose appended line carried no duration at all. See
+    # `test_an_ordinary_job_failure_names_how_long_it_has_been_broken`. The
+    # 47-of-48 sweeps that re-observe an already-recorded run are the real budget
+    # exposure, and they are still free.
     green = _run("success", open_issues=[_alert_issue(7)])
     assert [c for c in green["listWorkflowRunsCalls"] if c["status"] == "success"] == [], green
-    failed = _run("failure", open_issues=[])  # a real job failure
-    assert [c for c in failed["listWorkflowRunsCalls"] if c["status"] == "success"] == [], failed
+    # Already recorded: `recordedRun` returns before the line is built, so the
+    # lookup must not be paid. This is the case that repeats 47 times a day.
+    recorded = _run("failure", open_issues=[_alert_issue(7, last_run=30116967112)])
+    assert recorded["comments"] == [], recorded
+    assert [
+        c for c in recorded["listWorkflowRunsCalls"] if c["status"] == "success"
+    ] == [], recorded
+
+
+def test_an_ordinary_job_failure_names_how_long_it_has_been_broken():
+    # The defect this set of tests was added for. A declined gate was told "it has
+    # not succeeded in N days"; a genuinely failing JOB got a bare conclusion, so
+    # the rolling issue accrued one near-identical line per day and a reader had to
+    # recover the extent from the runs list — which serves a stale slice and
+    # under-reports (L341, #1584).
+    #
+    # Measured cost of that omission: Conductor run 249 recorded ffcadmin's
+    # Security Audit as 4 consecutive scheduled reds against a true 11, and the red
+    # was an unpatched high-severity Next.js SSRF on a live public site. The number
+    # understated by 7 days was the age of a security exposure.
+    r = _run("failure", open_issues=[_alert_issue(7)], last_green=11)
+    assert r["threw"] is None, r
+    assert len(r["comments"]) == 1, r
+    body = r["comments"][0]["body"]
+    assert "11d ago" in body, body
+    assert "last successful scheduled run" in body, body
+
+
+def test_a_never_green_workflow_says_so_instead_of_printing_a_day_count():
+    # `greenAge` returns `{days: Infinity, why: …}` when nothing has ever succeeded
+    # on the scheduled lane. "Infinityd ago" would be worse than silence, so the
+    # `why` sentence has to win — and it is the honest one, since a workflow that
+    # has never passed on cron is a different finding from one that regressed.
+    r = _run("failure", open_issues=[_alert_issue(7)], last_green=None)
+    assert len(r["comments"]) == 1, r
+    body = r["comments"][0]["body"]
+    assert "never had a successful scheduled" in body, body
+    assert "Infinity" not in body, body
+
+
+def test_the_first_alert_body_also_carries_the_duration():
+    # The opening alert is the one most likely to be read by a human, and it took
+    # the same bare line as the appends. A workflow that has been red for weeks
+    # before anything watched it (the canary case, #1533 — nine unalerted
+    # failures) must say so in the issue that finally opens.
+    r = _run("failure", open_issues=[], last_green=9)
+    assert len(r["created"]) == 1, r
+    body = r["created"][0]["body"]
+    assert "9d ago" in body, body
+
+
+def test_the_declined_gate_note_is_not_doubled_by_an_age_note():
+    # The gate shape already states its own duration inside `gateNote`, in a
+    # sentence tuned to it ("needs an approval or a gate change, not a debug
+    # session"). Appending the generic age note too would print the same fact
+    # twice in one line and bury the remedy.
+    r = _run(
+        "cancelled", open_issues=[_alert_issue(7)], jobs=_declined_gate_jobs(), last_green=41
+    )
+    assert len(r["comments"]) == 1, r
+    body = r["comments"][0]["body"]
+    assert "approval gate nobody answered" in body, body
+    assert "last successful scheduled run" not in body, body
+
+
+def test_neither_failure_shape_pays_for_the_success_lookup_twice():
+    # Budget: each shape needs the success history for exactly one reason, so each
+    # must ask exactly once. The gate path asks to decide whether its suppression
+    # still holds and then states the duration itself; the ordinary path asks only
+    # to build the age note. Two calls in one sweep would be a refactor paying
+    # twice for one fact.
+    #
+    # This replaces a test that asserted the line builder REUSED the gate path's
+    # lookup. It could not fail: on the gate path `gateNote` is set, so the builder
+    # returns before `greenAge`, and the "reuse" was unreachable. Dropping the
+    # reuse flipped no test, which is how the dead code was found — a guard whose
+    # mutation changes nothing is measuring nothing.
+    gate = _run(
+        "cancelled", open_issues=[_alert_issue(7)], jobs=_declined_gate_jobs(), last_green=41
+    )
+    assert len([c for c in gate["listWorkflowRunsCalls"] if c["status"] == "success"]) == 1, gate
+    job = _run("failure", open_issues=[_alert_issue(7)], last_green=11)
+    assert len([c for c in job["listWorkflowRunsCalls"] if c["status"] == "success"]) == 1, job
 
 
 def test_the_success_lookup_is_scoped_like_the_poll():
@@ -714,7 +805,17 @@ def test_the_run_query_is_scoped_to_completed_default_branch_runs():
     # latest COMPLETED run on the default branch. Anything looser would feed it
     # in-progress runs (conclusion null) or another branch's red.
     r = _run("failure", open_issues=[])
-    calls = {c["workflow_id"]: c for c in r["listWorkflowRunsCalls"]}
+    # Filter to the POLL's calls rather than keying a dict by `workflow_id`: the
+    # `success`-status probe behind the age note queries the SAME workflow_id, so a
+    # dict collapses two different questions onto one entry and this loop would
+    # then assert the poll's contract against the probe's query. The probe has its
+    # own test (`test_the_success_lookup_is_scoped_like_the_poll`), which already
+    # filters this way.
+    calls = {
+        c["workflow_id"]: c
+        for c in r["listWorkflowRunsCalls"]
+        if c["status"] == "completed"
+    }
     assert calls, r
     for call in calls.values():
         assert call["branch"] == "main", call

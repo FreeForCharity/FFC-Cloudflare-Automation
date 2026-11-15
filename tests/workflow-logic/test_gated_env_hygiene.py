@@ -107,6 +107,12 @@ DISPATCH_ONLY_GATED_READS = {
     ("303-m365-domain-and-dkim.yml", "m365"),
     ("306-discover-uncaptured-comms.yml", "discover"),
     ("601-wpmudev-export-sites.yml", "export"),
+    # A decision, not debt: 235 reads full WHMCS ticket TEXT (clients' own
+    # words), and @clarkemoyer chose on 2026-11-12 (#1728, commit 5ed3f77) that
+    # each read waits for a human approval on whmcs-prod, keeping `scope: read`
+    # on the READ_ALL identity. An ungated lane already exists for this category
+    # (whmcs-prod-read); 235 is kept off it on purpose. Dispatch-only.
+    ("235-whmcs-ticket-thread-read.yml", "thread_read"),
 }
 
 

@@ -1,0 +1,176 @@
+name: '236. WHMCS - Open Charity Tickets (batch, one approval) [WHMCS]'
+run-name: 'WHMCS Ticket Batch ${{ inputs.template }} (dry_run=${{ inputs.dry_run }})'
+
+# Opens one templated WHMCS ticket per listed order, in ONE run behind ONE
+# whmcs-prod approval (Clarke, 2026-11-15: "approve multiple tickets in one time
+# versus chaining them one after another").
+#
+# Why not many 205 runs: 205 serializes on one concurrency group, so each run
+# reaches the gate only after the previous one finishes (one approval each), and
+# GitHub cancels every pending run in a group but the newest, so a burst of 205
+# dispatches silently loses tickets.
+#
+# `plan` (no environment, no WHMCS credential) renders every ticket from the
+# fraud-screened `charity-lane-verdicts` artifact of 232 run `verdicts_run`, with
+# scripts/charity_lane_ticket_batch.py (the same wording and gap rules as the
+# 205 batch sender), and writes all of them to the run summary, so the approver
+# reads the exact text before approving. `send` (whmcs-prod) opens them one by
+# one from that plan and records each ticket number. One failure does not stop
+# the rest; the job fails if any ticket failed. Defaults to dry run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      verdicts_run:
+        description: '232 run id whose charity-lane-verdicts artifact supplies the gap codes'
+        required: true
+        type: string
+      template:
+        description: 'Ticket template (the 205-templated allowlist)'
+        required: true
+        type: choice
+        options:
+          - onboarding_still_interested
+          - onboarding_accepted_gaps
+          - onboarding_need_info
+          - preview_ready
+      orders:
+        description: 'Comma-separated order ids (at most 50), sent in this order'
+        required: true
+        type: string
+      head:
+        description: 'Optional first line for every ticket in this batch (e.g. a final notice)'
+        required: false
+        type: string
+        default: ''
+      specials_json:
+        description: 'Optional {"ORDER": "extra first item"} JSON object'
+        required: false
+        type: string
+        default: ''
+      previews_json:
+        description: 'Optional {"ORDER": "https://preview-url/"} JSON object'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Plan only: render every ticket, open none'
+        required: false
+        type: choice
+        options: ['true', 'false']
+        default: 'true'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 236-whmcs-ticket-batch
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Download the verdicts artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: charity-lane-verdicts
+          run-id: ${{ inputs.verdicts_run }}
+          github-token: ${{ github.token }}
+          path: verdicts
+
+      - name: Render every ticket
+        id: plan
+        env:
+          VERDICTS_RUN: ${{ inputs.verdicts_run }}
+          TEMPLATE: ${{ inputs.template }}
+          ORDERS: ${{ inputs.orders }}
+          HEAD_LINE: ${{ inputs.head }}
+          SPECIALS_JSON: ${{ inputs.specials_json }}
+          PREVIEWS_JSON: ${{ inputs.previews_json }}
+        run: |
+          set -euo pipefail
+          mapfile -t found < <(find verdicts -name '*.json' -type f)
+          if [ "${#found[@]}" -ne 1 ]; then
+            echo "::error::expected one .json in the charity-lane-verdicts artifact of run $VERDICTS_RUN, found ${#found[@]}"
+            exit 1
+          fi
+          args=(plan --verdicts-run "$VERDICTS_RUN" --template "$TEMPLATE" --orders "$ORDERS"
+                --report "${found[0]}" --specials-json "$SPECIALS_JSON" --previews-json "$PREVIEWS_JSON"
+                --plan-out "$RUNNER_TEMP/ticket-plan.json" --summary "$GITHUB_STEP_SUMMARY")
+          if [ -n "$HEAD_LINE" ]; then args+=(--head "$HEAD_LINE"); fi
+          python3 scripts/charity_lane_ticket_batch.py "${args[@]}"
+          count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$RUNNER_TEMP/ticket-plan.json")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/ticket-plan.json" ticket-plan.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ticket-plan
+          path: ticket-plan.json
+          retention-days: 14
+
+  send:
+    needs: plan
+    if: inputs.dry_run == 'false'
+    runs-on: windows-latest
+    environment: whmcs-prod
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ticket-plan
+          path: plan
+
+      # WHMCS credential from Key Vault at runtime via OIDC (single source of truth).
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          azure-client-id: ${{ vars.WR_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.WR_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Open every ticket
+        shell: pwsh
+        env:
+          WHMCS_API_URL: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          EXPECTED_COUNT: ${{ needs.plan.outputs.count }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/whmcs-ticket-template.ps1
+          $plan = @(Get-Content -LiteralPath plan/ticket-plan.json -Raw -Encoding utf8 | ConvertFrom-Json)
+          if ($plan.Count -ne [int]$env:EXPECTED_COUNT) {
+            Write-Output "::error::plan holds $($plan.Count) tickets but the plan job rendered $($env:EXPECTED_COUNT); refusing to send a different set than the one approved."
+            exit 1
+          }
+          $rows = [System.Collections.Generic.List[string]]::new()
+          $failed = 0
+          foreach ($p in $plan) {
+            $order = [string]$p.order; $in = $p.inputs
+            try {
+              if ([string]$in.client_id -notmatch '^[0-9]{1,9}$') { throw "client id '$($in.client_id)' is not numeric" }
+              $t = Resolve-WhmcsOpenTicketTemplate -ConfigPath ./config/whmcs-ticket-templates.json -Name ([string]$in.template) -ExtraMessage ([string]$in.extra_message)
+              $out = & pwsh -NoProfile -File .\scripts\whmcs-ticket-open.ps1 -DeptId '1' -Subject $t.Subject -Message $t.Message -Priority 'Medium' -ClientId ([string]$in.client_id)
+              if ($LASTEXITCODE -ne 0) { throw "whmcs-ticket-open.ps1 exited $LASTEXITCODE" }
+              $res = ($out | Out-String) | ConvertFrom-Json
+              if (-not $res.tid) { throw 'WHMCS returned no ticket number' }
+              Write-Output "SENT order ${order}: ticket #$($res.tid)"
+              $rows.Add("| $order | $($in.client_id) | #$($res.tid) | sent |")
+            } catch {
+              $failed++
+              Write-Output "::error::FAILED order ${order}: $($_.Exception.Message)"
+              $rows.Add("| $order | $($in.client_id) | | FAILED |")
+            }
+          }
+          $md = @("### Tickets opened", '', '| order | client | ticket | result |', '| --- | --- | --- | --- |') + $rows
+          $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($failed -gt 0) { Write-Output "::error::$failed of $($plan.Count) tickets failed."; exit 1 }

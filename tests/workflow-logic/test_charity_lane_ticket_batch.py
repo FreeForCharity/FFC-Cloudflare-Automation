@@ -90,6 +90,45 @@ def test_build_refuses_a_missing_order_or_an_unscreened_report_or_a_bad_template
         raise AssertionError(f"should refuse: {args[1]} {args[2]}")
 
 
+class _Args:
+    def __init__(self, head=(), verdicts_run=43428530582, template="onboarding_still_interested"):
+        self.head, self.verdicts_run, self.template = list(head), verdicts_run, template
+
+
+def test_batch_inputs_validate_against_rule_236():
+    inputs = batch.batch_dispatch_inputs(_Args(head=["Final notice."]), ["688", "679"], {"688": ["a URL"]}, {})
+    assert inputs["orders"] == "688,679" and inputs["dry_run"] == "false"
+    assert batch.json.loads(inputs["specials_json"]) == {"688": ["a URL"]}
+    assert "previews_json" not in inputs
+
+
+def test_batch_refuses_over_fifty_orders_or_two_heads():
+    for args, orders in ((_Args(), [str(i) for i in range(1, 52)]), (_Args(head=["a", "b"]), ["1"])):
+        try:
+            batch.batch_dispatch_inputs(args, orders, {}, {})
+        except batch.BatchError:
+            continue
+        raise AssertionError("should refuse")
+
+
+def test_json_specials_round_trip_and_refuse_junk():
+    assert batch.from_json('{"800": "x", "861": ["y", "z"]}', "s") == {"800": ["x"], "861": ["y", "z"]}
+    assert batch.from_json("", "s") == {}
+    for raw in ("[1]", '{"abc": "x"}', '{"1": ""}', "{nope"):
+        try:
+            batch.from_json(raw, "s")
+        except batch.BatchError:
+            continue
+        raise AssertionError(f"should refuse {raw!r}")
+
+
+def test_summary_shows_every_ticket_text():
+    rows = [{"order_id": 1, "client_id": 2, "reason_codes": ["TAGLINE_MISSING"]}, {"order_id": 3, "client_id": 4, "reason_codes": ["MISSION_MISSING"]}]
+    plan = batch.build(report(rows), "onboarding_still_interested", ["1", "3"], [], {}, {})
+    md = batch.summary_markdown(plan)
+    assert "2 ticket(s)" in md and "tagline" in md and "mission statement" in md
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

@@ -1262,6 +1262,26 @@
       "categoryCode": "WHMCS"
     },
     {
+      "number": 236,
+      "title": "WHMCS - Open Charity Tickets (batch, one approval)",
+      "apis": [
+        "WHMCS"
+      ],
+      "file": "236-whmcs-ticket-batch.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "whmcs-prod"
+      ],
+      "description": "Opens one templated WHMCS ticket per listed order, in ONE run behind ONE whmcs-prod approval (Clarke, 2026-11-15: \"approve multiple tickets in one time versus chaining them one after another\").  Why not many 205 runs: 205 serializes on one concurrency group, so each run reaches the gate only after the previous one finishes (one approval each), and GitHub cancels every pending run in a group but the newest, so a burst of 205 dispatches silently loses tickets.  `plan` (no environment, no WHMCS credential) renders every ticket from the fraud-screened `charity-lane-verdicts` artifact of 232 run `verdicts_run`, with scripts/charity_lane_ticket_batch.py (the same wording and gap rules as the 205 batch sender), and writes all of them to the run summary, so the approver reads the exact text before approving. `send` (whmcs-prod) opens them one by one from that plan and records each ticket number. One failure does not stop the rest; the job fails if any ticket failed. Defaults to dry run.",
+      "safetyLevel": "Writes (gated)",
+      "approvalEnv": "\u2705 whmcs-prod",
+      "guard": "`dry_run` (default true); one run opens one allowlisted-template ticket per listed order (at most 50), rendered from a fraud-screened 232 `charity-lane-verdicts` artifact by `scripts/charity_lane_ticket_batch.py`; the ungated `plan` job writes every ticket to the run summary before the single approval, `send` opens them and records each ticket number",
+      "category": "WHMCS",
+      "categoryCode": "WHMCS"
+    },
+    {
       "number": 301,
       "title": "M365 (FFC Tenant) - Domain Preflight (Read-only)",
       "apis": [

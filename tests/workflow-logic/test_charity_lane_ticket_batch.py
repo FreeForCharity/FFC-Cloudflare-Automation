@@ -13,6 +13,7 @@ import importlib.util
 import pathlib
 import re
 import sys
+import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -88,6 +89,95 @@ def test_build_refuses_a_missing_order_or_an_unscreened_report_or_a_bad_template
         except (batch.BatchError, batch.gate.PolicyError):
             continue
         raise AssertionError(f"should refuse: {args[1]} {args[2]}")
+
+
+class _Args:
+    def __init__(self, head=(), verdicts_run=43428530582, template="onboarding_still_interested"):
+        self.head, self.verdicts_run, self.template = list(head), verdicts_run, template
+
+
+def test_batch_inputs_validate_against_rule_236():
+    inputs = batch.batch_dispatch_inputs(_Args(head=["Final notice."]), ["688", "679"], {"688": ["a URL"]}, {})
+    assert inputs["orders"] == "688,679" and inputs["dry_run"] == "false"
+    assert batch.json.loads(inputs["specials_json"]) == {"688": ["a URL"]}
+    assert "previews_json" not in inputs
+
+
+def test_batch_refuses_over_fifty_orders_or_two_heads():
+    for args, orders in ((_Args(), [str(i) for i in range(1, 52)]), (_Args(head=["a", "b"]), ["1"])):
+        try:
+            batch.batch_dispatch_inputs(args, orders, {}, {})
+        except batch.BatchError:
+            continue
+        raise AssertionError("should refuse")
+
+
+def test_json_specials_round_trip_and_refuse_junk():
+    assert batch.from_json('{"800": "x", "861": ["y", "z"]}', "s") == {"800": ["x"], "861": ["y", "z"]}
+    assert batch.from_json("", "s") == {}
+    for raw in ("[1]", '{"abc": "x"}', '{"1": ""}', "{nope"):
+        try:
+            batch.from_json(raw, "s")
+        except batch.BatchError:
+            continue
+        raise AssertionError(f"should refuse {raw!r}")
+
+
+def test_summary_shows_every_ticket_text():
+    rows = [{"order_id": 1, "client_id": 2, "reason_codes": ["TAGLINE_MISSING"]}, {"order_id": 3, "client_id": 4, "reason_codes": ["MISSION_MISSING"]}]
+    plan = batch.build(report(rows), "onboarding_still_interested", ["1", "3"], [], {}, {})
+    md = batch.summary_markdown(plan)
+    assert "2 ticket(s)" in md and "tagline" in md and "mission statement" in md
+
+
+def _plan(n_orders, tmp):
+    """Run the `plan` action exactly the way workflow 236's plan job runs it."""
+    rows = [{"order_id": 1000 + i, "client_id": 2000 + i, "reason_codes": ["TAGLINE_MISSING"]} for i in range(n_orders)]
+    src = pathlib.Path(tmp, "verdicts.json")
+    src.write_text(batch.json.dumps(report(rows)), encoding="utf-8")
+    out = pathlib.Path(tmp, "plan.json")
+    rc = batch.main(
+        [
+            "plan",
+            "--verdicts-run",
+            "43428530582",
+            "--template",
+            "onboarding_still_interested",
+            "--orders",
+            ",".join(str(r["order_id"]) for r in rows),
+            "--report",
+            str(src),
+            "--plan-out",
+            str(out),
+        ]
+    )
+    rendered = len(batch.json.loads(out.read_text(encoding="utf-8"))) if out.exists() else 0
+    return rc, rendered
+
+
+def test_plan_binds_the_fifty_order_cap_that_236_documents():
+    # 236's plan job runs `plan`, and only `batch` passed through rule 236-batch, so the
+    # documented ceiling did not bind a direct workflow_dispatch: 200 orders rendered 200
+    # tickets, and send's `plan.Count -ne EXPECTED_COUNT` compares the plan with itself.
+    with tempfile.TemporaryDirectory() as d:
+        assert _plan(batch.MAX_BATCH, d) == (0, batch.MAX_BATCH)
+    with tempfile.TemporaryDirectory() as d:
+        rc, rendered = _plan(batch.MAX_BATCH + 1, d)
+        assert rc == 2 and rendered == 0, (rc, rendered)
+
+
+def test_rule_236_policy_itself_refuses_more_than_fifty_orders():
+    # The behavioural test above passes on the Python cap alone, so pin the policy's own
+    # order pattern too: widening it to 98 is otherwise invisible to every test.
+    rule = batch.gate.find_rule(batch.gate.load_policy(), batch.BATCH_RULE)
+    base = {"verdicts_run": "43428530582", "template": "onboarding_still_interested", "dry_run": "false"}
+    orders = lambda n: ",".join(str(1000 + i) for i in range(n))  # noqa: E731
+    batch.gate.validate_inputs(rule, dict(base, orders=orders(batch.MAX_BATCH)))
+    try:
+        batch.gate.validate_inputs(rule, dict(base, orders=orders(batch.MAX_BATCH + 1)))
+    except (batch.BatchError, batch.gate.PolicyError):
+        return
+    raise AssertionError(f"rule {batch.BATCH_RULE} should refuse {batch.MAX_BATCH + 1} orders")
 
 
 def main():

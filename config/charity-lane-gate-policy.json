@@ -17,7 +17,7 @@
   },
   "never": [
     "211 cancel or fraud",
-    "226 reconcile or reconcile-report, or approve with more than one order id",
+    "226 reconcile or reconcile-report, or approve with more than ten order ids",
     "113 domain register (spends money)",
     "120 with DNS (skip_dns=false), more than one domain, or for a domain serving a live site",
     "accepting a pid 39 / 41 domain order",
@@ -43,6 +43,17 @@
       "inputs": {
         "mode": { "enum": ["approve"] },
         "orderids": { "pattern": "^[0-9]{1,9}$" }
+      }
+    },
+    {
+      "id": "226-approve-batch",
+      "purpose": "Gate 1 in one approval (Clarke, 2026-11-16): accept up to ten pid 16/33 onboarding orders in one run. 226 still refuses any listed order that fails the completeness review and is not on the adjudicated list, so the batch can only accept what one-order runs could",
+      "workflow": "226-whmcs-application-triage.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["mode", "orderids"],
+      "inputs": {
+        "mode": { "enum": ["approve"] },
+        "orderids": { "pattern": "^[0-9]{1,9}(,[0-9]{1,9}){1,9}$" }
       }
     },
     {
@@ -79,6 +90,29 @@
         "subject": { "maxlen": 150 },
         "message": { "maxlen": 2000 },
         "priority": { "enum": ["Low", "Medium"] },
+        "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
+      "id": "236-batch",
+      "purpose": "Many charity tickets in ONE run behind ONE whmcs-prod approval, rendered from a fraud-screened 232 verdicts artifact with the same allowlisted templates as 205-templated",
+      "workflow": "236-whmcs-ticket-batch.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["verdicts_run", "template", "orders"],
+      "inputs": {
+        "verdicts_run": { "pattern": "^[0-9]{1,15}$" },
+        "template": {
+          "enum": [
+            "onboarding_need_info",
+            "onboarding_accepted_gaps",
+            "onboarding_still_interested",
+            "preview_ready"
+          ]
+        },
+        "orders": { "pattern": "^[0-9]{1,9}(,[0-9]{1,9}){0,49}$" },
+        "head": { "maxlen": 200 },
+        "specials_json": { "maxlen": 4000 },
+        "previews_json": { "maxlen": 4000 },
         "dry_run": { "enum": ["true", "false"] }
       }
     },

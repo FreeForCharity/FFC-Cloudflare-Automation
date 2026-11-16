@@ -129,7 +129,9 @@ flowchart TD
 2. **Decide:**
    - **ACCEPT:** `226` in `approve` mode with exactly that one order id, through the gate script
      (rule `226-approve-one`). `226 approve` sends WHMCS's acceptance email. At most three accepts
-     per run during the testing period; still no bulk accept.
+     per run during the testing period. Accepts Clarke has already cleared (adjudicated orders, or a
+     fresh ACCEPT he asked to send) may go up to ten in one run under rule `226-approve-batch`
+     (Clarke, 2026-11-16), so one approval covers them; 226 still reviews each order separately.
    - **NEED_INFO:** `205` with the `onboarding_need_info` template and a plain-English list of the
      missing items (rule `205-templated`), at most once per order per week. The order stays Pending
      and is re-checked next run.

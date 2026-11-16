@@ -165,7 +165,8 @@ def build(report: dict, template: str, orders: list[str], head: list[str], speci
         r = rows[o]
         lead = list(head) + [f"Preview: {u}" for u in previews.get(o, [])]
         msg = render([str(c) for c in r.get("reason_codes") or []], specials.get(o, []), lead)
-        inputs = {"template": template, "client_id": str(r.get("client_id")), "extra_message": msg}
+        # dry_run must be explicit: 205 defaults to a dry run, which would "send" nothing.
+        inputs = {"template": template, "client_id": str(r.get("client_id")), "extra_message": msg, "dry_run": "false"}
         gate.validate_inputs(rule, inputs)
         out.append({"order": o, "inputs": inputs})
     return out

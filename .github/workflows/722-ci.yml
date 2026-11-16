@@ -468,6 +468,10 @@ jobs:
           # github-script shim executes on the pinned LTS Node, not whatever
           # the runner image happens to preinstall.
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          # test_235 round-trips an envelope through scripts/whmcs-ticket-thread-decrypt.py,
+          # which needs `cryptography`. Same reason as pyyaml above: do not depend on
+          # the runner image happening to preinstall it.
+          python3 -c 'import cryptography' 2>/dev/null || python3 -m pip install --quiet 'cryptography>=42'
           python3 tests/workflow-logic/run_all.py
 
       # The same list 706's `resolve` job gates every later job on. It ran

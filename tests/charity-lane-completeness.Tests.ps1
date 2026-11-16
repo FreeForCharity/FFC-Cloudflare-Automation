@@ -250,6 +250,15 @@ Describe 'Catalog, blocking and the ticket text' {
         $text | Should -Not -Match 'campaigns'
     }
 
+    It 'the fix list joins as text when captured the way 226 captures it' {
+        # 226 approve once wrapped this call in @(), which kept the comma-returned
+        # string[] as ONE element and printed "System.String[]" in the gap warning.
+        [string[]]$fix = Get-LaneApplicantFixList -Codes @('TAGLINE_MISSING', 'MISSION_MISSING')
+        $fix.Count | Should -Be 2
+        ($fix -join ' ') | Should -Not -Match 'System\.String'
+        ($fix -join ' ') | Should -Match 'tagline'
+    }
+
     It 'the verdict catalog carries every review code' {
         foreach ($k in $script:LaneCompletenessCodes.Keys) { $script:LaneReasonCodes.Contains($k) | Should -BeTrue }
     }

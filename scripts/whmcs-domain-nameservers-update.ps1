@@ -107,6 +107,20 @@ function Invoke-WhmcsApi {
         [hashtable]$Body
     )
 
+    # SECURITY (#1758): the WHMCS credential is attached to this request - the
+    # identifier/secret as POST body fields and, where WHMCS is reached through the
+    # APIM gateway, the subscription key as a header - so only allow it to be sent to
+    # known WHMCS hosts. The URL comes from a script parameter fed by
+    # $env:WHMCS_API_URL, and some workflows map that straight from a
+    # workflow_dispatch input, so it must never redirect the credential to an
+    # arbitrary host; the scheme is pinned too, so it is never sent in cleartext.
+    # Same block scripts/whmcs-api-common.ps1 and whmcs-products-export.ps1 carry.
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
     $headers = @{
         'Accept'     = 'application/json'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -139,12 +153,15 @@ function Invoke-WhmcsApi {
         elseif ($resp.errormessage) { $msg = $resp.errormessage }
         elseif ($resp.error) { $msg = $resp.error }
         if ([string]::IsNullOrWhiteSpace($msg)) {
-            $diag = $null
-            try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
-            if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
-                $diag = $diag.Substring(0, 800) + '...'
-            }
-            $msg = 'Unknown WHMCS API error.' + (if ($diag) { " Response: $diag" } else { '' })
+            # SECURITY (#1756): report the response's FIELD NAMES, never its body. This
+            # message is thrown and reaches a PUBLIC Actions log, and a WHMCS response
+            # carries client names, domains, contacts and billing figures. Field names
+            # are schema; field values are data. Mirrors the inline form #1755 applied
+            # to scripts/whmcs-domain-export.ps1 for the same reason (#1753).
+            $keys = @()
+            try { $keys = @($resp.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
+            $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '(no properties)' }
+            $msg = "Unknown WHMCS API error. Response keys: $keysText"
         }
         throw "WHMCS API error: $msg"
     }
@@ -271,9 +288,16 @@ try {
         try { $domainId = [string]$existing.domainid } catch {}
     }
     if ([string]::IsNullOrWhiteSpace($domainId)) {
-        $diag = $null
-        try { $diag = ($existing | ConvertTo-Json -Depth 6 -Compress) } catch {}
-        throw "WHMCS domain record did not include an id/domainid field. Record: $diag"
+        # SECURITY (#1756): field names, not the record. A WHMCS domain record carries
+        # the client's domain, registrar, nameservers and expiry, and this message is
+        # thrown into a PUBLIC Actions log. Note this serialization was UNCAPPED - it
+        # had no 800-character bound, so #1756's grep for 'Substring(0, 800)' did not
+        # enumerate it; the behavioural test in
+        # scripts/tests/whmcs-selfcontained-response-disclosure.Tests.ps1 is what found it.
+        $keys = @()
+        try { $keys = @($existing.PSObject.Properties | Select-Object -ExpandProperty Name) } catch {}
+        $keysText = if ($keys.Count -gt 0) { ($keys | Sort-Object) -join ', ' } else { '(no properties)' }
+        throw "WHMCS domain record did not include an id/domainid field. Record keys: $keysText"
     }
 
     $ns1 = if ($NameServer1) { $NameServer1.Trim().ToLowerInvariant() } else { $env:WHMCS_NAMESERVER_1 }

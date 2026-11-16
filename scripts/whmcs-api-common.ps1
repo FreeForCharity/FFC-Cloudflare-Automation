@@ -157,6 +157,21 @@ function Get-WhmcsResponseShape {
     return $shape
 }
 
+function Test-WhmcsReadOnlyAction {
+    # True for WHMCS API actions that only read (GetOrders, GetClientsProducts, ...).
+    param([AllowNull()][string]$Action)
+    if ([string]::IsNullOrWhiteSpace($Action)) { return $false }
+    return ($Action -cmatch '^Get[A-Z]')
+}
+
+function Test-WhmcsDroppedConnection {
+    # True when a transport exception says the connection closed mid-response.
+    # Returns a boolean only, so no exception text can reach a public log from here.
+    param([AllowNull()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return ($Text -match 'response ended prematurely|ResponseEnded|connection was closed|forcibly closed by the remote host|connection reset')
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -267,6 +282,14 @@ function Invoke-WhmcsApi {
             $emLabel = Get-WhmcsTransientLabel "$($_.Exception.Message)"
             if ($emLabel) {
                 $transientReason = $emLabel
+            }
+            elseif ((Test-WhmcsReadOnlyAction $Body.action) -and (Test-WhmcsDroppedConnection "$($_.Exception.Message)")) {
+                # The connection closed before the body arrived ("The response ended
+                # prematurely"). Retrying is safe only for a read: a dropped write may
+                # already have taken effect in WHMCS, and repeating an OpenTicket or
+                # AcceptOrder could act twice. Writes keep failing fast. (Run
+                # 43832248360 lost a whole 7-order accept to one dropped GetClientsProducts.)
+                $transientReason = 'connection dropped (read)'
             }
             else {
                 throw

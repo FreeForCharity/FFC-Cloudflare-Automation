@@ -51,7 +51,8 @@ BeforeAll {
         'rate limited',
         'gateway error',
         'service unavailable',
-        'request timed out'
+        'request timed out',
+        'connection dropped (read)'
     )
 }
 
@@ -273,6 +274,36 @@ Describe 'Invoke-WhmcsApi retry path' {
         # WHMCS's own error message is still surfaced: it is the error report, and
         # suppressing it would make every WHMCS failure undiagnosable.
         $err | Should -BeLike '*Invalid IP*'
+    }
+
+    It 'retries a read whose response ended prematurely, logging only the fixed label' {
+        $env:WHMCS_API_MAX_ATTEMPTS = '3'
+        $script:Calls = 0
+        Mock Invoke-RestMethod {
+            $script:Calls++
+            if ($script:Calls -lt 3) { throw 'The response ended prematurely. (ResponseEnded) donor@example.org' }
+            '{"result":"success","totalresults":1}' | ConvertFrom-Json
+        }
+
+        $out = Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetClientsProducts' }
+
+        $out.result | Should -Be 'success'
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        $script:Warnings.Count | Should -Be 2
+        foreach ($w in $script:Warnings) {
+            $w | Should -BeLike '*connection dropped (read)*'
+            $w | Should -Not -BeLike "*$script:Sensitive*"
+        }
+    }
+
+    It 'does not retry a write whose response ended prematurely: <_>' -ForEach @('AcceptOrder', 'OpenTicket', 'UpdateClient') {
+        $action = $_
+        Mock Invoke-RestMethod { throw 'The response ended prematurely. (ResponseEnded)' }
+
+        { Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = $action } } | Should -Throw
+
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        $script:Warnings.Count | Should -Be 0
     }
 
     It 'returns the response unchanged on success' {

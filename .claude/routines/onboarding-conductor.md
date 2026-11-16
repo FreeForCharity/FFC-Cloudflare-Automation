@@ -85,8 +85,11 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      current site that is clearly someone else's, is `DECISION NEEDED` with what differs; do not
      accept. Then
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.
-     If 226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names.
-     If it reports `ADJUDICATED` (an order Clarke adjudicated himself, listed in
+     Several at once (Clarke, 2026-11-16): `--rule 226-approve-batch` with up to ten comma-separated
+     ids, one approval for all of them. 226 reviews each order on its own: a refused order is
+     skipped and named, the others are accepted, and the run then fails so the refusal is seen. If
+     226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names. If
+     it reports `ADJUDICATED` (an order Clarke adjudicated himself, listed in
      `config/charity-lane-adjudicated-orders.json`), the order is accepted with gaps and you owe its
      ticket now: `205-templated` with `template=onboarding_accepted_gaps`, the `client_id`, and
      `extra_message` = `Preview: <url>` when the site is built, then the result's `fixList` lines,

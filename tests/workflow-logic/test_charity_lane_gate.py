@@ -47,6 +47,15 @@ def test_226_approve_exactly_one_order():
     assert refused("226-approve-one", {"mode": "approve", "orderids": ""})
 
 
+def test_226_approve_batch_takes_two_to_ten_orders():
+    assert not refused("226-approve-batch", {"mode": "approve", "orderids": "800,827,852,859,861,863,874"})
+    assert not refused("226-approve-batch", {"mode": "approve", "orderids": ",".join(str(i) for i in range(1, 11))})
+    assert refused("226-approve-batch", {"mode": "approve", "orderids": ",".join(str(i) for i in range(1, 12))})
+    assert refused("226-approve-batch", {"mode": "approve", "orderids": "800"})  # one order: 226-approve-one
+    assert refused("226-approve-batch", {"mode": "approve", "orderids": "800, 827"})
+    assert refused("226-approve-batch", {"mode": "reconcile", "orderids": "800,827"})
+
+
 def test_226_reconcile_is_never_allowed():
     assert refused("226-approve-one", {"mode": "reconcile", "orderids": "1234"})
     assert refused("226-report", {"mode": "reconcile-report"})

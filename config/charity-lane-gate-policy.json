@@ -17,7 +17,7 @@
   },
   "never": [
     "211 cancel or fraud",
-    "226 reconcile or reconcile-report, or approve with more than one order id",
+    "226 reconcile or reconcile-report, or approve with more than ten order ids",
     "113 domain register (spends money)",
     "120 with DNS (skip_dns=false), more than one domain, or for a domain serving a live site",
     "accepting a pid 39 / 41 domain order",
@@ -43,6 +43,17 @@
       "inputs": {
         "mode": { "enum": ["approve"] },
         "orderids": { "pattern": "^[0-9]{1,9}$" }
+      }
+    },
+    {
+      "id": "226-approve-batch",
+      "purpose": "Gate 1 in one approval (Clarke, 2026-11-16): accept up to ten pid 16/33 onboarding orders in one run. 226 still refuses any listed order that fails the completeness review and is not on the adjudicated list, so the batch can only accept what one-order runs could",
+      "workflow": "226-whmcs-application-triage.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["mode", "orderids"],
+      "inputs": {
+        "mode": { "enum": ["approve"] },
+        "orderids": { "pattern": "^[0-9]{1,9}(,[0-9]{1,9}){1,9}$" }
       }
     },
     {

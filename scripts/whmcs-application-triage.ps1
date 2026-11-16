@@ -2084,7 +2084,10 @@ try {
         if ($adjudication) {
             $entry.result = "$acceptResult-adjudicated"
             $entry | Add-Member -NotePropertyName codes -NotePropertyValue @($review.Blocking)
-            $entry | Add-Member -NotePropertyName fixList -NotePropertyValue @(Get-LaneApplicantFixList -Codes @($review.Blocking))
+            # Get-LaneApplicantFixList returns its array with the unary comma, so wrapping the call in @()
+            # would make a one-element array holding a string[] (printed as "System.String[]").
+            [string[]]$fixList = Get-LaneApplicantFixList -Codes @($review.Blocking)
+            $entry | Add-Member -NotePropertyName fixList -NotePropertyValue $fixList
             $entry | Add-Member -NotePropertyName ticketTemplate -NotePropertyValue 'onboarding_accepted_gaps'
             $entry | Add-Member -NotePropertyName decision -NotePropertyValue ([string]$adjudication.decision)
         }

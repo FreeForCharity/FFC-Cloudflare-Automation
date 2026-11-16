@@ -122,6 +122,20 @@ function Invoke-WhmcsApiXml {
         [hashtable]$Body
     )
 
+    # SECURITY (#1758): the WHMCS credential is attached to this request - the
+    # identifier/secret as POST body fields and, where WHMCS is reached through the
+    # APIM gateway, the subscription key as a header - so only allow it to be sent to
+    # known WHMCS hosts. The URL comes from a script parameter fed by
+    # $env:WHMCS_API_URL, and some workflows map that straight from a
+    # workflow_dispatch input, so it must never redirect the credential to an
+    # arbitrary host; the scheme is pinned too, so it is never sent in cleartext.
+    # Same block scripts/whmcs-api-common.ps1 and whmcs-products-export.ps1 carry.
+    $allowedHosts = @('apim-ffc-gateway-prod.azure-api.net', 'freeforcharity.org')
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($ResolvedApiUrl, [UriKind]::Absolute, [ref]$parsedUri) -or $parsedUri.Scheme -ne 'https' -or $allowedHosts -notcontains $parsedUri.Host) {
+        throw "Refusing to send WHMCS credentials to '$ResolvedApiUrl': host is not in the allowlist ($($allowedHosts -join ', '))."
+    }
+
     $headers = @{
         'Accept'     = '*/*'
         'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'

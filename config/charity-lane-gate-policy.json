@@ -83,6 +83,29 @@
       }
     },
     {
+      "id": "236-batch",
+      "purpose": "Many charity tickets in ONE run behind ONE whmcs-prod approval, rendered from a fraud-screened 232 verdicts artifact with the same allowlisted templates as 205-templated",
+      "workflow": "236-whmcs-ticket-batch.yml",
+      "environments": ["whmcs-prod"],
+      "required": ["verdicts_run", "template", "orders"],
+      "inputs": {
+        "verdicts_run": { "pattern": "^[0-9]{1,15}$" },
+        "template": {
+          "enum": [
+            "onboarding_need_info",
+            "onboarding_accepted_gaps",
+            "onboarding_still_interested",
+            "preview_ready"
+          ]
+        },
+        "orders": { "pattern": "^[0-9]{1,9}(,[0-9]{1,9}){0,49}$" },
+        "head": { "maxlen": 200 },
+        "specials_json": { "maxlen": 4000 },
+        "previews_json": { "maxlen": 4000 },
+        "dry_run": { "enum": ["true", "false"] }
+      }
+    },
+    {
       "id": "701-provision",
       "purpose": "Gate 3: provision FFC-EX-<domain> and publish on the default Pages URL",
       "workflow": "701-website-provision.yml",

@@ -66,6 +66,97 @@ function Resolve-WhmcsAccessKey {
     return $null
 }
 
+function Get-WhmcsTransientLabel {
+    <#
+    .SYNOPSIS
+        Classify text as a transient WHMCS/transport failure and return a FIXED label.
+
+    .DESCRIPTION
+        SECURITY (#1753). The retry loop in Invoke-WhmcsApi logs its reason with
+        Write-Warning and repeats it in the terminal throw. This repository is public,
+        so those Actions logs are world-readable, and WHMCS responses carry ticket
+        text, donor email addresses, client names and billing figures. This function
+        therefore returns a label drawn from a closed set of literals and NEVER any
+        part of $Text, so no caller can echo a response body or an exception string
+        into a public log by routing it through here.
+
+        The status-code rules are deliberately shape-anchored. The original signature
+        ended in \b(429|502|503|504)\b, which - applied to a serialized JSON body -
+        matched any numeric field holding one of those values (a ticket id, a client
+        id, an invoice total), because ':' and '}' are non-word characters and so
+        satisfy \b. An ordinary permanent error was then classified transient, retried
+        five times, and its body printed on every attempt.
+
+        Returns $null when nothing matches; callers must treat that as permanent.
+    #>
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+
+    # A status code counts only in a status-line shape. These are the three forms
+    # .NET and the hosts actually produce:
+    #   PS 7    Response status code does not indicate success: 502 (Bad Gateway).
+    #   PS 5.1  The remote server returned an error: (502) Bad Gateway.
+    #   raw     HTTP/1.1 503 Service Unavailable
+    # %S% is substituted with .Replace, not the -f operator: the pattern contains
+    # [^0-9]{0,40}, and -f would read '{0,40}' as 'argument 0, width 40'.
+    $statusShape = 'status code[^0-9]{0,40}%S%\b|returned an error:\s*\(?%S%\)?|HTTP(?:/[0-9.]+)?\s+%S%\b'
+
+    # Ordered so the most specific signature wins; every value here is a literal
+    # label, which is the whole point.
+    $rules = [ordered]@{
+        'bot-protection challenge' = 'Imunify360|bot-protection'
+        'rate limited'             = 'too many requests|' + $statusShape.Replace('%S%', '429')
+        'gateway error'            = 'Bad Gateway|Gateway Time-?out|' + $statusShape.Replace('%S%', '(?:502|504)')
+        'service unavailable'      = 'Service Unavailable|temporarily unavailable|' + $statusShape.Replace('%S%', '503')
+        # Subsumes .NET's 'The operation has timed out'.
+        'request timed out'        = 'timed out'
+    }
+
+    foreach ($label in $rules.Keys) {
+        if ($Text -match $rules[$label]) { return $label }
+    }
+    return $null
+}
+
+function Get-WhmcsResponseShape {
+    <#
+    .SYNOPSIS
+        Describe a WHMCS response by its FIELD NAMES, as a log-safe diagnostic.
+
+    .DESCRIPTION
+        SECURITY (#1753). An error about an unrecognised response reaches a public
+        Actions log, so it must not serialize the response. Field names are schema;
+        field values are ticket text, donor email addresses, client names and billing
+        figures. This returns the former and never the latter.
+    #>
+    param([AllowNull()]$Response)
+
+    if ($null -eq $Response) { return '' }
+    # Nothing nameable, and a bare string is exactly the payload we must not echo.
+    if ($Response -is [string] -or $Response -is [ValueType]) { return '' }
+
+    $names = @()
+    if ($Response -is [System.Collections.IDictionary]) {
+        $names = @($Response.Keys | ForEach-Object { [string]$_ })
+    }
+    elseif ($Response -is [System.Collections.IEnumerable]) {
+        return ''
+    }
+    else {
+        $names = @($Response.PSObject.Properties | ForEach-Object { $_.Name })
+    }
+
+    if ($names.Count -eq 0) { return '' }
+    # A field name is schema, but a WHMCS custom-field name can be long and the list
+    # unbounded, so cap it rather than flood the log.
+    $shown = @($names | Select-Object -First 20)
+    $shape = $shown -join ', '
+    if ($names.Count -gt $shown.Count) { $shape += ', ...' }
+    if ($shape.Length -gt 300) { $shape = $shape.Substring(0, 300) + '...' }
+    return $shape
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -99,7 +190,11 @@ function Invoke-WhmcsApi {
     # IP-dependent, not workflow-specific. Retry just that signature (and a few
     # transient HTTP conditions) with exponential backoff; genuine auth/permission
     # errors do not match and still fail fast.
-    $transientRe = 'Imunify360|bot-protection|too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
+    #
+    # SECURITY (#1753): $transientReason is written to a PUBLIC Actions log by the
+    # Write-Warning below and repeated in the terminal throw, so it only ever holds a
+    # fixed label from Get-WhmcsTransientLabel - never a response body, a field value
+    # or an exception string.
     $maxAttempts = 5
     $parsedMax = 0
     if ([int]::TryParse($env:WHMCS_API_MAX_ATTEMPTS, [ref]$parsedMax) -and $parsedMax -ge 1) {
@@ -118,8 +213,9 @@ function Invoke-WhmcsApi {
                     $resp = $raw | ConvertFrom-Json -ErrorAction Stop
                 }
                 catch {
-                    if ($raw -match $transientRe) {
-                        $transientReason = 'bot-protection challenge (non-JSON response)'
+                    $rawLabel = Get-WhmcsTransientLabel $raw
+                    if ($rawLabel) {
+                        $transientReason = "$rawLabel (non-JSON response)"
                     }
                     else {
                         $snippet = if ($raw.Length -gt 400) { $raw.Substring(0, 400) + '...' } else { $raw }
@@ -138,18 +234,24 @@ function Invoke-WhmcsApi {
                     if ($resp.message) { $msg = $resp.message }
                     elseif ($resp.errormessage) { $msg = $resp.errormessage }
                     elseif ($resp.error) { $msg = $resp.error }
-                    if ([string]::IsNullOrWhiteSpace($msg)) {
-                        $diag = $null
-                        try { $diag = ($resp | ConvertTo-Json -Depth 6 -Compress) } catch {}
-                        if (-not [string]::IsNullOrWhiteSpace($diag) -and $diag.Length -gt 800) {
-                            $diag = $diag.Substring(0, 800) + '...'
-                        }
-                        $msg = 'Unknown WHMCS API error.' + $(if ($diag) { " Response: $diag" } else { '' })
-                    }
-                    if ($msg -match $transientRe) {
-                        $transientReason = $msg
+
+                    # Classify on the error MESSAGE only, never on a serialization of
+                    # the response. A body that parsed as JSON is not a bot-protection
+                    # challenge - those arrive as non-JSON and are handled above - so
+                    # there is nothing transient to find by serializing it, and
+                    # serializing it is what leaked it (#1753).
+                    $msgLabel = Get-WhmcsTransientLabel $msg
+                    if ($msgLabel) {
+                        $transientReason = $msgLabel
                     }
                     else {
+                        if ([string]::IsNullOrWhiteSpace($msg)) {
+                            # Report the response's SHAPE. Field names are schema;
+                            # field values are donor and client data, and this string
+                            # is logged (#1753).
+                            $shape = Get-WhmcsResponseShape $resp
+                            $msg = 'Unknown WHMCS API error.' + $(if ($shape) { " Response fields: $shape" } else { '' })
+                        }
                         throw "WHMCS API error: $msg"
                     }
                 }
@@ -160,9 +262,11 @@ function Invoke-WhmcsApi {
             }
         }
         catch {
-            $em = "$($_.Exception.Message)"
-            if ($em -match $transientRe) {
-                $transientReason = $em
+            # The label, not the exception text: a WebException message can carry a
+            # response fragment, and this reason is logged (#1753).
+            $emLabel = Get-WhmcsTransientLabel "$($_.Exception.Message)"
+            if ($emLabel) {
+                $transientReason = $emLabel
             }
             else {
                 throw

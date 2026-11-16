@@ -265,6 +265,13 @@ def main(argv: list[str] | None = None) -> int:
         print("REFUSED: an order is listed twice", file=sys.stderr)
         return 2
     try:
+        # 236's plan job runs `plan`, not `batch`, so only `batch` ever reached the
+        # rule-236 validation below -- and the send job's count check compares the plan
+        # with the same plan, so it agrees at any size. A direct workflow_dispatch of 236
+        # therefore planned (and on approval opened) any number of tickets, while the
+        # workflow, catalog and safety doc all document a 50-order ceiling.
+        if a.action in ("plan", "batch") and len(orders) > MAX_BATCH:
+            raise BatchError(f"a batch holds at most {MAX_BATCH} orders; split the list")
         policy = gate.load_policy()
         if a.report:
             with open(a.report, encoding="utf-8-sig") as fh:

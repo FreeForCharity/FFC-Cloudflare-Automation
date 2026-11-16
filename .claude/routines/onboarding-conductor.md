@@ -85,8 +85,11 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
      current site that is clearly someone else's, is `DECISION NEEDED` with what differs; do not
      accept. Then
      `charity_lane_gate.py run --rule 226-approve-one --input mode=approve --input orderids=<id>`.
-     If 226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names.
-     If it reports `ADJUDICATED` (an order Clarke adjudicated himself, listed in
+     Several at once (Clarke, 2026-11-16): `--rule 226-approve-batch` with up to ten comma-separated
+     ids, one approval for all of them. 226 reviews each order on its own: a refused order is
+     skipped and named, the others are accepted, and the run then fails so the refusal is seen. If
+     226 reports `REFUSED` (the run fails), treat the order as NEED_INFO with the codes it names. If
+     it reports `ADJUDICATED` (an order Clarke adjudicated himself, listed in
      `config/charity-lane-adjudicated-orders.json`), the order is accepted with gaps and you owe its
      ticket now: `205-templated` with `template=onboarding_accepted_gaps`, the `client_id`, and
      `extra_message` = `Preview: <url>` when the site is built, then the result's `fixList` lines,
@@ -104,7 +107,11 @@ Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so 
    - **Several tickets at once:**
      `scripts/charity_lane_ticket_batch.py plan|send --verdicts-run <232 run> --template <name> --orders <ids>`
      builds each gap list from that run's codes and sends each ticket through rule `205-templated`.
-     Run `plan` first and read it.
+     Run `plan` first and read it. For more than one ticket use `batch` (same arguments) instead of
+     `send`: it dispatches ONE run of 236 (rule `236-batch`, at most 50 orders), which shows every
+     ticket in its run summary and opens them all behind a single whmcs-prod approval. Separate 205
+     runs queue one approval at a time, and GitHub cancels all but the newest pending run in 205's
+     concurrency group, so a burst of 205 dispatches loses tickets.
    - **What a ticket may ask for (Clarke, 2026-11-13):** proof is always a public URL we can open
      (for example a national body's chapter list, or a Candid profile), never an IRS determination
      letter, a sponsorship letter or any other document we would not verify. A fiscal sponsor must

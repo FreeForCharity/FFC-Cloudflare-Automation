@@ -12,11 +12,15 @@
       - key from an explicit parameter or the FRAUDLABSPRO_API_KEY env var (exported by the
         fraudlabspro-keys-from-kv composite action)
       - host allowlist so the key can never be redirected to an arbitrary host
-      - retry with exponential backoff on transient conditions (429/5xx/timeouts)
+      - retry with exponential backoff on transient conditions (429/5xx/timeouts), classified
+        and logged through the shared Get-ApiTransientLabel so the retry reason that reaches a
+        public Actions log is a fixed label and never the exception text (#1766)
 
     The decision logic (Get-FraudReviewRecommendation) is a pure function with a unit test at
     tests/workflow-logic/test_228_fraud_review.py — it never touches the network.
 #>
+
+. (Join-Path $PSScriptRoot 'api-transient-label.ps1')
 
 function Resolve-FraudLabsProApiKey {
     <#
@@ -73,7 +77,14 @@ function Invoke-FraudLabsProApi {
 
     # Retry transient conditions (rate limiting, gateway errors, timeouts) with exponential backoff;
     # genuine auth/permission errors (401/403) and not-found (404) fail fast.
-    $transientRe = 'too many requests|temporarily unavailable|timed out|The operation has timed out|\b(429|502|503|504)\b'
+    #
+    # SECURITY (#1766): both the decision and the two sinks below go through
+    # Get-ApiTransientLabel. The signature here used to end in \b(429|502|503|504)\b,
+    # which fires on a bare status number anywhere in prose - 'Order 502 declined by
+    # rule set' was retried five times - and each attempt printed
+    # $_.Exception.Message to a world-readable Actions log. This helper screens
+    # orders and IP addresses (#1445), so its exception text is the most sensitive of
+    # the three retry loops in this directory.
     $maxAttempts = 5
     $parsedMax = 0
     if ([int]::TryParse($env:FRAUDLABSPRO_API_MAX_ATTEMPTS, [ref]$parsedMax) -and $parsedMax -ge 1) {
@@ -87,18 +98,24 @@ function Invoke-FraudLabsProApi {
             return Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop
         }
         catch {
-            $msg = $_.Exception.Message
             $status = $null
             if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
                 try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
             }
-            $isTransient = ($status -in @(429, 502, 503, 504)) -or ($msg -match $transientRe)
-            if (-not $isTransient -or $attempt -ge $maxAttempts) {
-                # Re-throw with the redacted URL so a leaked query string never reaches the log.
-                throw "FraudLabs Pro request to $redacted failed (status: $status): $msg"
+            # $status stays in both messages: it is an integer off the response
+            # object, not text from it. The label replaces the message.
+            $transientLabel = Get-ApiTransientLabel -Text "$($_.Exception.Message)" -Status $status
+            if (-not $transientLabel -or $attempt -ge $maxAttempts) {
+                # This throw BUILDS a message rather than re-throwing, so that the
+                # redacted URL is what names the request. Interpolating the exception
+                # text into it defeated the point twice over: it is the disclosure
+                # #1766 is about, and the redaction only covers the URL this function
+                # composed, never a URL the exception quoted back.
+                $reason = if ($transientLabel) { $transientLabel } else { 'permanent error' }
+                throw "FraudLabs Pro request to $redacted failed (status: $status): $reason"
             }
             $delay = [math]::Min(60, [math]::Pow(2, $attempt))
-            Write-Warning "FraudLabs Pro transient failure (attempt $attempt/$maxAttempts, status: $status): $msg. Retrying in ${delay}s..."
+            Write-Warning "FraudLabs Pro transient failure (attempt $attempt/$maxAttempts, status: $status): $transientLabel. Retrying in ${delay}s..."
             Start-Sleep -Seconds $delay
         }
     }

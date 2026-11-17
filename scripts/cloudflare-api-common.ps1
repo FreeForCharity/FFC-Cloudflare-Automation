@@ -222,12 +222,23 @@ function Invoke-CfApi {
 
             $detail = "Cloudflare API request failed ($Method $Path)"
             if ($statusCode) { $detail += " HTTP $statusCode" }
+
+            # SECURITY (#1766): $safeDetail is the request and its status - schema, not
+            # payload. $detail then accumulates $exMsg and up to 500 characters of the
+            # response body, which belong in the terminal throw ONCE rather than in a
+            # warning printed on every attempt. This loop was the third instance of the
+            # defect and was invisible to every enumeration in the #1753 family, which
+            # scoped itself by WHMCS and then by the loose status alternation - a
+            # signature this file does not carry, because its own status test
+            # ($statusCode -ge 500) was already structural and correct.
+            $safeDetail = $detail
+
             $detail += ": $exMsg"
             if ($cfErrors) { $detail += " | errors: $cfErrors" }
 
             $isTransient = ($statusCode -ge 500 -and $statusCode -le 599) -or ($exMsg -match '(?i)timed?\s?out|timeout')
             if ($isTransient -and $attempt -lt $maxAttempts) {
-                Write-Warning "$detail — transient; retrying once in 2s..."
+                Write-Warning "$safeDetail — transient; retrying once in 2s..."
                 Start-Sleep -Seconds 2
                 continue
             }

@@ -157,6 +157,41 @@ function Get-WhmcsResponseShape {
     return $shape
 }
 
+function Test-WhmcsReadOnlyAction {
+    # True for WHMCS API actions that only read (GetOrders, GetClientsProducts, ...).
+    param([AllowNull()][string]$Action)
+    if ([string]::IsNullOrWhiteSpace($Action)) { return $false }
+    return ($Action -cmatch '^Get[A-Z]')
+}
+
+function Test-WhmcsDroppedConnection {
+    # True when a transport exception says the connection closed mid-response.
+    # Walks the InnerException chain: when the drop comes before the headers,
+    # PowerShell 7 raises HttpRequestException("An error occurred while sending the
+    # request.") and the "response ended prematurely" text is only on the inner
+    # IOException. Returns a boolean only, so no exception text can reach a public
+    # log from here.
+    param([AllowNull()]$ErrorOrText)
+    $pattern = 'response ended prematurely|ResponseEnded|connection was closed|forcibly closed by the remote host|connection reset'
+    $texts = [System.Collections.Generic.List[string]]::new()
+    if ($ErrorOrText -is [System.Management.Automation.ErrorRecord]) {
+        if ($ErrorOrText.ErrorDetails) { $texts.Add([string]$ErrorOrText.ErrorDetails.Message) }
+        $ErrorOrText = $ErrorOrText.Exception
+    }
+    if ($ErrorOrText -is [System.Exception]) {
+        $e = $ErrorOrText
+        $depth = 0
+        while ($e -and $depth -lt 10) { $texts.Add([string]$e.Message); $e = $e.InnerException; $depth++ }
+    }
+    elseif ($null -ne $ErrorOrText) {
+        $texts.Add([string]$ErrorOrText)
+    }
+    foreach ($t in $texts) {
+        if (-not [string]::IsNullOrWhiteSpace($t) -and $t -match $pattern) { return $true }
+    }
+    return $false
+}
+
 function Invoke-WhmcsApi {
     param(
         [Parameter(Mandatory = $true)]
@@ -267,6 +302,14 @@ function Invoke-WhmcsApi {
             $emLabel = Get-WhmcsTransientLabel "$($_.Exception.Message)"
             if ($emLabel) {
                 $transientReason = $emLabel
+            }
+            elseif ((Test-WhmcsReadOnlyAction $Body.action) -and (Test-WhmcsDroppedConnection $_)) {
+                # The connection closed before the body arrived ("The response ended
+                # prematurely"). Retrying is safe only for a read: a dropped write may
+                # already have taken effect in WHMCS, and repeating an OpenTicket or
+                # AcceptOrder could act twice. Writes keep failing fast. (Run
+                # 43832248360 lost a whole 7-order accept to one dropped GetClientsProducts.)
+                $transientReason = 'connection dropped (read)'
             }
             else {
                 throw

@@ -175,7 +175,13 @@ function Test-WhmcsDroppedConnection {
     $pattern = 'response ended prematurely|ResponseEnded|connection was closed|forcibly closed by the remote host|connection reset'
     $texts = [System.Collections.Generic.List[string]]::new()
     if ($ErrorOrText -is [System.Management.Automation.ErrorRecord]) {
-        if ($ErrorOrText.ErrorDetails) { $texts.Add([string]$ErrorOrText.ErrorDetails.Message) }
+        # ErrorDetails is deliberately NOT read. On an HTTP error status
+        # Invoke-RestMethod puts the RESPONSE BODY there, which would let a WHMCS or
+        # Imunify360 error page decide this predicate by quoting one of the phrases
+        # above back at us. A body is also proof the connection did not drop, so it
+        # can only ever produce a false positive. Measured: the before-headers drop
+        # carries its text on the inner exception, which the chain walk below reads,
+        # so nothing genuine is lost by ignoring it.
         $ErrorOrText = $ErrorOrText.Exception
     }
     if ($ErrorOrText -is [System.Exception]) {

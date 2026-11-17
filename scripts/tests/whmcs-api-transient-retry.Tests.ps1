@@ -296,6 +296,29 @@ Describe 'Invoke-WhmcsApi retry path' {
         }
     }
 
+    It 'retries a read when the drop text is only on the inner exception (drop before headers)' {
+        # The real shape from run 43832248360: PowerShell 7 raises
+        # HttpRequestException('An error occurred while sending the request.') and the
+        # 'response ended prematurely' text sits on the inner IOException.
+        $env:WHMCS_API_MAX_ATTEMPTS = '2'
+        $script:Calls = 0
+        Mock Invoke-RestMethod {
+            $script:Calls++
+            if ($script:Calls -lt 2) {
+                $inner = [System.IO.IOException]::new('The response ended prematurely. (ResponseEnded)')
+                throw [System.Net.Http.HttpRequestException]::new('An error occurred while sending the request.', $inner)
+            }
+            '{"result":"success"}' | ConvertFrom-Json
+        }
+
+        $out = Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetClientsProducts' }
+
+        $out.result | Should -Be 'success'
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        $script:Warnings.Count | Should -Be 1
+        $script:Warnings[0] | Should -BeLike '*connection dropped (read)*'
+    }
+
     It 'does not retry a write whose response ended prematurely: <_>' -ForEach @('AcceptOrder', 'OpenTicket', 'UpdateClient') {
         $action = $_
         Mock Invoke-RestMethod { throw 'The response ended prematurely. (ResponseEnded)' }

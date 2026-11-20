@@ -70,6 +70,21 @@ Describe 'ConvertTo-TicketIdList' {
     }
 }
 
+Describe 'Split-TicketRefText' {
+    It 'separates #client numbers from internal ids' {
+        $r = Split-TicketRefText '281, #692991 279 #692991'
+        ($r.Ids -join ',') | Should -Be '281,279'
+        ($r.Numbers -join ',') | Should -Be '692991'
+    }
+    It 'refuses a malformed #number without echoing it' {
+        { Split-TicketRefText '#69x991' } | Should -Throw -ExpectedMessage '*digits the client sees*'
+        try { Split-TicketRefText '#69x991' } catch { $_.Exception.Message | Should -Not -BeLike '*69x991*' }
+    }
+    It 'counts numbers and ids together against the cap' {
+        { Split-TicketRefText '1 #2 #3' -Max 2 } | Should -Throw -ExpectedMessage '*At most 2*'
+    }
+}
+
 Describe 'Import-RecipientPublicKey' {
     It 'accepts a 3072-bit SubjectPublicKeyInfo' {
         (Import-RecipientPublicKey -Base64 $script:PubB64).KeySize | Should -Be 3072
@@ -153,6 +168,40 @@ Describe 'Invoke-TicketThreadRead' {
         { Invoke-TicketThreadRead -ClientId 77 -InvokeApi $many -MaxTickets 50 } | Should -Throw -ExpectedMessage '*more than 50*'
         $script:Pages | Should -Be 1
     }
+    It 'resolves a #client number to its internal id with GetTicket ticketnum' {
+        $byNum = {
+            param([hashtable]$Body)
+            $script:Calls.Add("$($Body.action):$($Body.ticketid)$($Body.ticketnum)")
+            switch ($Body.action) {
+                'GetTicket' { if ($Body.ticketnum) { New-TicketFixture '412' } else { New-TicketFixture ([string]$Body.ticketid) } }
+                'GetTicketNotes' { [pscustomobject]@{ result = 'success'; notes = $null } }
+            }
+        }
+        $doc = Invoke-TicketThreadRead -TicketNumbers @('692991') -InvokeApi $byNum
+        ($doc.tickets.id -join ',') | Should -Be '412'
+        $script:Calls | Should -Contain 'GetTicket:692991'
+    }
+    It 'refuses a #client number that resolves to nothing' {
+        $none = { param([hashtable]$Body) [pscustomobject]@{ result = 'success' } }
+        { Invoke-TicketThreadRead -TicketNumbers @('1') -InvokeApi $none } | Should -Throw -ExpectedMessage '*did not resolve*'
+    }
+    It 'skips a client-listed ticket WHMCS cannot open, and reports it' {
+        $gone = {
+            param([hashtable]$Body)
+            switch ($Body.action) {
+                'GetTickets' { [pscustomobject]@{ result = 'success'; totalresults = '2'; tickets = [pscustomobject]@{ ticket = @([pscustomobject]@{ id = '281' }, [pscustomobject]@{ id = '279' }) } } }
+                'GetTicket' { if ($Body.ticketid -eq 279) { throw 'WHMCS API error: Ticket ID Not Found' } else { New-TicketFixture ([string]$Body.ticketid) } }
+                'GetTicketNotes' { [pscustomobject]@{ result = 'success'; notes = $null } }
+            }
+        }
+        $doc = Invoke-TicketThreadRead -ClientId 77 -InvokeApi $gone
+        ($doc.tickets.id -join ',') | Should -Be '281'
+        ($doc.skipped_ids -join ',') | Should -Be '279'
+    }
+    It 'still fails on an explicitly named id WHMCS cannot open' {
+        $gone = { param([hashtable]$Body) throw 'WHMCS API error: Ticket ID Not Found' }
+        { Invoke-TicketThreadRead -TicketIds @(279) -InvokeApi $gone } | Should -Throw -ExpectedMessage '*Not Found*'
+    }
     It 'refuses an empty selection' {
         { Invoke-TicketThreadRead -InvokeApi $script:Api } | Should -Throw -ExpectedMessage '*No tickets*'
     }
@@ -177,6 +226,28 @@ Describe 'Protect-ThreadPayload' {
         $env = Protect-ThreadPayload -Plain ([byte[]](1, 2, 3)) -Rsa $rsa
         $env.key_fingerprint = 'SHA256:00'
         { Unprotect-Envelope $env $script:Rsa } | Should -Throw
+    }
+}
+
+Describe 'Format-EnvelopeLogBlock' {
+    It 'chunks the same ciphertext between markers, with a matching SHA-256, and no plaintext' {
+        $doc = Invoke-TicketThreadRead -TicketIds @(281) -InvokeApi $script:Api
+        $rsa = Import-RecipientPublicKey -Base64 $script:PubB64
+        $env = Protect-ThreadPayload -Plain ([System.Text.Encoding]::UTF8.GetBytes(($doc | ConvertTo-Json -Depth 8))) -Rsa $rsa
+        $lines = Format-EnvelopeLogBlock -Envelope $env -Width 100
+        $lines[0] | Should -Match '^BEGIN-FFC-TICKET-ENVELOPE sha256=[0-9a-f]{64} chunks=\d+$'
+        $lines[-1] | Should -Be 'END-FFC-TICKET-ENVELOPE'
+        foreach ($l in $lines) { $l | Should -Not -BeLike '::*' }
+        $all = $lines -join "`n"
+        foreach ($s in @('SENTINEL-4417', 'jane.doe', 'Jane Doe', 'Payment Blocked', 'internal note')) { $all | Should -Not -BeLike "*$s*" }
+        $chunks = @($lines | Where-Object { $_ -like 'FFC-ENV *' } | ForEach-Object { $_.Substring(8) })
+        $lines[0] | Should -BeLike "*chunks=$($chunks.Count)"
+        $b64 = $chunks -join ''
+        $sha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::ASCII.GetBytes($b64))).ToLowerInvariant()
+        $lines[0] | Should -BeLike "*sha256=$sha*"
+        $back = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) | ConvertFrom-Json
+        $back.ciphertext | Should -Be $env.ciphertext
+        Unprotect-Envelope $back $script:Rsa | Should -Not -BeNullOrEmpty
     }
 }
 

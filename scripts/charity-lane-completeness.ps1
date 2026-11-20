@@ -212,6 +212,18 @@ function ConvertTo-LaneOfficerKey {
     return (($n -split '\s+') | Where-Object { $_ }) -join ' '
 }
 
+function ConvertFrom-LaneWhmcsLinkValue {
+    # A WHMCS "link" custom field comes back HTML-wrapped:
+    # <a href="https://www.linkedin.com/in/jane-doe/" target="_blank">https://...</a>.
+    # Read the href (else the link text), HTML-decoded. A wrapped blank answer
+    # is blank, so it reads as missing, never as a malformed link. Pure.
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    $v = Get-HrefOrRaw -Value $Value
+    if ($v -match '<') { $v = ConvertTo-SiteFieldCleanText -Value $v }
+    return ([System.Net.WebUtility]::HtmlDecode($v)).Trim()
+}
+
 function ConvertTo-LaneLinkedInProfileKey {
     # A personal profile URL -> its slug ("in/jane-doe"), else ''.
     param([string]$Url)
@@ -315,9 +327,9 @@ function Get-LaneCompletenessCodes {
 
     $profiles = @()
     foreach ($role in $script:LaneOfficerLinkedInPatterns.Keys) {
-        $raw = Get-FieldValue -Fields $Fields -Pattern $script:LaneOfficerLinkedInPatterns[$role]
+        $raw = ConvertFrom-LaneWhmcsLinkValue -Value (Get-FieldValue -Fields $Fields -Pattern $script:LaneOfficerLinkedInPatterns[$role])
         if ([string]::IsNullOrWhiteSpace($raw)) { & $add 'OFFICER_LINKEDIN_MISSING'; continue }
-        $key = ConvertTo-LaneLinkedInProfileKey -Url ([System.Net.WebUtility]::HtmlDecode($raw))
+        $key = ConvertTo-LaneLinkedInProfileKey -Url $raw
         if (-not $key) { & $add 'OFFICER_LINKEDIN_NOT_PROFILE'; continue }
         $profiles += $key
     }

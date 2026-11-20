@@ -85,6 +85,61 @@ Describe 'A complete application' {
     }
 }
 
+Describe 'WHMCS link-wrapped answers (orders 883 / 886, 2026-11-20)' {
+    # GetClientsProducts returns a "link" custom field as
+    # <a href="URL" target="_blank">URL</a>, and a blank one as an empty
+    # anchor. Every pid 33 application read OFFICER_LINKEDIN_NOT_PROFILE and
+    # every one with no current website read CURRENT_SITE_URL_INVALID.
+    BeforeAll {
+        function Wrap { param([string]$Url) return "<a href=`"$Url`" target=`"_blank`">$Url</a>" }
+        $script:ChairLabel = 'Board President/Chair LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:SecLabel = 'Board Secretary LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:TreasLabel = 'Board Treasurer LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:SiteLabel = 'Current public website or page, if any (even without your own domain)'
+    }
+
+    It 'three wrapped personal officer profiles pass' {
+        Get-Codes -Override @{
+            $script:ChairLabel = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+            $script:SecLabel   = (Wrap 'https://www.linkedin.com/in/ben-secretary/')
+            $script:TreasLabel = (Wrap 'https://www.linkedin.com/in/cara-treasurer/')
+        } | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped company page in an officer slot is still not a profile' {
+        Get-Codes -Override @{ $script:ChairLabel = (Wrap 'https://www.linkedin.com/company/riverbend-pantry/') } |
+            Should -Contain 'OFFICER_LINKEDIN_NOT_PROFILE'
+    }
+
+    It 'wrapped duplicate officer profiles are still not distinct' {
+        Get-Codes -Override @{
+            $script:ChairLabel = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+            $script:SecLabel   = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+        } | Should -Contain 'OFFICER_LINKEDIN_NOT_DISTINCT'
+    }
+
+    It 'a wrapped blank officer link reads as missing' {
+        Get-Codes -Override @{ $script:TreasLabel = '<a href="" target="_blank"></a>' } |
+            Should -Contain 'OFFICER_LINKEDIN_MISSING'
+    }
+
+    It 'a wrapped blank current website is no answer, not an invalid one' {
+        $codes = Get-Codes -Override @{ $script:SiteLabel = '<a href="" target="_blank"></a>' } -Probes (Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Candid))
+        $codes | Should -Not -Contain 'CURRENT_SITE_URL_INVALID'
+        $codes | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped current website that is not a link is still invalid' {
+        Get-Codes -Override @{ $script:SiteLabel = '<a href="not a link" target="_blank">not a link</a>' } |
+            Should -Contain 'CURRENT_SITE_URL_INVALID'
+    }
+
+    It 'a wrapped blank REQUIRED link is still flagged (as missing)' {
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = '<a href="" target="_blank"></a>' } -Probes (Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current)) |
+            Should -Contain 'CANDID_URL_MISSING'
+    }
+}
+
 Describe 'Links that are not public (orders 875 / 876, 2026-11-12)' {
     It '<Name> -> <Code>' -ForEach @(
         @{ Name = 'Zeffy campaigns admin page'; Label = 'Zeffy donation form URL'; Value = 'https://www.zeffy.com/en-US/o/fundraising/campaigns?fromOnboarding=true'; Code = 'DONATION_URL_NOT_PUBLIC' }

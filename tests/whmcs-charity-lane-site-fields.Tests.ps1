@@ -241,6 +241,18 @@ Describe 'Fallback order: client field -> product answer' {
         $r.fields.tagline | Should -Be 'From the product'
     }
 
+    It 'a blank answer WHMCS wrapped in an empty link is missing, not rejected' {
+        $r = Resolve-SiteFields -Config $script:Config -ClientValues @{} -ProductSets @(New-Set -ProductPid 33 -Answers @{ 'current-site-url|Current public website or page, if any (even without your own domain)' = '<a href="" target="_blank"></a>' }) -ClientId 1
+        $r.missing | Should -Contain 'currentWebsiteUrl'
+        @($r.rejected | Where-Object { $_.field -eq 'currentWebsiteUrl' }) | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped link answer still resolves to its URL' {
+        $u = 'https://hope-pantry.my.canva.site/'
+        $r = Resolve-SiteFields -Config $script:Config -ClientValues @{} -ProductSets @(New-Set -ProductPid 33 -Answers @{ 'current-site-url|Current public website or page, if any (even without your own domain)' = "<a href=`"$u`" target=`"_blank`">$u</a>" }) -ClientId 1
+        $r.fields.currentWebsiteUrl | Should -Be $u
+    }
+
     It 'an invalid client field falls back too, and the rejection is recorded' {
         $r = Resolve-SiteFields -Config $script:Config -ClientValues @{ 'brand color (hex)' = 'navy blue' } -ProductSets @(New-Set -ProductPid 40 -Answers @{ 'brand-color' = '#112233' }) -ClientId 1
         $r.fields.brandColor | Should -Be '#112233'

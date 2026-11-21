@@ -39,7 +39,7 @@ case "$args" in
     exit 0 ;;
   "api -X POST orgs/"*"/teams "*)
     [ "${TEST_POST_FAIL:-}" = "1" ] && { echo "gh: Must have admin rights (HTTP 403)" >&2; exit 1; }
-    echo "new-team"; exit 0 ;;
+    echo "${TEST_NEW_SLUG:-sponsoring-admins}"; exit 0 ;;
   "api --paginate orgs/"*"/teams?per_page=100 "*)
     printf '%b' "${TEST_TEAMS:-}"; exit 0 ;;
   "api --paginate orgs/"*"/teams/"*"/members?per_page=100 "*)
@@ -56,6 +56,7 @@ case "$args" in
     echo "FreeForCharity"; exit 0 ;;
   "api users/"*)
     [ "${TEST_USER_MISSING:-}" = "1" ] && { echo "gh: Not Found (HTTP 404)"; exit 1; }
+    [ "${TEST_USER_MISSING:-}" = "5xx" ] && { echo "gh: Server Error (HTTP 502)"; exit 1; }
     echo "user"; exit 0 ;;
 esac
 echo "fake gh: unhandled: $args" >&2
@@ -198,6 +199,35 @@ def test_create_team_makes_a_closed_team_then_adds():
     assert "-X PUT orgs/FreeForCharity/teams/sponsoring-admins/memberships/octocat" in log, log
 
 
+def test_create_team_uses_the_slug_github_returns():
+    _s, out, err, log, rc = run_script(
+        {"TEST_TEAM_EXISTS": "0", "IN_CREATE": "true", "TEST_NEW_SLUG": "sponsoring-admins-1"}
+    )
+    assert rc == 0, out + err
+    assert "using 'sponsoring-admins-1'" in out, out
+    assert "-X PUT orgs/FreeForCharity/teams/sponsoring-admins-1/memberships/octocat" in log, log
+
+
+def test_a_failed_user_lookup_is_not_reported_as_not_found():
+    _s, out, err, log, rc = run_script({"TEST_USER_MISSING": "5xx"})
+    assert rc == 1, out + err
+    assert "Could not look up GitHub user 'octocat'" in out and "was not found" not in out, out
+    assert "-X PUT" not in log, log
+
+
+def test_a_glob_username_is_not_expanded_to_file_names():
+    _s, out, err, log, rc = run_script({"IN_USER": "*"})
+    assert rc == 1, out + err
+    assert "Invalid GitHub username: '*'." in out, out
+    assert "users/" not in log, log
+
+
+def test_a_pending_member_with_another_role_gets_the_role_change():
+    _s, out, err, log, rc = run_script({"TEST_MEMBERSHIP": "pending member", "IN_ROLE": "maintainer"})
+    assert rc == 0, out + err
+    assert "-f role=maintainer" in log, log
+
+
 def test_create_team_dry_run_creates_nothing():
     _s, out, err, log, rc = run_script({"TEST_TEAM_EXISTS": "0", "IN_CREATE": "true", "IN_DRY": "true"})
     assert rc == 0, out + err
@@ -283,7 +313,7 @@ def test_workflow_shape_keeps_list_and_dry_run_off_the_gate():
     assert pre["environment"] == "github-prod-read"
     assert app["environment"] == "github-prod"
     assert app["needs"] == "preflight"
-    assert "inputs.dry_run != true" in app["if"] and "inputs.action != 'list'" in app["if"]
+    assert app["if"] == "inputs.dry_run != true && inputs.action != 'list'"
 
     def runs(job):
         return [s for s in job["steps"] if "org-team-membership.sh" in str(s.get("run", ""))]

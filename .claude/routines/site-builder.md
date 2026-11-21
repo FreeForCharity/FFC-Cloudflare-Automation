@@ -25,7 +25,8 @@ the charity's public contact.
 
 2. Skip an item labelled `builder:volunteer`, whatever its other labels: a volunteer builds that
    charity by hand (docs/volunteer-site-builders.md), and that label is the only thing that says so.
-   Skip an item whose newest `<!-- charity-lane:claim ... -->` comment has `until` in the future.
+   Skip an item whose newest `<!-- charity-lane:claim ... -->` comment has `until` in the future,
+   unless a `<!-- charity-lane:release ... -->` comment is newer than it (a volunteer stepped back).
 3. Claim the first one left: remove `lane:build-ready`, add `lane:building`, and comment
    `<!-- charity-lane:claim holder=<your session URL> until=<now + 3 h, UTC ISO> -->`. Re-read the
    item; if another claim newer than yours appears, release yours and stop this brief. Once the

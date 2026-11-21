@@ -38,6 +38,7 @@ import csv
 import datetime as dt
 import io
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -111,6 +112,10 @@ class Refused(Exception):
 
 
 def gh(path: str, method: str = "GET", body: dict | None = None):
+    # 703 runs `build-queue` with a write-capable PAT; VOLUNTEER_ASSIGN_READ_ONLY=1
+    # makes any write a hard error there, whatever a future change does.
+    if method != "GET" and os.environ.get("VOLUNTEER_ASSIGN_READ_ONLY") == "1":
+        raise RuntimeError(f"refusing gh api {method} {path}: VOLUNTEER_ASSIGN_READ_ONLY=1")
     cmd = ["gh", "api", "-X", method, path]
     if body is not None:
         cmd += ["--input", "-"]
@@ -233,7 +238,8 @@ def plan_claim(item: dict, comments: list[dict], login: str, held_by_login: list
 
     `held_by_login` is every open lane item this volunteer already holds.
     `adopt` records a volunteer who is ALREADY building this charity (the item
-    may be past build-ready); it never takes an item from another holder.
+    may be past build-ready); it never takes an item from another volunteer or
+    from an in-date automated lease.
     """
     if not LOGIN_RE.match(login):
         raise Refused(f"{login!r} is not a GitHub username")
@@ -250,6 +256,15 @@ def plan_claim(item: dict, comments: list[dict], login: str, held_by_login: list
         raise Refused(f"#{item['number']} is already held by @{login}; nothing to do")
     if h["kind"] == "automated" and not adopt:
         raise Refused(f"#{item['number']} is held by the automated lane ({stage_of(item)})")
+    if adopt:
+        # --adopt records a volunteer already building a charity; it must never
+        # take one the Site Builder is working on right now (an in-date lease).
+        c = latest_claim(comments)
+        if c and c["kind"] == "claim" and not c["holder"].startswith("volunteer:"):
+            until = parse_iso(c["until"])
+            if until and until > now:
+                raise Refused(f"#{item['number']} has an in-date automated lease until {c['until']}; "
+                              "wait for it to end before adopting")
     if h["kind"] in ("waiting-on-charity",) and not adopt:
         raise Refused(f"#{item['number']} is waiting on the charity (lane:needs-info)")
     others = [i for i in held_by_login if i["number"] != item["number"]]
@@ -373,22 +388,33 @@ def holds_of(login: str, items: list[dict], now: dt.datetime) -> list[dict]:
 
 
 def apply_writes(plan: dict) -> list[str]:
+    """Write a plan. Order matters for a partial failure: the comment (the
+    record) first, then the labels to add, then the assignee, and the labels to
+    remove last, so a failure part way leaves the item over-labelled rather
+    than with no lane label or no record."""
     n, notes = plan["item"], []
+    gh(f"repos/{HUB}/issues/{n}/comments", "POST", {"body": plan["comment"]})
+    if plan.get("add_labels"):
+        gh(f"repos/{HUB}/issues/{n}/labels", "POST", {"labels": plan["add_labels"]})
+    if plan.get("assign"):
+        try:
+            got = gh(f"repos/{HUB}/issues/{n}/assignees", "POST", {"assignees": [plan["assign"]]})
+        except RuntimeError as e:
+            got = None
+            notes.append(f"assignee not set: {e}")
+        if got is not None and plan["assign"] not in [a["login"] for a in (got or {}).get("assignees", [])]:
+            notes.append(f"GitHub dropped @{plan['assign']} as assignee (no access to this repo yet); "
+                         "the claim comment still records the hold")
+    if plan.get("unassign"):
+        try:
+            gh(f"repos/{HUB}/issues/{n}/assignees", "DELETE", {"assignees": [plan["unassign"]]})
+        except RuntimeError as e:
+            notes.append(f"assignee not removed: {e}")
     for lab in plan.get("remove_labels", []):
         try:
             gh(f"repos/{HUB}/issues/{n}/labels/{lab}", "DELETE")
         except RuntimeError as e:
             notes.append(f"label {lab} not removed: {e}")
-    if plan.get("add_labels"):
-        gh(f"repos/{HUB}/issues/{n}/labels", "POST", {"labels": plan["add_labels"]})
-    if plan.get("assign"):
-        got = gh(f"repos/{HUB}/issues/{n}/assignees", "POST", {"assignees": [plan["assign"]]})
-        if plan["assign"] not in [a["login"] for a in (got or {}).get("assignees", [])]:
-            notes.append(f"GitHub dropped @{plan['assign']} as assignee (no access to this repo yet); "
-                         "the claim comment still records the hold")
-    if plan.get("unassign"):
-        gh(f"repos/{HUB}/issues/{n}/assignees", "DELETE", {"assignees": [plan["unassign"]]})
-    gh(f"repos/{HUB}/issues/{n}/comments", "POST", {"body": plan["comment"]})
     return notes
 
 

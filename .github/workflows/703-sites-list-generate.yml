@@ -281,6 +281,8 @@ jobs:
       # reads hub issues and each charity repo's newest commit. A failed read
       # keeps last week's files rather than publishing a partial queue.
       - name: Generate build queue (CSV + JSON)
+        env:
+          VOLUNTEER_ASSIGN_READ_ONLY: '1'
         run: |
           set -uo pipefail
           if ! python3 scripts/volunteer_assign.py build-queue --out-dir tmp_data/build-queue; then

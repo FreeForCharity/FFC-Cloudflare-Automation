@@ -40,6 +40,9 @@
 # planned cleanly, or the list was read in full); 1 otherwise.
 
 set -uo pipefail
+# No glob expansion: the user list is split on whitespace unquoted, and a
+# username of `*` must not become the names of files in the checkout.
+set -f
 
 # `gh api` writes its error JSON to STDOUT, so `gh … 2>/dev/null || echo <default>`
 # yields the error text with the default appended (ledger L02). api_get keeps
@@ -195,9 +198,16 @@ if [ "$team_exists" = "no" ]; then
     echo "[DRY RUN] Would create team '$team' in $org (closed, no repository access)."
     summary "### Team \`$team\` in \`$org\`" "" "- Would create the team (closed, no repository access)."
   else
-    if ! gh api -X POST "orgs/$org/teams" -f name="$team" -f privacy=closed -f description="$desc" \
-      --jq '.slug' >/dev/null 2>"$ERR_FILE"; then
+    # GitHub adds the token's owner (the org owner whose PAT this is) to a new
+    # team as its maintainer. That is expected: the owner is the verifier.
+    if ! new_slug="$(gh api -X POST "orgs/$org/teams" -f name="$team" -f privacy=closed -f description="$desc" \
+      --jq '.slug' 2>"$ERR_FILE")"; then
       fail "Could not create team '$team' in $org: $(tr '\n' ' ' <"$ERR_FILE"). A 403 usually means the PAT lacks organization members WRITE."
+    fi
+    new_slug="$(trim "$new_slug")"
+    if [ -n "$new_slug" ] && [ "$new_slug" != "$team" ]; then
+      echo "::warning::GitHub gave the new team the slug '$new_slug' (asked for '$team'); using '$new_slug'."
+      team="$new_slug"
     fi
     echo "Created team '$team' in $org (closed, no repository access)."
     summary "### Team \`$team\` in \`$org\`" "" "- Created the team (closed, no repository access)."
@@ -224,8 +234,13 @@ for raw in $users; do
     continue
   fi
   if ! user_err="$(api_get "users/$u" --jq '.login' 2>&1 >/dev/null)"; then
-    echo "::error::GitHub user '$u' was not found (${user_err:-unknown error})."
-    failed+=("$u (not found)")
+    if printf '%s' "$user_err" | grep -q '404'; then
+      echo "::error::GitHub user '$u' was not found."
+      failed+=("$u (not found)")
+    else
+      echo "::error::Could not look up GitHub user '$u' (${user_err:-unknown error})."
+      failed+=("$u (lookup failed)")
+    fi
     continue
   fi
 
@@ -259,9 +274,12 @@ for raw in $users; do
         plan="change $u's role on $team from $cur_role to $role"
         ;;
       pending)
-        echo "$u is already pending on $team (role $cur_role, waiting for them to accept the org invitation); not re-sending."
-        done_list+=("$u (already pending as $cur_role)")
-        continue
+        if [ "$cur_role" = "$role" ]; then
+          echo "$u is already pending on $team (role $cur_role, waiting for them to accept the org invitation); not re-sending."
+          done_list+=("$u (already pending as $cur_role)")
+          continue
+        fi
+        plan="change $u's pending role on $team from $cur_role to $role"
         ;;
       *) plan="add $u to $team as $role" ;;
     esac

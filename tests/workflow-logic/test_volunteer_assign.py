@@ -92,6 +92,33 @@ def test_claim_refuses_the_automated_lanes_items_unless_adopting():
     assert p["remove_labels"] == [] and p["stage_after"] == "lane:validate"
 
 
+def test_adopt_refuses_an_in_date_automated_lease():
+    lease = [claim("https://claude.ai/code/session_x", "2026-11-21T05:00:00Z")]
+    assert refused(va.plan_claim, item(5, "lane:building"), lease, "yojoe26", [], NOW, adopt=True)
+    expired = [claim("https://claude.ai/code/session_x", "2026-11-21T01:00:00Z")]
+    assert not refused(va.plan_claim, item(5, "lane:building"), expired, "yojoe26", [], NOW, adopt=True)
+
+
+def test_apply_writes_posts_the_record_first_and_removes_labels_last():
+    calls = []
+    orig = va.gh
+    va.gh = lambda path, method="GET", body=None: calls.append((method, path)) or {"assignees": []}
+    try:
+        p = va.plan_claim(item(5), [], "yojoe26", [], NOW)
+        p["comment"] = va.claim_comment(p)
+        va.apply_writes(p)
+    finally:
+        va.gh = orig
+    methods = [m for m, _ in calls]
+    assert calls[0][1].endswith("/comments") and methods[0] == "POST", calls
+    assert methods[-1] == "DELETE" and calls[-1][1].endswith("labels/lane:build-ready"), calls
+
+
+def test_site_builder_brief_honours_a_release():
+    text = (REPO_ROOT / ".claude" / "routines" / "site-builder.md").read_text(encoding="utf-8")
+    assert "charity-lane:release" in text
+
+
 def test_claim_refuses_a_website_request_item():
     assert refused(va.plan_claim, item(5, extra=["website-request"]), [], "yojoe26", [], NOW)
 
@@ -208,6 +235,21 @@ def test_703_publishes_the_build_queue():
     text = (REPO_ROOT / ".github" / "workflows" / "703-sites-list-generate.yml").read_text(encoding="utf-8")
     assert "scripts/volunteer_assign.py build-queue" in text
     assert "sites-list/build_queue.csv" in text and "sites-list/build_queue.json" in text
+    assert "VOLUNTEER_ASSIGN_READ_ONLY: '1'" in text
+
+
+def test_read_only_mode_refuses_writes():
+    import os
+    os.environ["VOLUNTEER_ASSIGN_READ_ONLY"] = "1"
+    try:
+        try:
+            va.gh("repos/x/y/issues/1/comments", "POST", {"body": "x"})
+        except RuntimeError as e:
+            assert "VOLUNTEER_ASSIGN_READ_ONLY" in str(e)
+        else:
+            raise AssertionError("write was not refused")
+    finally:
+        del os.environ["VOLUNTEER_ASSIGN_READ_ONLY"]
 
 
 def main():

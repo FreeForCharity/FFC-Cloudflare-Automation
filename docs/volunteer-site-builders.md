@@ -63,25 +63,29 @@ follow-up steps, done in the same sitting:
 - **ffcadmin work order:** assign the volunteer and set `status:active-build` (`status:live` if the
   site already serves its domain).
 
-## Verifying a volunteer: the `sponsoring-admins` team
+## Verifying a volunteer: `next-gen-website-team` membership
 
-ffcadmin treats membership of the org team `sponsoring-admins` as FFC's record that a volunteer was
-verified (program plan section 8), and its `verify-assignment.yml` reverts a work-order assignee who
-is not on it. The team grants no repository access; `729` does that per repo. Before 2026-11-21 the
-team was planned but had never been created.
+ffcadmin treats membership of the org team `next-gen-website-team` as FFC's record that a volunteer
+was verified (program plan section 8), and its `verify-assignment.yml` reverts a work-order assignee
+who is not on it. Clarke chose this existing team on 2026-11-21 instead of a new `sponsoring-admins`
+team, which was planned but never created. Unlike that plan, `next-gen-website-team` carries
+repository access of its own (for example push on ffcadmin), so adding someone gives them that
+access too. Its child team `ffc-template-write` counts as membership: GitHub reports a child team's
+members as members of the parent, so they pass the verification check as well. Per charity repo,
+`729` still grants write.
 
 `754. Org - Team Membership` manages it. Dispatch with `action=list` first (read only, no gate) to
 see every org team and its members. Adding someone runs behind the `github-prod` gate:
 
 ```text
-754  action=add  team=sponsoring-admins  username=<login>  dry_run=true    # the plan
-754  action=add  team=sponsoring-admins  username=<login>  dry_run=false   # approve the gate
+754  action=add  team=next-gen-website-team  username=<login>  dry_run=true    # the plan
+754  action=add  team=next-gen-website-team  username=<login>  dry_run=false   # approve the gate
 ```
 
-`create_team=true` on the first add creates the team (closed, no repository access). Someone who is
-not yet an org member gets an org invitation and stays `pending` on the team until they accept.
-`action=remove` takes a person off the team only; their org membership and repo access are
-untouched.
+`create_team=true` creates a missing team (closed, no repository access); it is not needed for
+`next-gen-website-team`, which exists. Someone who is not yet an org member gets an org invitation
+and stays `pending` on the team until they accept. `action=remove` takes a person off the team only;
+their org membership and repo access are untouched.
 
 **Limits.** One charity per volunteer until one of theirs reaches the charity's review
 (`lane:charity-review` or later), then up to three, ffcadmin's sponsor cap.

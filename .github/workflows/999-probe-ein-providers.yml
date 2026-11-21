@@ -1,0 +1,29 @@
+name: 999. Research - EIN provider probe (temporary, do not merge)
+
+# One-off research probe for the "Find alternatives to Candid verification" thread.
+# Read-only: fetches public pages and IRS bulk files, no secrets, no writes.
+on:
+  push:
+    branches:
+      - claude/project-thread-37d1o2
+    paths:
+      - scripts/probe_ein_providers.py
+      - .github/workflows/999-probe-ein-providers.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe providers
+        run: |
+          python3 scripts/probe_ein_providers.py
+          cat probe-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-report
+          path: probe-report.md

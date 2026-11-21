@@ -155,7 +155,7 @@ jobs:
             const issueNumber = Number('${{ inputs.issue_number }}');
 """
 
-# 702-ffc-ex-clone-deploy.yml:271 — the input reaches the script through a
+# 702-ffc-ex-clone-deploy.yml:385 — the input reaches the script through a
 # `format()` inside a larger expression, not the bare `${{ inputs.x }}` spelling.
 _DEFECT_NESTED_EXPRESSION = """
 name: '999. Sample'

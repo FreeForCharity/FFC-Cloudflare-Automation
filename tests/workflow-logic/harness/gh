@@ -114,6 +114,28 @@ case "$cmd" in
           exit 1
         fi
         ;;
+      *contents/_disabled_template_routes*)
+        # 702 preflight (#1538): has a 702 clone already COMPLETED in the target?
+        # The integration step creates `_disabled_template_routes/`, so its presence
+        # is positive evidence, unlike a 200 on the default Pages URL (which 720
+        # produces for every freshly created repo). Positioned before the generic
+        # *contents/*) and *repos/*) cases, both of which would answer 200 here and
+        # make the marker read as present in every scenario.
+        #   TEST_CLONE_MARKER=present -> 200
+        #   TEST_CLONE_MARKER=error   -> non-404 failure, body on STDOUT (ledger L02)
+        #   unset / anything else     -> 404, i.e. never cloned (the common case)
+        case "${TEST_CLONE_MARKER:-}" in
+          present) echo '{"name":"_disabled_template_routes","type":"dir"}' ;;
+          error)
+            echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+            exit 1
+            ;;
+          *)
+            echo "gh: Not Found (HTTP 404)" >&2
+            exit 1
+            ;;
+        esac
+        ;;
       *contents/.github/workflows/deploy.yml*)
         # 746 preflight: does the target repo carry deploy.yml on its default
         # branch? Positioned before the generic *contents/*) (738) and
@@ -169,6 +191,23 @@ case "$cmd" in
               echo '{"message":"Validation Failed","status":"422"}'
               exit 1
             fi
+            ;;
+          *cname*)
+            # 702 preflight (#1538): is a custom domain bound on the target yet?
+            # Reached only by a GET asking for `.cname` -- 120's PUT/`-f cname=`
+            # forms are matched by the "-X PUT " case above, and 120's cert-state
+            # GET and 746's bare GET both fall through to the catch-all below.
+            # An unbound domain is the EXPECTED pre-cutover state, so the default
+            # is empty rather than a name.
+            if [ "${TEST_PAGES_NOT_CONFIGURED:-}" = "1" ]; then
+              echo "Not Found (HTTP 404)" >&2
+              exit 1
+            fi
+            if [ "${TEST_PAGES_GET_FAIL:-}" = "1" ]; then
+              echo '{"message":"Resource not accessible by personal access token","status":"403"}'
+              exit 1
+            fi
+            printf '%s\n' "${TEST_PAGES_CNAME:-}"
             ;;
           *)
             # 746: "Pages not configured yet" is a real 404, distinct from a

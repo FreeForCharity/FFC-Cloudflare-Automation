@@ -142,8 +142,10 @@ function Get-CandidProfilePageVerdict {
     #>
     param([AllowEmptyString()][AllowNull()][string]$Text)
     $t = [string]$Text
+    # The full profile is checked first: it can carry the summary page's
+    # "Suggest an edit" / "Claim it here" wording too (803 self-test).
+    if ($t -match '(?i)IRS subsection' -and $t -match '(?i)\bPrograms\b' -and $t -match '(?i)\bPeople\b') { return 'full' }
     if ($t -match '(?i)Claim it here' -or $t -match '(?i)Suggest an edit') { return 'summary_only' }
-    if ($t -match '(?i)IRS subsection' -and $t -match '(?i)\bPrograms\b') { return 'full' }
     return 'unverified'
 }
 
@@ -199,6 +201,12 @@ function Invoke-CandidJudge {
         $width = if ($r.footer) { [int]$r.footer.width } else { 0 }
         $page = Get-CandidProfilePageVerdict -Text ([string]$r.profile.text)
         $badge = Get-CandidBadgeVerdict -SealVerdict $seal.verdict -FooterWidth $width -PageVerdict $page
+        $text = [string]$r.profile.text
+        foreach ($w in 'IRS subsection', 'Claim it here', 'Suggest an edit') {
+            $i = $text.IndexOf($w, [StringComparison]::OrdinalIgnoreCase)
+            $ctx = if ($i -ge 0) { $text.Substring([Math]::Max(0, $i - 60), [Math]::Min(140, $text.Length - [Math]::Max(0, $i - 60))) } else { '' }
+            Write-Host ("  {0} '{1}' at {2} of {3}: {4}" -f $id, $w, $i, $text.Length, $ctx)
+        }
         $rows.Add([pscustomobject]@{ url = [string]$r.url; profileId = $id; seal = $seal.verdict; level = $seal.level; badge = $width; page = $page; ok = $badge.ok; why = $badge.why })
     }
     return $rows

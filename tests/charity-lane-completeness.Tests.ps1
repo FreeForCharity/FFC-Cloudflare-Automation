@@ -511,6 +511,8 @@ Describe 'Candid seal widget answers (workflow 803, measured 2026-11-21)' {
         Get-CandidProfilePageVerdict -Text $full | Should -Be 'full'
         Get-CandidProfilePageVerdict -Text $stub | Should -Be 'summary_only'
         Get-CandidProfilePageVerdict -Text '' | Should -Be 'unverified'
+        # The full page can carry the summary page's wording further down.
+        Get-CandidProfilePageVerdict -Text ($full + ' People CEO ... Suggest an edit') | Should -Be 'full'
     }
 
     It 'a footer badge works only with a visible seal, a rendered image and a full signed-out page' {

@@ -1,0 +1,29 @@
+repo,login,side,prs,first_pr,last_pr,evidence
+FFC-EX-aariasblueelephant.org,aariasblueelephant-create,charity,311,2026-05-23,2026-11-20,account named for the charity
+FFC-EX-bearupinternationalministries.org,patrickbearup94-ops,charity,11,2026-06-06,2026-07-20,account named for the ministry's family name
+FFC-EX-bintobetter.org,3xyy,charity-likely,4,2026-04-08,2026-11-06,only this charity's repo; officer roster edits
+FFC-EX-bintobetter.org,AmazingPythonCoder,charity-likely,6,2026-08-05,2026-10-01,only this charity's repo; site redesign
+FFC-EX-bintobetter.org,vk0xcipher,charity-likely,16,2026-02-25,2026-03-13,only this charity's repo; Next.js migration
+FFC-EX-cactuswrenpreschool.com,BrianLenzmeier,charity,45,2026-07-27,2026-08-22,named on the charity's own site (src/lib/cw.ts)
+FFC-EX-cactuswrenpreschool.com,Tyler-Carlotto,ffc-volunteer,2,2026-07-27,2026-11-17,FFC Secretary; holds hub #1787
+FFC-EX-clarasbridge.org,ldelpozzo,charity-likely,7,2026-04-06,2026-04-06,only this charity's repo; donation link edits
+FFC-EX-friendsof362.org,loucapo,charity-likely,1,2026-07-21,2026-07-21,only this charity's repo
+FFC-EX-garrisonareacaregivers.org,2fatdogs,charity-likely,30,2026-06-13,2026-10-28,only this charity's repo; published the site
+FFC-EX-genesisbridgecharities.org,yojoe26,ffc-volunteer,0,,,FFC volunteer site builder; holds hub #1769
+FFC-EX-iwilf.org,Cole-Parsons,charity-likely,4,2026-10-27,2026-11-04,only this charity's repo; design pages
+FFC-EX-jwvpost619.org,JWV619,charity,4,2026-05-27,2026-07-13,account named for the post
+FFC-EX-jwvpost619.org,aaronprojects1,charity-likely,6,2026-04-13,2026-04-27,only this charity's repo; site migration
+FFC-EX-jwvpost619.org,masterpost619,charity,2,2026-05-01,2026-05-01,account named for the post
+FFC-EX-mitchellnchistory.org,DrDan1861,charity-likely,27,2026-06-07,2026-11-17,only this charity's repo; mission and content edits
+FFC-EX-neurospike.org,goldspruce,charity,1,2026-09-26,2026-09-26,linked from the charity's own site
+FFC-EX-newheightseducation.org,phoganuci,ffc-volunteer,72,2026-10-01,2026-11-19,FFC volunteer (Patrick); holds hub #1788
+FFC-EX-rebirthsdc.org,Lalexander7414,charity-likely,66,2026-06-02,2026-10-31,only this charity's repo; design work
+FFC-EX-restoredradiancefoundation.org,rrfskin-care,charity,3,2026-07-13,2026-07-13,account named for the charity
+FFC-EX-shawspousesclub.org,amcpeek19,charity,26,2026-11-03,2026-11-18,board member on the charity's own site (src/data/board.ts)
+FFC-EX-shawspousesclub.org,LBCron,charity-likely,1,2026-11-08,2026-11-08,only this charity's repo; security.txt
+FFC-EX-slopestohope.org,drewrobertssth,charity,82,2026-09-13,2026-11-16,founder named on the charity's own site
+FFC-EX-sporting2Impact.org,sporting2impact,charity,1,2026-01-29,2026-01-29,account named for the charity
+FFC-EX-technomonasteries.org,TiffanyLawrence,charity,2,2026-07-02,2026-07-02,co-founder named on the charity's own site
+FFC-EX-theeverythingproject.org,phoganuci,ffc-volunteer,21,2026-09-26,2026-09-26,FFC volunteer (Patrick); wave-1 migration
+FFC-EX-thewayofyeshuaministries.org,patrickbearup94-ops,charity,43,2026-06-06,2026-11-17,same ministry family as bearupinternationalministries.org
+FFC-EX-vpmin.org,solomon-vpmin,charity,15,2026-10-29,2026-11-13,account named for the charity; wrote its site-manager guide

@@ -171,6 +171,34 @@ def test_repo_named_in_the_body_wins_over_the_title():
     assert va.repo_of(item(1, title="[CHARITY-LANE] Some Org Name")) == ""
 
 
+MAINT = [
+    {"repo": "FFC-EX-charity7.org", "login": "siteboss", "side": "charity", "last_pr": "2026-11-15"},
+    {"repo": "FFC-EX-charity7.org", "login": "oldhand", "side": "charity-likely", "last_pr": "2026-03-01"},
+    {"repo": "FFC-EX-charity7.org", "login": "v", "side": "ffc-volunteer", "last_pr": "2026-11-20"},
+]
+
+
+def test_charity_maintainers_show_in_the_queue_but_never_hold():
+    i = item(7)
+    r = va.queue_row(i, [], "", NOW, MAINT)
+    assert r["holder"] == "Open"  # a charity-side maintainer is not a hold
+    assert r["charity_maintainers"] == "siteboss oldhand"
+
+
+def test_claim_on_a_charity_with_an_active_maintainer_warns_and_still_plans():
+    notes = va.maintainer_notes("FFC-EX-charity7.org", MAINT, NOW)
+    assert len(notes) == 2 and "coordinate" in notes[0] and "coordinate" not in notes[1]
+    p = va.plan_claim(item(7), [], "yojoe26", [], NOW)
+    p["notes"] = notes
+    assert "siteboss" in va.claim_comment(p) and "@" not in va.claim_comment(p)
+
+
+def test_the_committed_maintainers_file_parses_with_known_sides():
+    rows = va.load_maintainers()
+    assert rows and all(r["side"] in {"charity", "charity-likely", "ffc-volunteer"} for r in rows)
+    assert all(r["repo"].startswith("FFC-EX-") for r in rows)
+
+
 def test_site_builder_brief_skips_volunteer_holds():
     text = (REPO_ROOT / ".claude" / "routines" / "site-builder.md").read_text(encoding="utf-8")
     assert "builder:volunteer" in text

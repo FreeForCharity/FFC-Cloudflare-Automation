@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-21T02:29:52Z",
+  "generated_at": "2026-11-21T02:49:30Z",
   "source": "FreeForCharity/FFC-Cloudflare-Automation charity-lane items",
   "rows": [
     {
@@ -12,7 +12,8 @@
       "repo": "https://github.com/FreeForCharity/FFC-EX-eastridgepto.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-eastridgepto.org/",
       "last_repo_activity": "2026-11-17",
-      "stale": ""
+      "stale": "",
+      "charity_maintainers": ""
     },
     {
       "item": 1769,
@@ -24,7 +25,8 @@
       "repo": "https://github.com/FreeForCharity/FFC-EX-genesisbridgecharities.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-genesisbridgecharities.org/",
       "last_repo_activity": "2026-11-18",
-      "stale": "no"
+      "stale": "no",
+      "charity_maintainers": ""
     },
     {
       "item": 1787,
@@ -34,9 +36,10 @@
       "holder": "Volunteer @Tyler-Carlotto",
       "held_since": "2026-11-21",
       "repo": "https://github.com/FreeForCharity/FFC-EX-cactuswrenpreschool.com",
-      "preview_url": "https://freeforcharity.github.io/FFC-EX-cactuswrenpreschool.com/",
+      "preview_url": "https://cactuswrenpreschool.com/",
       "last_repo_activity": "2026-11-17",
-      "stale": "no"
+      "stale": "no",
+      "charity_maintainers": "BrianLenzmeier"
     },
     {
       "item": 1788,
@@ -48,7 +51,8 @@
       "repo": "https://github.com/FreeForCharity/FFC-EX-newheightseducation.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-newheightseducation.org/",
       "last_repo_activity": "2026-11-19",
-      "stale": "no"
+      "stale": "no",
+      "charity_maintainers": ""
     },
     {
       "item": 1738,
@@ -60,7 +64,8 @@
       "repo": "https://github.com/FreeForCharity/FFC-EX-btsscv.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-btsscv.org/",
       "last_repo_activity": "2026-11-17",
-      "stale": ""
+      "stale": "",
+      "charity_maintainers": ""
     },
     {
       "item": 1739,
@@ -72,7 +77,8 @@
       "repo": "https://github.com/FreeForCharity/FFC-EX-projectherinc.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-projectherinc.org/",
       "last_repo_activity": "2026-11-17",
-      "stale": ""
+      "stale": "",
+      "charity_maintainers": ""
     }
   ]
 }

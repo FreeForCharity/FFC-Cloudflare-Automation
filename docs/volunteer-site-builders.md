@@ -77,6 +77,24 @@ follow-up steps, done in the same sitting:
   build queue marks the hold `stale=yes` and the run warns. **A stale hold is flagged to Clarke and
   never released without his yes.** An unreadable repo is `unknown`, never stale.
 
+## Charity-side site managers
+
+Many charity repos already have someone from the charity working in them: an officer, a staff
+member, or the charity's own volunteer. They are **not holders**. They never use an FFC volunteer's
+slot, are never flagged stale and are never released; the site is theirs. They are listed in
+`sites-list/site_maintainers.csv` (repo, login, side, PR count and dates, evidence), with `side`:
+
+- `charity`: confirmed from the charity's side, because the account is named for the charity or the
+  person is named on the charity's own site;
+- `charity-likely`: works only in that charity's repo, with nothing tying the account to FFC;
+- `ffc-volunteer`: an FFC volunteer builder, who also holds the charity on its hub issue.
+
+The build queue shows each charity's charity-side maintainers, and `claim` prints them (and puts
+them in the claim comment, without an `@`) so the FFC volunteer coordinates with them, marking
+anyone with a PR in the last 30 days. Add a row when someone new starts working in a charity's repo;
+move a `charity-likely` row to `charity` when the evidence firms up. The first list (2026-11-21)
+came from every pull request in the org's charity repos not authored by FFC staff or a bot.
+
 ## What the automated lane does with a volunteer's charity
 
 Nothing. The Site Builder skips any item labelled `builder:volunteer`

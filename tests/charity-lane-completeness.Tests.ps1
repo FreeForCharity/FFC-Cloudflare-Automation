@@ -428,7 +428,7 @@ Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)'
 
     It 'with both answers given, the shareable link is chosen over the signed-in-only one (order 883)' {
         $fields = New-AppFields -Override @{
-            'Public GuideStar Profile Link'                         = $script:AppCandid
+            'Public GuideStar Profile Link'                              = $script:AppCandid
             'Candid / GuideStar direct (shared) profile link (optional)' = $script:AppCandidSharedEin
         }
         $t = Get-LaneCompletenessTargets -Fields $fields -ProductPid 33

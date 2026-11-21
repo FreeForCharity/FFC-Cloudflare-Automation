@@ -190,17 +190,17 @@ function Read-SiteFieldsConfig {
             throw "Site-fields config: field '$key' uses the maintainer GitHub label pattern but is not of type githubUser."
         }
         $fields.Add([pscustomobject]@{
-                key                  = $key
-                type                 = $type
-                clientField          = $client
-                productFields        = $products
-                productLabelPatterns = $patterns
-                maxLength            = if ($f.maxLength) { [int]$f.maxLength } else { 0 }
-                maxItems             = if ($f.maxItems) { [int]$f.maxItems } else { 0 }
-                multiline            = [bool]$f.multiline
-                hosts                = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
-                rejectPathPatterns   = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
-                rejectHosts          = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                key                     = $key
+                type                    = $type
+                clientField             = $client
+                productFields           = $products
+                productLabelPatterns    = $patterns
+                maxLength               = if ($f.maxLength) { [int]$f.maxLength } else { 0 }
+                maxItems                = if ($f.maxItems) { [int]$f.maxItems } else { 0 }
+                multiline               = [bool]$f.multiline
+                hosts                   = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                rejectPathPatterns      = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
+                rejectHosts             = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
                 # host -> query parameter a link on that host must carry to open
                 # signed out (Candid's shareable profile link carries pkId).
                 hostRequiredQueryParams = @($f.hostRequiredQueryParams | Where-Object { $_ -and $_.host -and $_.param } | ForEach-Object {

@@ -35,6 +35,7 @@ jobs:
       - name: HTTP check of names missing from Cloudflare
         if: always()
         run: |
+          set +e
           for h in www.school www.publications www.radio radio dev www.dev store nhegmail www.nhegmail website-263517e5 website-fb4345df nhegedguide cpanel webmail mail ftp school publications; do
             f="$h.newheightseducation.org"
             ip=$(dig +short A "$f" @ns1.bluehost.com | tail -1)

@@ -63,15 +63,16 @@ follow-up steps, done in the same sitting:
 - **ffcadmin work order:** assign the volunteer and set `status:active-build` (`status:live` if the
   site already serves its domain).
 
-## Verifying a volunteer: the `next-gen-website-team` team
+## Verifying a volunteer: `next-gen-website-team` membership
 
 ffcadmin treats membership of the org team `next-gen-website-team` as FFC's record that a volunteer
 was verified (program plan section 8), and its `verify-assignment.yml` reverts a work-order assignee
 who is not on it. Clarke chose this existing team on 2026-11-21 instead of a new `sponsoring-admins`
 team, which was planned but never created. Unlike that plan, `next-gen-website-team` carries
-repository access of its own (for example push on ffcadmin) and is the parent of
-`ffc-template-write`, so adding someone gives them that access too. Per charity repo, `729` still
-grants write.
+repository access of its own (for example push on ffcadmin), so adding someone gives them that
+access too. Its child team `ffc-template-write` counts as membership: GitHub reports a child team's
+members as members of the parent, so they pass the verification check as well. Per charity repo,
+`729` still grants write.
 
 `754. Org - Team Membership` manages it. Dispatch with `action=list` first (read only, no gate) to
 see every org team and its members. Adding someone runs behind the `github-prod` gate:

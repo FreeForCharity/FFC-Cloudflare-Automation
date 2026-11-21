@@ -669,6 +669,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 751 | Website - Security Overrides Sync (FFC-EX) [GH] | `751-website-security-overrides-sync.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 752 | Repo - Merge Queue Backfill (FFC-EX) [GH] | `752-repo-merge-queue-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 753 | Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH] | `753-charity-lane-gate-broker.yml` | schedule, workflow_dispatch | Writes (policy approvals) | charity-lane-broker (no reviewer, `main` only) |
+| 754 | Org - Team Membership [Org] | `754-org-team-membership.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

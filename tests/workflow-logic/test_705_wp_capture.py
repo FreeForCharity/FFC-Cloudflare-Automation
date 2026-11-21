@@ -449,6 +449,126 @@ def test_the_capture_brings_navigation_home_and_gates_on_what_it_missed():
         assert f"ok   {case}" in out, f"coverage for {case!r} is gone:\n{out[-1500:]}"
 
 
+# --- a dispatch input is validated as a WHOLE value, never per line (#1724) --
+#
+# `grep` matches per line and `-q` exits 0 on the first match, so a `^…$`
+# pattern piped into it bounds the FIRST LINE of a value rather than the value.
+# `$GITHUB_OUTPUT` is line-based `key=value` too, which is what makes the pair
+# dangerous rather than untidy: a multiline value that clears validation writes
+# EXTRA outputs, and on a duplicate key the last line wins.
+
+
+def _error_lines(stdout: str) -> list[str]:
+    """Workflow-command lines the runner would actually act on.
+
+    Split on lines deliberately: a rejected value is echoed back (an operator
+    needs to see what failed), so the payload's own `::error::` text appears
+    inside the message. Escaped, it stays on the message's line; unescaped, it
+    becomes a second line and the runner obeys it.
+    """
+    return [line for line in stdout.splitlines() if line.startswith("::error::")]
+
+
+def test_a_multiline_domain_whose_first_line_is_a_valid_hostname_is_refused():
+    """The case the per-line pattern could not see: `a.org` matches, so a
+    piped `grep -q` exits 0 and everything after the newline rides along."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org\n::error::forged")
+    assert proc.returncode != 0, f"accepted a multiline domain:\n{outputs}"
+    assert "single line" in proc.stdout, proc.stdout
+    assert "forged" not in outputs, f"forged line reached $GITHUB_OUTPUT:\n{outputs!r}"
+
+
+def test_a_multiline_domain_cannot_forge_the_job_output_it_is_validated_for():
+    """The severity, not just the smell. `domain` is published as a job output,
+    the capture concurrency group keys on it, and the capture script is handed
+    it — and on a duplicate key in `$GITHUB_OUTPUT` the LAST line wins. So a
+    forged second `domain=` line does not add noise, it replaces the validated
+    value with an unvalidated one and points a live capture at it."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org\ndomain=evil.org")
+    assert proc.returncode != 0, f"accepted a domain that overrides its own output:\n{outputs}"
+    assert "evil.org" not in outputs, f"unvalidated host became the job output:\n{outputs!r}"
+
+
+def test_a_rejected_value_is_escaped_rather_than_emitting_a_second_command():
+    """The value stays in the message, so it must be escaped: `%0A`, not a
+    newline that turns the dispatcher's payload into its own command line."""
+    proc, _ = run_resolve(INPUT_DOMAIN="a.org\n::error::forged")
+    assert proc.returncode != 0, proc.stdout
+    assert len(_error_lines(proc.stdout)) == 1, proc.stdout
+    assert "%0A" in proc.stdout, proc.stdout
+
+
+def test_a_multiline_max_items_is_refused_rather_than_failing_loudly_and_passing():
+    """Measured before the fix: `grep` matched the first line, so the bounds
+    were evaluated — and `[ '500\\n…' -lt 1 ]` is not false, it is an ERROR.
+    It printed `integer expression expected` to stderr and returned 2, which
+    the `||` chain reads as "this bound is satisfied". The step then wrote the
+    forged line to `$GITHUB_OUTPUT` while complaining it could not evaluate
+    the value: the loudest possible failure, and a pass."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org", INPUT_MAX="500\n::error::forged")
+    assert proc.returncode != 0, f"accepted a multiline max_items:\n{outputs}"
+    assert "forged" not in outputs, f"forged line reached $GITHUB_OUTPUT:\n{outputs!r}"
+    assert "integer expression expected" not in proc.stderr, proc.stderr
+
+
+def test_a_multiline_delay_is_refused():
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org", INPUT_DELAY="250\n::error::forged")
+    assert proc.returncode != 0, f"accepted a multiline delay_ms:\n{outputs}"
+    assert "forged" not in outputs, f"forged line reached $GITHUB_OUTPUT:\n{outputs!r}"
+    assert "integer expression expected" not in proc.stderr, proc.stderr
+
+
+def test_a_carriage_return_in_the_domain_is_refused():
+    """A CR was already refused, for an incidental reason: `grep` keeps `\\r`
+    as part of the line, so the hostname pattern failed on it. Pinned because
+    the fix replaces that pattern — the new check names CR explicitly instead
+    of inheriting the behaviour."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org\r::error::forged")
+    assert proc.returncode != 0, f"accepted a CR-bearing domain:\n{outputs}"
+    assert "forged" not in outputs, outputs
+
+
+def test_a_newline_in_ignore_hosts_separates_entries_rather_than_injecting():
+    """`ignore_hosts` was already safe here, and the reason is worth pinning:
+    whitespace is a documented SEPARATOR for this input, so word splitting
+    hands an injected second line to the per-entry check as its own entry."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org", INPUT_IGNORE="b.org\n::error::forged")
+    assert proc.returncode != 0, f"accepted an injected ignore_hosts entry:\n{outputs}"
+    assert "is not a bare hostname" in proc.stdout, proc.stdout
+    assert "forged" not in outputs, outputs
+
+
+def test_a_newline_separated_ignore_list_is_still_accepted():
+    """The flip side of the rule above: a newline is a separator for this one
+    input, so refusing it outright would reject a legitimate pasted list."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org", INPUT_IGNORE="b.org\nc.org")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ignore_hosts=b.org,c.org" in outputs, outputs
+
+
+def test_surrounding_whitespace_in_numeric_inputs_is_trimmed_not_refused():
+    """The refusal is for an EMBEDDED newline. A paste's trailing one is
+    trimmed first, as `domain` has always done — otherwise this fix would turn
+    a harmless paste into a failed dispatch."""
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org", INPUT_MAX="400\n", INPUT_DELAY="  300  ")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max=400" in outputs, outputs
+    assert "delay=300" in outputs, outputs
+
+
+def test_no_dispatcher_value_is_validated_through_a_piped_grep():
+    """Reintroduction guard. Every anchored pattern in this step must be
+    applied with bash's `=~`, which bounds the whole string. A piped
+    `grep -qE '^…$'` reads as an equivalent spelling and is not one."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    offenders = [
+        line.strip()
+        for line in script.splitlines()
+        if "grep -q" in line and ("'^" in line or '"^' in line)
+    ]
+    assert not offenders, "per-line validation of a whole value (#1724):\n" + "\n".join(offenders)
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

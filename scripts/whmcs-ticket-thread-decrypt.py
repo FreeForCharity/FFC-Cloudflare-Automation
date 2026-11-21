@@ -13,6 +13,11 @@ wrapped with RSA-OAEP-SHA256). This is the requester's half:
     python3 scripts/whmcs-ticket-thread-decrypt.py decrypt --key /path/private.pem \
         whmcs-ticket-threads.enc.json > threads.json
 
+    # or, where artifacts cannot be downloaded (cloud sessions), from the
+    # job log, which carries the same ciphertext between markers:
+    python3 scripts/whmcs-ticket-thread-decrypt.py decrypt-log --key /path/private.pem \
+        job.log > threads.json
+
 Keep private.pem and the decrypted output OUT of any repository: they hold
 client PII. Needs the `cryptography` package.
 """
@@ -80,12 +85,65 @@ def decrypt_envelope(envelope: dict, private_key) -> bytes:
     return AESGCM(content_key).decrypt(b("nonce"), b("ciphertext") + b("tag"), aad)
 
 
-def decrypt(key_path: str, env_path: str) -> int:
+BEGIN_MARK = "BEGIN-FFC-TICKET-ENVELOPE"
+CHUNK_MARK = "FFC-ENV "
+END_MARK = "END-FFC-TICKET-ENVELOPE"
+
+
+def envelope_from_log(text: str) -> dict:
+    """Rebuild the envelope from 235's job log (Format-EnvelopeLogBlock).
+
+    Each log line may carry a runner timestamp prefix, so markers are found
+    anywhere in the line. The base64 is checked against the logged SHA-256
+    and the chunk count before anything is decoded: a truncated or masked
+    copy is refused rather than decrypted wrong.
+    """
+    sha = count = None
+    chunks: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if BEGIN_MARK in line:
+            if inside or sha is not None:
+                raise ValueError("log holds more than one envelope block")
+            rest = line.split(BEGIN_MARK, 1)[1].split()
+            fields = dict(f.split("=", 1) for f in rest if "=" in f)
+            sha, count, inside = fields.get("sha256"), int(fields.get("chunks", "-1")), True
+        elif END_MARK in line and inside:
+            inside = False
+        elif inside and CHUNK_MARK in line:
+            chunks.append(line.split(CHUNK_MARK, 1)[1].strip())
+    if sha is None:
+        raise ValueError("no envelope block in this log")
+    if inside:
+        raise ValueError("envelope block has no end marker (log truncated?)")
+    if len(chunks) != count:
+        raise ValueError(f"envelope block has {len(chunks)} chunks, header says {count}")
+    b64 = "".join(chunks)
+    if hashlib.sha256(b64.encode("ascii")).hexdigest() != sha:
+        raise ValueError("envelope block fails its SHA-256 check (masked or damaged log)")
+    return json.loads(base64.b64decode(b64).decode("utf-8-sig"))
+
+
+def _load_key(key_path: str):
     with open(key_path, "rb") as fh:
-        private_key = serialization.load_pem_private_key(fh.read(), password=None)
+        return serialization.load_pem_private_key(fh.read(), password=None)
+
+
+def decrypt_log(key_path: str, log_path: str) -> int:
+    private_key = _load_key(key_path)
+    with open(log_path, encoding="utf-8-sig", errors="replace") as fh:
+        envelope = envelope_from_log(fh.read())
+    return _emit(decrypt_envelope(envelope, private_key))
+
+
+def decrypt(key_path: str, env_path: str) -> int:
+    private_key = _load_key(key_path)
     with open(env_path, encoding="utf-8-sig") as fh:
         envelope = json.load(fh)
-    plain = decrypt_envelope(envelope, private_key)
+    return _emit(decrypt_envelope(envelope, private_key))
+
+
+def _emit(plain: bytes) -> int:
     doc = json.loads(plain.decode("utf-8-sig"))
     sys.stdout.reconfigure(encoding="utf-8")
     json.dump(doc, sys.stdout, indent=2, ensure_ascii=False)
@@ -102,9 +160,14 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("decrypt", help="decrypt a 235 envelope to JSON on stdout")
     d.add_argument("--key", required=True, help="private key PEM from `keygen`")
     d.add_argument("envelope", help="whmcs-ticket-threads.enc.json from the run's artifact")
+    g = sub.add_parser("decrypt-log", help="decrypt the envelope copy in 235's job log")
+    g.add_argument("--key", required=True, help="private key PEM from `keygen`")
+    g.add_argument("log", help="the thread_read job's log text")
     a = ap.parse_args(argv)
     if a.cmd == "keygen":
         return keygen(a.out, a.bits)
+    if a.cmd == "decrypt-log":
+        return decrypt_log(a.key, a.log)
     return decrypt(a.key, a.envelope)
 
 

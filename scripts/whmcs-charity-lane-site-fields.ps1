@@ -536,7 +536,9 @@ function Resolve-SiteFields {
         foreach ($nn in (Get-SiteFieldNormNames $f.clientField)) {
             if ($ClientValues.ContainsKey($nn)) { $raw = $ClientValues[$nn]; break }
         }
-        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        # A value that is blank once its HTML is stripped (WHMCS wraps a blank
+        # "link" answer as <a href="" ...></a>) is unanswered, not invalid.
+        if (-not [string]::IsNullOrWhiteSpace((ConvertTo-SiteFieldCleanText -Value $raw))) {
             $r = Test-SiteFieldValue -Value $raw -Field $f
             if ($r.ok) { $winner = $r; $source = 'client_field' }
             else { $reasons.Add("client_field:$($r.reason)") }
@@ -546,7 +548,7 @@ function Resolve-SiteFields {
         if (-not $winner) {
             foreach ($set in $ProductSets) {
                 foreach ($cand in (Get-SiteFieldProductCandidates -Field $f -Set $set -DeniedPatterns $Config.deniedNamePatterns)) {
-                    if ([string]::IsNullOrWhiteSpace($cand)) { continue }
+                    if ([string]::IsNullOrWhiteSpace((ConvertTo-SiteFieldCleanText -Value $cand))) { continue }
                     $r = Test-SiteFieldValue -Value $cand -Field $f
                     if ($r.ok) { $winner = $r; $source = "product:pid$($set.pid):service$($set.serviceId)"; break }
                     $tag = "product:pid$($set.pid):$($r.reason)"

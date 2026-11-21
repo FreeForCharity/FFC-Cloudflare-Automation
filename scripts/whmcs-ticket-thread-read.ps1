@@ -19,10 +19,18 @@
          AES-256-GCM key; that key is wrapped with RSA-OAEP-SHA256 to
          -RecipientPublicKey (base64 DER SubjectPublicKeyInfo, RSA >= 3072).
 
-    The envelope is the ONLY output that carries ticket content. The log names
-    ticket counts and the recipient key's SHA-256 fingerprint, nothing else: no
-    subject, name, email or message. Decrypt with
-    scripts/whmcs-ticket-thread-decrypt.py, which also generates the key pair.
+    The envelope is the ONLY output that carries ticket content. It goes to
+    the artifact AND, as the same base64 ciphertext between markers, to the log
+    (a cloud session cannot download artifacts; Clarke approved this on
+    2026-11-20, #1781). Otherwise the log names ticket counts and the
+    recipient key's SHA-256 fingerprint, nothing else: no subject, name, email
+    or message in plaintext.
+
+    ticket_ids also takes `#692991`, the number the client sees, resolved with
+    GetTicket `ticketnum`, so no 208 export is needed to find the internal id.
+
+    Decrypt with scripts/whmcs-ticket-thread-decrypt.py (`decrypt` for the
+    artifact, `decrypt-log` for the job log), which also generates the key pair.
 
     A private key pasted into the public-key input is refused before any WHMCS
     call, and the refusal does not echo it.
@@ -95,6 +103,64 @@ function ConvertTo-TicketIdList {
     }
     if ($ids.Count -gt $Max) { throw "At most $Max tickets per run." }
     return , $ids.ToArray()
+}
+
+function Split-TicketRefText {
+    <#
+    .SYNOPSIS
+        Split the ticket_ids text into internal ids and client-facing ticket
+        numbers. A token written `#692991` is the number the client sees (WHMCS
+        `tid`), looked up with GetTicket's `ticketnum`; a bare token is an
+        internal id. Throws on a malformed `#` token without echoing it.
+    #>
+    [OutputType([hashtable])]
+    param([AllowNull()][AllowEmptyString()][string]$Text, [int]$Max = 50)
+    $plain = [System.Collections.Generic.List[string]]::new()
+    $numbers = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($Text)) {
+        foreach ($tok in ($Text -split '[,\s]+')) {
+            if ($tok -eq '') { continue }
+            if ($tok.StartsWith('#')) {
+                $n = $tok.Substring(1)
+                if ($n -notmatch '^\d{1,12}$') {
+                    throw 'A #ticket number must be the digits the client sees, e.g. #692991.'
+                }
+                if (-not $numbers.Contains($n)) { $numbers.Add($n) }
+            }
+            else { $plain.Add($tok) }
+        }
+    }
+    # ConvertTo-TicketIdList returns its array as ONE object (`return , ...`);
+    # wrapping the call in @() would nest it, so assign it bare.
+    [int[]]$ids = ConvertTo-TicketIdList -Text ($plain -join ',') -Max $Max
+    if ($null -eq $ids) { $ids = @() }
+    if (($ids.Count + $numbers.Count) -gt $Max) { throw "At most $Max tickets per run." }
+    return @{ Ids = $ids; Numbers = $numbers.ToArray() }
+}
+
+function Format-EnvelopeLogBlock {
+    <#
+    .SYNOPSIS
+        The envelope as log lines, so a session that cannot download artifacts
+        (the cloud egress proxy refuses the artifact host) can still read it.
+        It is the SAME ciphertext the artifact holds: base64 of the compact
+        envelope JSON, in fixed-width chunks between markers, with a SHA-256
+        of the base64 so a truncated or masked copy is detected, not decrypted
+        wrong. No line starts with `::`, so none is read as a workflow command.
+        Clarke approved carrying the ciphertext in the log on 2026-11-20 (#1781).
+    #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory = $true)]$Envelope, [int]$Width = 4000)
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($Envelope | ConvertTo-Json -Depth 3 -Compress)))
+    $sha = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::ASCII.GetBytes($b64))).ToLowerInvariant()
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $count = [int][Math]::Ceiling($b64.Length / $Width)
+    $lines.Add("BEGIN-FFC-TICKET-ENVELOPE sha256=$sha chunks=$count")
+    for ($i = 0; $i -lt $b64.Length; $i += $Width) {
+        $lines.Add('FFC-ENV ' + $b64.Substring($i, [Math]::Min($Width, $b64.Length - $i)))
+    }
+    $lines.Add('END-FFC-TICKET-ENVELOPE')
+    return $lines.ToArray()
 }
 
 function Import-RecipientPublicKey {
@@ -251,6 +317,7 @@ function Invoke-TicketThreadRead {
     [OutputType([pscustomobject])]
     param(
         [int[]]$TicketIds = @(),
+        [string[]]$TicketNumbers = @(),
         [int]$ClientId = 0,
         [Parameter(Mandatory = $true)][scriptblock]$InvokeApi,
         [int]$MaxTickets = 50,
@@ -259,6 +326,20 @@ function Invoke-TicketThreadRead {
     )
     $ids = [System.Collections.Generic.List[int]]::new()
     foreach ($i in @($TicketIds)) { if (-not $ids.Contains($i)) { $ids.Add($i) } }
+    # Client-facing numbers resolve to internal ids. An unknown number throws:
+    # it was named on purpose, so a silent skip would hide a typo.
+    foreach ($num in @($TicketNumbers)) {
+        if ([string]::IsNullOrWhiteSpace($num)) { continue }
+        $found = & $InvokeApi @{ action = 'GetTicket'; ticketnum = $num; repliessort = 'ASC' }
+        $resolved = 0
+        if (-not [int]::TryParse([string](Get-ThreadProp $found 'ticketid'), [ref]$resolved) -or $resolved -lt 1) {
+            throw 'A #ticket number did not resolve to a ticket.'
+        }
+        if (-not $ids.Contains($resolved)) { $ids.Add($resolved) }
+    }
+    # Ids that came only from the client listing may be skipped when WHMCS
+    # cannot open them (merged/removed tickets); a named id may not.
+    $listedOnly = [System.Collections.Generic.HashSet[int]]::new()
     if ($ClientId -gt 0) {
         $start = 0
         while ($true) {
@@ -266,7 +347,7 @@ function Invoke-TicketThreadRead {
             $page = @(Get-WhmcsNodeList -Node (Get-ThreadProp $resp 'tickets') -ChildName 'ticket')
             foreach ($listed in $page) {
                 $listedId = 0
-                if ([int]::TryParse([string](Get-ThreadProp $listed 'id'), [ref]$listedId) -and $listedId -gt 0 -and -not $ids.Contains($listedId)) { $ids.Add($listedId) }
+                if ([int]::TryParse([string](Get-ThreadProp $listed 'id'), [ref]$listedId) -and $listedId -gt 0 -and -not $ids.Contains($listedId)) { $ids.Add($listedId); [void]$listedOnly.Add($listedId) }
             }
             if ($page.Count -le 0) { break }
             $start += $page.Count
@@ -282,16 +363,25 @@ function Invoke-TicketThreadRead {
     if ($ids.Count -eq 0) { throw 'No tickets to read: give ticket_ids and/or a client_id that has tickets.' }
     if ($ids.Count -gt $MaxTickets) { throw "That selects more than $MaxTickets tickets; at most $MaxTickets per run. Narrow it with ticket_ids." }
 
+    $skipped = [System.Collections.Generic.List[int]]::new()
     $threads = foreach ($id in ($ids | Sort-Object)) {
-        $ticketResp = & $InvokeApi @{ action = 'GetTicket'; ticketid = $id; repliessort = 'ASC' }
+        try {
+            $ticketResp = & $InvokeApi @{ action = 'GetTicket'; ticketid = $id; repliessort = 'ASC' }
+        }
+        catch {
+            if ($listedOnly.Contains($id) -and $_.Exception.Message -match 'Ticket ID Not Found') { $skipped.Add($id); continue }
+            throw
+        }
         $notesResp = & $InvokeApi @{ action = 'GetTicketNotes'; ticketid = $id }
         ConvertTo-ThreadRecord -Ticket $ticketResp -Notes $notesResp
     }
+    if (@($threads).Count -eq 0) { throw 'None of the selected tickets could be opened (WHMCS: Ticket ID Not Found).' }
     return [pscustomobject]@{
         generated_at = $GeneratedAt
         run_url      = $RunUrl
         client_id    = $ClientId
         ticket_count = @($threads).Count
+        skipped_ids  = @($skipped)
         note         = 'WHMCS dates are in the WHMCS system time zone, unconverted. from_admin empty = written by the client.'
         tickets      = @($threads)
     }
@@ -308,8 +398,9 @@ try {
     # Validate everything that needs no network first, so a bad key or id list
     # costs no WHMCS call.
     $rsa = Import-RecipientPublicKey -Base64 $RecipientPublicKey
-    $idList = ConvertTo-TicketIdList -Text $TicketIds -Max $MaxTickets
-    if ($idList.Count -eq 0 -and $ClientId -lt 1) { throw 'Give ticket_ids, client_id, or both.' }
+    $refs = Split-TicketRefText -Text $TicketIds -Max $MaxTickets
+    $idList = @($refs.Ids)
+    if ($idList.Count -eq 0 -and @($refs.Numbers).Count -eq 0 -and $ClientId -lt 1) { throw 'Give ticket_ids, client_id, or both.' }
 
     $api = Resolve-WhmcsApiUrl -ApiUrlParam $ApiUrl
     $creds = Resolve-WhmcsCredentials -IdentifierParam $Identifier -SecretParam $Secret -CredentialsJsonParam $CredentialsJson
@@ -323,7 +414,7 @@ try {
 
     $runUrl = ''
     if ($env:GITHUB_RUN_ID) { $runUrl = "$($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)" }
-    $doc = Invoke-TicketThreadRead -TicketIds $idList -ClientId $ClientId -InvokeApi $invoke -MaxTickets $MaxTickets `
+    $doc = Invoke-TicketThreadRead -TicketIds $idList -TicketNumbers @($refs.Numbers) -ClientId $ClientId -InvokeApi $invoke -MaxTickets $MaxTickets `
         -GeneratedAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -RunUrl $runUrl
 
     $plain = [System.Text.Encoding]::UTF8.GetBytes(($doc | ConvertTo-Json -Depth 8))
@@ -335,11 +426,15 @@ try {
     $envelope | ConvertTo-Json -Depth 3 | Out-File -FilePath $OutputFile -Encoding utf8
 
     $replyCount = (@($doc.tickets) | ForEach-Object { @($_.replies).Count } | Measure-Object -Sum).Sum
-    $summary = "Encrypted $($doc.ticket_count) ticket thread(s), $replyCount message(s), to recipient key $($envelope.key_fingerprint)."
+    $skippedCount = @($doc.skipped_ids).Count
+    $summary = "Encrypted $($doc.ticket_count) ticket thread(s), $replyCount message(s), to recipient key $($envelope.key_fingerprint). Skipped (not found): $skippedCount."
     Write-Host $summary
+    # Same ciphertext as the artifact, for sessions that cannot download artifacts.
+    foreach ($envLine in (Format-EnvelopeLogBlock -Envelope $envelope)) { Write-Host $envLine }
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
         @('## WHMCS ticket threads (encrypted)', '', $summary, '',
-            'Decrypt: `python3 scripts/whmcs-ticket-thread-decrypt.py decrypt --key <private.pem> <envelope.json>`') |
+            'Decrypt: `python3 scripts/whmcs-ticket-thread-decrypt.py decrypt --key <private.pem> <envelope.json>`',
+            'or, from the job log: `python3 scripts/whmcs-ticket-thread-decrypt.py decrypt-log --key <private.pem> <job.log>`') |
             Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
     }
     exit 0

@@ -57,7 +57,16 @@ on:
       force:
         description:
           'Re-clone even though the target already serves a live site (the PR this opens would
-          supersede the existing migration). Leave false unless you are deliberately regenerating.'
+          supersede the existing migration). Leave false unless you are deliberately regenerating.
+          Does NOT skip the sibling-domain scan — that is force_sibling.'
+        required: false
+        type: boolean
+        default: false
+      force_sibling:
+        description:
+          'Clone even though the org hosts another repo matching this domain. Separate from force so
+          that forcing past a live-site check never silently drops this one. Leave false unless you
+          have checked the sibling repo yourself.'
         required: false
         type: boolean
         default: false
@@ -94,6 +103,7 @@ jobs:
           IN_DOMAIN: ${{ inputs.domain }}
           IN_REPO: ${{ inputs.ffc_ex_repo }}
           IN_FORCE: ${{ inputs.force }}
+          IN_FORCE_SIBLING: ${{ inputs.force_sibling }}
           # The remaining inputs are read here ONLY to print the approver's plan
           # (below); the gated job reads them again itself. Through `env:` so
           # they arrive as data, like the three above (#1080).
@@ -150,12 +160,58 @@ jobs:
           # under set -e/pipefail the failing grep would otherwise kill the whole preflight.
           apex_server=$(printf '%s\n' "$apex_headers" | grep -i '^server:' | tail -n1 | sed -E 's/^[^:]*:[[:space:]]*//' || true)
 
+          # --- is a custom domain bound on the target yet? (#1538 AC1) ----------------
+          # An empty apex_code used to read as a failed probe. For a PRE-CUTOVER target
+          # that is the correct, expected state: binding the apex is what the cutover
+          # (workflow 120) does, and this workflow runs BEFORE it, so `cname` is null on
+          # every fresh FFC-EX repo and nothing answers https://<domain>/. "Cannot verify"
+          # and "is not configured yet" are different facts; the Pages `cname` is what
+          # tells them apart. Measured on the 2026-09-29 batch: all seven waiting runs had
+          # cname=null, and five had been forced past this guard for no reason.
+          #
+          # Fails safe: only an affirmative read of an UNBOUND domain downgrades an empty
+          # apex to "expected". A 404 from this endpoint means Pages is not configured at
+          # all, which is also unbound. Any other failure leaves cname_known=false, and an
+          # empty apex then still refuses exactly as before.
+          set +e
+          cname_resp=$(gh api "repos/$canonical/pages" --jq '.cname // empty' 2>&1)
+          cname_rc=$?
+          set -e
+          pages_cname=""
+          cname_known=false
+          if [ $cname_rc -eq 0 ]; then
+            pages_cname=$(printf '%s' "$cname_resp" | tr -d '[:space:]')
+            cname_known=true
+          elif printf '%s' "$cname_resp" | grep -q "HTTP 404"; then
+            cname_known=true
+          fi
+          apex_expected_unbound=false
+          if [ -z "${apex_code:-}" ] && [ "$cname_known" = "true" ] && [ -z "$pages_cname" ]; then
+            apex_expected_unbound=true
+          fi
+
           # Probe failures must not read as "not live" — that would fail open, exactly
           # like the org-list case. 000/empty means the probe itself failed (network/TLS),
           # not that the site is down; refuse unless force=true explicitly overrides.
-          if [ "${IN_FORCE:-false}" != "true" ] && { [ "$pages_code" = "000" ] || [ -z "${apex_code:-}" ]; }; then
-            echo "::error::Preflight live-site probes did not complete (default URL: HTTP $pages_code; apex: HTTP ${apex_code:-<none>}). Cannot verify whether $canonical already serves — failing safe. Re-dispatch with force=true only if you have verified the target state yourself."
+          # The one exception is the unbound apex established above, which is not a probe
+          # failure at all.
+          if [ "${IN_FORCE:-false}" != "true" ] && [ "$pages_code" = "000" ]; then
+            echo "::error::Preflight could not reach the target's default Pages URL (https://freeforcharity.github.io/${canonical_name}/ returned HTTP 000 — network/TLS). Cannot verify whether $canonical already serves — failing safe. Re-dispatch with force=true only if you have verified the target state yourself."
             echo "⛔ Refused: live-site probes failed (network?) — could not verify target state." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ "${IN_FORCE:-false}" != "true" ] && [ -z "${apex_code:-}" ] && [ "$apex_expected_unbound" != "true" ]; then
+            # Not the pre-cutover case: either a custom domain IS bound (so the apex
+            # should answer and its silence is unexplained), or the Pages read itself
+            # failed. force=true is deliberately NOT offered as the remedy here (#1538
+            # AC4) — the thing to do is find out why, not to switch the guard off.
+            if [ "$cname_known" = "true" ]; then
+              echo "::error::Apex https://${IN_DOMAIN}/ answered nothing, but $canonical has the custom domain \`$pages_cname\` bound on Pages — a bound domain should respond. Check DNS and certificate state (workflow 120 reports both) before cloning; the target may already be mid-cutover."
+              echo "⛔ Refused: apex silent while \`$pages_cname\` is bound on Pages — resolve the cutover state first." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::Apex https://${IN_DOMAIN}/ answered nothing and the Pages configuration of $canonical could not be read, so whether a custom domain is bound is unknown. Failing safe. Details: $cname_resp"
+              echo "⛔ Refused: apex silent and the target's Pages configuration is unreadable — could not verify target state." >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 1
           fi
 
@@ -163,8 +219,49 @@ jobs:
           if [ "${apex_code:-}" = "200" ] && printf '%s' "$apex_server" | grep -qi 'github'; then
             cutover=true
           fi
+
+          # --- does the default URL serve the CHARITY's site, or 720's seed? (AC2) -----
+          # `pages_code=200` on its own cannot answer this. Workflow 720 creates every
+          # FFC-EX repo with the generic FFC template already deployed, so Pages answers
+          # 200 from the moment the repo exists and this guard refused every never-cloned
+          # target with "Re-cloning would supersede a completed migration" — when there was
+          # nothing to supersede.
+          #
+          # Two independent discriminators, and a 200 is treated as the seed only when
+          # BOTH agree, so an unreadable probe refuses rather than cloning over a site:
+          #
+          #   1. `_disabled_template_routes/` in the target repo. This workflow's own
+          #      integration step creates it (see the plan below, step 2), so its presence
+          #      is positive evidence that a 702 clone has COMPLETED here. Absent on all
+          #      seven targets of the 2026-09-29 batch, which is how run 210 established
+          #      that none of them had ever been cloned.
+          #   2. The served <title>. 720's seed serves the generic template title; a
+          #      migrated site serves the charity's own.
+          # 720's seed title, as served today by every never-cloned FFC-EX repo. A
+          # substring match, so a charity whose own title merely CONTAINS these words
+          # still has to fail discriminator 1 as well before a 200 is read as the seed.
+          TEMPLATE_TITLE='Free For Charity | Reduce Costs, Increase Impact'
+          marker_state=unknown
+          served_is_seed=false
+          if [ "$pages_code" = "200" ]; then
+            set +e
+            marker_resp=$(gh api "repos/$canonical/contents/_disabled_template_routes" 2>&1)
+            marker_rc=$?
+            set -e
+            if [ $marker_rc -eq 0 ]; then
+              marker_state=present
+            elif printf '%s' "$marker_resp" | grep -q "HTTP 404"; then
+              marker_state=absent
+            fi
+            served_title=$(curl -sS --max-time 20 -L \
+              "https://freeforcharity.github.io/${canonical_name}/" 2>/dev/null \
+              | tr -d '\r\n' | sed -n -E 's/.*<title[^>]*>([^<]*)<\/title>.*/\1/p' | head -n1 || true)
+            if [ "$marker_state" = "absent" ] && printf '%s' "$served_title" | grep -qiF -- "$TEMPLATE_TITLE"; then
+              served_is_seed=true
+            fi
+          fi
           pages_live=false
-          if [ "$pages_code" = "200" ]; then pages_live=true; fi
+          if [ "$pages_code" = "200" ] && [ "$served_is_seed" != "true" ]; then pages_live=true; fi
 
 
           {
@@ -172,10 +269,14 @@ jobs:
             echo "- Target repo: \`$canonical\` (exists)"
             echo "- Default Pages URL: HTTP $pages_code"
             echo "- Apex: HTTP ${apex_code:-000}, Server: ${apex_server:-<none>}$([ "$cutover" = "true" ] && echo ' — **cut over to GitHub Pages**')"
+            echo "- Custom domain bound on Pages: ${pages_cname:-<none>}$([ "$apex_expected_unbound" = "true" ] && echo ' — apex is expected to be silent pre-cutover')"
+            if [ "$pages_code" = "200" ]; then
+              echo "- Default URL serves: $([ "$served_is_seed" = "true" ] && echo "720's template seed (\`_disabled_template_routes/\` $marker_state, title \`${served_title:-<unread>}\`) — **not** a completed migration" || echo "a site that is NOT established as 720's seed (\`_disabled_template_routes/\` $marker_state, title \`${served_title:-<unread>}\`)")"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           if { [ "$cutover" = "true" ] || [ "$pages_live" = "true" ]; } && [ "${IN_FORCE:-false}" != "true" ]; then
-            echo "::error::$canonical already serves a live site (default URL HTTP $pages_code; apex ${apex_code:-000}/${apex_server:-none}). Re-cloning would supersede a completed migration. If that is deliberate, re-dispatch with force=true."
+            echo "::error::$canonical already serves a live site (default URL HTTP $pages_code; apex ${apex_code:-000}/${apex_server:-none}; \`_disabled_template_routes/\` $marker_state; served title '${served_title:-<unread>}'). Re-cloning would supersede a completed migration. If that is deliberate, re-dispatch with force=true."
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "⛔ Refused: target already live. Re-dispatch with \`force=true\` only if regenerating deliberately." >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -187,8 +288,16 @@ jobs:
           # was empty. Match the FULL domain (case-insensitive) inside every org repo name —
           # full-domain matching keeps legitimate sibling domains apart (letsdanceactivities
           # .org vs .com do not match each other). The scan FAILS SAFE: an org-list API
-          # error refuses rather than silently disabling the guard. force=true skips it.
-          if [ "${IN_FORCE:-false}" != "true" ]; then
+          # error refuses rather than silently disabling the guard.
+          #
+          # Gated on `force_sibling`, NOT on `force` (#1538 AC3). One flag used to switch
+          # off three unrelated guards: an operator forcing past the cosmetic probe check
+          # above silently also dropped "does the org already host another repo for this
+          # domain — one of which may be the charity's real site". Routine false positives
+          # trained operators to set the flag; the flag then cost them a guard they never
+          # meant to drop. Nothing about a deliberate re-clone makes a sibling repo
+          # uninteresting, so it needs its own, separate decision.
+          if [ "${IN_FORCE_SIBLING:-false}" != "true" ]; then
             set +e
             org_repos=$(gh api "orgs/$TARGET_ORG/repos?per_page=100" --paginate --jq '.[].name' 2>&1)
             list_rc=$?
@@ -203,13 +312,13 @@ jobs:
                 echo "⛔ Refused: sibling org repo(s) match \`$IN_DOMAIN\` — one may be the real site:"
                 while IFS= read -r s; do echo "- \`$s\`"; done <<< "$siblings"
                 echo ""
-                echo "Investigate, then re-dispatch with \`force=true\` if this clone is deliberate."
+                echo "Investigate, then re-dispatch with \`force_sibling=true\` if this clone is deliberate."
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force=true."
+              echo "::error::The org already hosts other repo(s) matching $IN_DOMAIN: $(printf '%s' "$siblings" | tr '\n' ' '). One of them may be the charity's real site — investigate before cloning. If this clone is deliberate, re-dispatch with force_sibling=true (force=true no longer skips this scan)."
               exit 1
             fi
           else
-            echo "- force=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "- force_sibling=true: sibling-domain scan skipped." >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # --- the approver's plan: what approving the github-prod gate will run ----
@@ -247,7 +356,11 @@ jobs:
           if [ -z "$exclude_display" ]; then exclude_display="(none)"; fi
           force_note=""
           if [ "${IN_FORCE:-false}" = "true" ]; then
-            force_note=" — the live-site, probe-failure and sibling-repo guards above were SKIPPED"
+            force_note=" — the live-site and probe-failure guards above were SKIPPED"
+          fi
+          force_sibling_note=""
+          if [ "${IN_FORCE_SIBLING:-false}" = "true" ]; then
+            force_sibling_note=" — the sibling-repo guard above was SKIPPED"
           fi
           {
             echo ""
@@ -262,6 +375,7 @@ jobs:
             echo "| build_check | \`${IN_BUILD_CHECK:-true}\` |"
             echo "| httrack depth / exclude | \`$depth_display\` / \`$exclude_display\` |"
             echo "| force | \`${IN_FORCE:-false}\`$force_note |"
+            echo "| force_sibling | \`${IN_FORCE_SIBLING:-false}\`$force_sibling_note |"
             echo ""
             echo "After approval, the \`clone-deploy\` job runs these steps in order:"
             echo ""

@@ -82,6 +82,64 @@ function Get-CandidBodyDigest {
     finally { $sha.Dispose() }
 }
 
+function Get-CandidSealVerdict {
+    <#
+    .SYNOPSIS
+        Is this seal widget answer a real, visible seal? Pure.
+    .DESCRIPTION
+        Measured on a GitHub runner, 2026-11-21 (workflow 803):
+          9326392 (Free For Charity)  200 image/svg+xml, 12.7 KB, 108x108, outer #a6c0ce (Platinum)
+          15935725, 16766185          200 image/svg+xml, 12.0 KB, 108x108, outer #d3aa41 (Gold)
+          1 (an org with no seal)     200 image/svg+xml, 173 bytes: an empty white outline,
+                                      invisible on a page. A 200 SVG is therefore NOT proof.
+          999999999 (no such org)     404 application/json {"Message":"Organization ... not found"}
+        So a seal counts only when it is an SVG whose 108x108 outer square is
+        filled with a colour. Returns @{ verdict; level; color } where verdict
+        is ok | no_seal | no_org | not_svg | unverified.
+    #>
+    param([Parameter(Mandatory = $true)]$Fetch)
+    $r = [ordered]@{ verdict = 'unverified'; level = ''; color = '' }
+    if ($null -eq $Fetch.status) { return [pscustomobject]$r }
+    if ($Fetch.status -eq 404) { $r.verdict = 'no_org'; return [pscustomobject]$r }
+    if ($Fetch.status -ne 200) { return [pscustomobject]$r }
+    $body = [string]$Fetch.body
+    if ([string]$Fetch.contentType -notmatch '(?i)image/svg\+xml' -or $body -notmatch '(?i)<svg\b') { $r.verdict = 'not_svg'; return [pscustomobject]$r }
+    if ($body -notmatch '(?i)viewBox\s*=\s*"0 0 108 108"') { $r.verdict = 'no_seal'; return [pscustomobject]$r }
+    # The outer square: a rect at the origin, 108 wide and tall, filled by a class.
+    $outer = [regex]::Match($body, '(?i)<rect\s+class="(cls-\d+)"(?=[^>]*\bwidth="108")(?=[^>]*\bheight="108")[^>]*/?>')
+    if (-not $outer.Success) { $r.verdict = 'no_seal'; return [pscustomobject]$r }
+    $cls = [regex]::Escape($outer.Groups[1].Value)
+    $fill = [regex]::Match($body, "(?is)\.$cls\s*\{[^}]*?fill:\s*(#[0-9a-f]{3,8})")
+    if (-not $fill.Success) { $r.verdict = 'no_seal'; return [pscustomobject]$r }
+    $color = $fill.Groups[1].Value.ToLowerInvariant()
+    $r.color = $color
+    if ($color -in @('#fff', '#ffffff', '#ffffffff')) { $r.verdict = 'no_seal'; return [pscustomobject]$r }
+    $levels = @{ '#a6c0ce' = 'Platinum'; '#d3aa41' = 'Gold' }
+    $r.level = if ($levels.ContainsKey($color)) { $levels[$color] } else { "unrecognised colour $color" }
+    $r.verdict = 'ok'
+    return [pscustomobject]$r
+}
+
+function Invoke-CandidRender {
+    # Render a page in headless Chrome as a signed-out visitor and return the
+    # DOM after scripts ran (Candid profile pages are a script-built app, so a
+    # plain GET only returns the same empty shell for every link).
+    param([Parameter(Mandatory = $true)][string]$Url, [string]$Chrome = '')
+    if (-not $Chrome) {
+        foreach ($c in 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser') {
+            $cmd = Get-Command $c -ErrorAction SilentlyContinue
+            if ($cmd) { $Chrome = $cmd.Source; break }
+        }
+    }
+    if (-not $Chrome) { return '' }
+    $profileDir = Join-Path ([IO.Path]::GetTempPath()) ("candid-" + [guid]::NewGuid().ToString('n'))
+    try {
+        $out = & $Chrome --headless=new --no-sandbox --disable-gpu --no-first-run "--user-data-dir=$profileDir" --virtual-time-budget=20000 --window-size=1280, 2000 --dump-dom $Url 2>$null
+        return ($out -join "`n")
+    }
+    finally { Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue }
+}
+
 function Get-CandidReport {
     # Fetch every profile link and seal widget asked for. Returns a list of
     # raw fetch records tagged with kind (profile | seal) and profileId.
@@ -119,11 +177,25 @@ if ($MyInvocation.InvocationName -ne '.') {
         Write-Host "final url:    $($r.finalUrl)"
         Write-Host "bytes:        $(([string]$r.body).Length)   sha256: $(Get-CandidBodyDigest -Body $r.body)"
         Write-Host "title:        $title"
-        Write-Host "svg <text>:   $($texts -join ' | ')"
-        foreach ($w in 'sign in', 'log in', 'login', 'Platinum', 'Gold', 'Silver', 'Bronze', 'seal', 'Transparency', 'not found', 'pkId') {
-            Write-Host ("  contains {0,-14} {1}" -f "'$w':", ([string]$r.body).IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if ($r.kind -eq 'seal') {
+            $v = Get-CandidSealVerdict -Fetch $r
+            Write-Host "SEAL VERDICT: $($v.verdict) $($v.level)"
         }
-        if ($Raw) {
+        if ($r.kind -eq 'profile') {
+            $dom = Invoke-CandidRender -Url $r.url
+            $text = (($dom -replace '(?is)<(script|style)[^>]*>.*?</\1>', ' ') -replace '<[^>]+>', ' ' -replace '\s+', ' ').Trim()
+            Write-Host "rendered dom: $($dom.Length) chars, visible text $($text.Length) chars"
+            Write-Host "rendered title: $(([regex]::Match($dom, '(?is)<title[^>]*>(.*?)</title>')).Groups[1].Value.Trim())"
+            foreach ($w in 'Sign in', 'Log in', 'Create account', 'Seal of Transparency', 'Mission', 'EIN', 'Platinum', 'Gold', 'Silver', 'Bronze', 'Unlock', 'not authorized') {
+                Write-Host ("  rendered contains {0,-24} {1}" -f "'$w':", ($text.IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -ge 0))
+            }
+            $snip = if ($text.Length -gt 2500) { $text.Substring(0, 2500) } else { $text }
+            Write-Host "rendered text: $snip"
+        }
+        foreach ($w in 'sign in', 'log in', 'login', 'Platinum', 'Gold', 'Silver', 'Bronze', 'seal', 'Transparency', 'not found', 'pkId') {
+            Write-Host ("  contains {0,-14} {1}" -f "'$w':", (([string]$r.body).IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -ge 0))
+        }
+        if ($Raw -and $r.kind -eq 'seal') {
             $head = [string]$r.body
             if ($head.Length -gt 1500) { $head = $head.Substring(0, 1500) }
             Write-Host '--- first 1500 chars ---'

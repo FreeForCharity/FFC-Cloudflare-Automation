@@ -246,6 +246,28 @@ if revoked:
     detail(revoked, "revoked control")
 detail("000000001", "non-existent EIN")
 
+
+# ---------------------------------------------------------------- round 3: real revoked EINs
+p("\n## Round 3: real revoked EINs")
+s3, h3, b3, _, _ = fetch("https://apps.irs.gov/pub/epostcard/data-download-revocation.zip", timeout=300)
+_, rl = zip_lines(b3)
+picks = []
+for ln in rl:
+    parts = ln.split("|")
+    if len(parts) > 10 and re.fullmatch(r"\d{9}", parts[0].strip()) and parts[0] != "999999999" and parts[8].strip() == "03" and not parts[11:12] or (len(parts) > 11 and parts[0] != "999999999" and re.fullmatch(r"\d{9}", parts[0].strip()) and parts[8].strip() == "03" and not parts[11].strip()):
+        if parts[10][-4:] in ("2024", "2025", "2026"):
+            picks.append(parts)
+    if len(picks) >= 4:
+        break
+pub78 = set(ln.split("|",1)[0] for ln in zip_lines(blobs["pub78"])[1]) if "pub78" in blobs else set()
+for parts in picks:
+    ein = parts[0].strip()
+    s, h, b, _, _ = fetch(f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json")
+    o = json.loads(b).get("organization", {}) if s == 200 else {}
+    p(f"- {ein} {parts[1][:40]} revoked {parts[10]} | ProPublica HTTP {s} subsection={o.get('subsection_code')} name={o.get('name')!r} revocation_date={o.get('revocation_date')} | in Pub78={ein in pub78}")
+    s, h, b, _, _ = fetch(f"https://partners.every.org/v0.2/nonprofit/{ein}")
+    p(f"    Every.org HTTP {s}; Charity Navigator HTTP {fetch(f'https://www.charitynavigator.org/ein/{ein}', max_bytes=2000)[0]}")
+
 with open("probe-report.md", "w", encoding="utf-8") as fh:
     fh.write("\n".join(OUT) + "\n")
 sys.exit(0)

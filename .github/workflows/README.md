@@ -590,6 +590,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 234 | WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS] | `234-whmcs-charity-lane-site-fields.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 235 | WHMCS - Ticket Thread Read (full text, encrypted) [WHMCS] | `235-whmcs-ticket-thread-read.yml` | workflow_dispatch | Reads | whmcs-prod |
 | 236 | WHMCS - Open Charity Tickets (batch, one approval) [WHMCS] | `236-whmcs-ticket-batch.yml` | workflow_dispatch | Writes (gated) | ✅ whmcs-prod |
+| 237 | WHMCS - Application EIN Check (IRS lists, read-only) | `237-whmcs-application-ein-check.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |

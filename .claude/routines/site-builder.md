@@ -23,10 +23,15 @@ the charity's public contact.
    them, and post one comment on #1608 with a `BACKLOG:` line per work order (issue link, org name,
    `ffc-<client id>` from its marker). Do not create items: the conductor decides what to queue.
 
-2. Skip an item whose newest `<!-- charity-lane:claim ... -->` comment has `until` in the future.
+2. Skip an item labelled `builder:volunteer`, whatever its other labels: a volunteer builds that
+   charity by hand (docs/volunteer-site-builders.md), and that label is the only thing that says so.
+   Skip an item whose newest `<!-- charity-lane:claim ... -->` comment has `until` in the future.
 3. Claim the first one left: remove `lane:build-ready`, add `lane:building`, and comment
    `<!-- charity-lane:claim holder=<your session URL> until=<now + 3 h, UTC ISO> -->`. Re-read the
-   item; if another claim newer than yours appears, release yours and stop this brief.
+   item; if another claim newer than yours appears, release yours and stop this brief. Once the
+   claim holds, find the item's ffcadmin work order (step 2) and set its label to
+   `status:active-build` (removing `status:needs-admin`), so the public roadmap stops listing it as
+   needing a sponsoring admin. Do not assign anyone on the work order.
 
 ## 2. Gather
 

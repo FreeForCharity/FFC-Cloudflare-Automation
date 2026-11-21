@@ -78,11 +78,102 @@ BeforeAll {
     # the #1771 reason: it flags deliberate report objects, a different question.
     $script:SinkNames = @('Write-Warning', 'Write-Host', 'Write-Information', 'Write-Error')
 
+    function Get-LoopCounterName {
+        <#
+            The variables a loop's body INCREMENTS: $x++, $x += n, and $x = $x + n.
+            These are the attempt counters a backoff delay can grow with.
+
+            Deliberately read from the loop BODY only, not from a `for` statement's
+            iterator. m365-dkim.ps1:327 is `for ($i = 0; $i -lt 12; $i++)`, a poll loop
+            whose counter lives in the iterator - so ignoring the iterator costs
+            nothing here and keeps one more throttle shape out of the population.
+        #>
+        param([Parameter(Mandatory = $true)]$Loop)
+
+        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+        foreach ($unary in $Loop.Body.FindAll({ param($n)
+                    $n -is [System.Management.Automation.Language.UnaryExpressionAst] }, $true)) {
+            if ($unary.TokenKind -notin @('PostfixPlusPlus', 'PlusPlus')) { continue }
+            if ($unary.Child -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                $null = $names.Add($unary.Child.VariablePath.UserPath)
+            }
+        }
+
+        foreach ($assign in $Loop.Body.FindAll({ param($n)
+                    $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+            if ($assign.Left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+            $name = $assign.Left.VariablePath.UserPath
+            if ($assign.Operator -eq 'PlusEquals') { $null = $names.Add($name); continue }
+            # $x = $x + 1: self-referential, so it accumulates across iterations.
+            if ($assign.Operator -eq 'Equals' -and
+                $assign.Right.Extent.Text -match ('\$' + [regex]::Escape($name) + '\b')) {
+                $null = $names.Add($name)
+            }
+        }
+
+        return $names
+    }
+
+    function Test-AttemptDerivedDelay {
+        <#
+            True when a Start-Sleep's duration grows with a counter its loop increments
+            - directly ($attempt), or through assignments inside the loop
+            ($delay = [math]::Pow(2, $attempt); Start-Sleep -Seconds $delay). This is
+            what makes a sleep a BACKOFF rather than a throttle.
+
+            A constant duration returns false, which is the point: `Start-Sleep -Seconds
+            5` and `-Milliseconds $ThrottleMs` are pacing, and a parameter the loop
+            never assigns cannot grow with the attempt count. Depth-limited, so a
+            pathological assignment chain cannot hang the guard.
+        #>
+        param(
+            [Parameter(Mandatory = $true)]$Loop,
+            [Parameter(Mandatory = $true)]$SleepCommand
+        )
+
+        $counters = Get-LoopCounterName -Loop $Loop
+        if ($counters.Count -eq 0) { return $false }
+
+        $frontier = [System.Collections.Generic.List[string]]::new()
+        foreach ($element in $SleepCommand.CommandElements) {
+            foreach ($var in $element.FindAll({ param($n)
+                        $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+                $frontier.Add($var.VariablePath.UserPath)
+            }
+        }
+        if ($frontier.Count -eq 0) { return $false }
+
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $assignments = @($Loop.Body.FindAll({ param($n)
+                    $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))
+
+        for ($depth = 0; $depth -lt 4 -and $frontier.Count -gt 0; $depth++) {
+            $next = [System.Collections.Generic.List[string]]::new()
+            foreach ($name in $frontier) {
+                if ($counters.Contains($name)) { return $true }
+                if (-not $seen.Add($name)) { continue }
+                foreach ($assign in $assignments) {
+                    if ($assign.Left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+                    if ($assign.Left.VariablePath.UserPath -ne $name) { continue }
+                    foreach ($var in $assign.Right.FindAll({ param($n)
+                                $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+                        $next.Add($var.VariablePath.UserPath)
+                    }
+                }
+            }
+            $frontier = $next
+        }
+
+        return $false
+    }
+
     function Get-RetryLoopCatchNode {
         <#
             The RETRY catches of a file: a catch lexically inside a loop whose own body
-            contains a backoff (Start-Sleep). Parses, and throws on a parse error, so no
-            guard built on this can report a verdict about a file that does not compile.
+            contains a backoff (Start-Sleep), or whose loop body backs off on the
+            catch's fall-through path. Parses, and throws on a parse error, so no guard
+            built on this can report a verdict about a file that does not compile.
 
             THE BACKOFF IS WHAT MAKES IT A RETRY, and requiring it is not a detail - the
             first draft of this guard asked only for a catch inside a loop and reported
@@ -104,6 +195,34 @@ BeforeAll {
             A retry loop with no backoff at all would be missed. That is accepted: a
             retry that hammers without backing off is its own defect, and a predicate
             anchored on an attempt-counter name would be a file list wearing a regex.
+
+            THE BACKOFF IS NOT ALWAYS IN THE CATCH (#1783). The two canonical files of
+            this whole family - whmcs-api-common.ps1 and whmcs-domain-export.ps1, the
+            ones #1753/#1755 remediated - put the log and the backoff in the WHILE BODY,
+            after the catch closes, and the catch's else branch throws so that falling
+            through to them IS the transient path. Requiring the sleep inside the catch
+            missed both of them, so the family's own two files had no discovered cover.
+            A second kind is therefore accepted: a fall-through backoff. Each returned
+            item carries its Kind, 'catch-backoff' or 'fallthrough-backoff'.
+
+            WHY NOT JUST ACCEPT A SLEEP ANYWHERE IN THE LOOP. Because a throttle sleep
+            in an iteration loop is syntactically identical to a backoff, and that
+            widening re-introduces exactly the false positives above: measured on this
+            tree it pulls in five pacing loops (whmcs-invoices-lookup.ps1:207,
+            whmcs-clients-export.ps1:261, whmcs-client-fields-survey.ps1:131,
+            whmcs-application-triage.ps1:2071, m365-dkim.ps1:327), each asserted
+            rejected by name below. Note that two of those five are `for` loops, one of
+            them counting a variable actually named $attempt - so "while/do versus
+            foreach" does NOT separate them, which is the plausible-looking rule this
+            predicate deliberately does not use.
+
+            The discriminator is that the delay GROWS WITH THE ATTEMPT COUNT, on the
+            error path: the sleep must sit after the owning try, and its duration must
+            derive from a variable the loop increments (both real cases compute
+            [math]::Pow(2, $attempt)). All five throttles sleep for a constant or for a
+            fixed parameter, and four of them sleep before the try. A retry whose
+            backoff is a constant is missed by this, the same accepted miss as a retry
+            with no backoff at all: over-reporting is what gets a guard switched off.
         #>
         param(
             [Parameter(Mandatory = $true)][string]$Code,
@@ -120,19 +239,57 @@ BeforeAll {
         $found = [System.Collections.ArrayList]::new()
         $catches = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CatchClauseAst] }, $true)
         foreach ($catch in $catches) {
-            $inLoop = $false
+            $loop = $null
             $parent = $catch.Parent
             while ($parent) {
-                if ($parent -is [System.Management.Automation.Language.LoopStatementAst]) { $inLoop = $true; break }
+                if ($parent -is [System.Management.Automation.Language.LoopStatementAst]) { $loop = $parent; break }
                 $parent = $parent.Parent
             }
-            if (-not $inLoop) { continue }
+            if (-not $loop) { continue }
 
             $backoff = @($catch.Body.FindAll({ param($n)
                         $n -is [System.Management.Automation.Language.CommandAst] -and
                         $n.GetCommandName() -eq 'Start-Sleep'
                     }, $true))
-            if ($backoff.Count -gt 0) { $null = $found.Add($catch) }
+            if ($backoff.Count -gt 0) {
+                $null = $found.Add([pscustomobject]@{
+                        Catch = $catch
+                        Loop  = $loop
+                        Try   = $catch.Parent
+                        Kind  = 'catch-backoff'
+                    })
+                continue
+            }
+
+            # A fall-through backoff. The owning try must be the loop's own try and not
+            # one nested inside another try: the inner `try { ConvertFrom-Json } catch`
+            # of whmcs-api-common.ps1 shares this loop and this fall-through region, and
+            # selecting it would put a per-parse error report in scope of a guard about
+            # a per-ATTEMPT repeat.
+            $try = $catch.Parent
+            if ($try -isnot [System.Management.Automation.Language.TryStatementAst]) { continue }
+            $nested = $false
+            $node = $try.Parent
+            while ($node -and $node -ne $loop) {
+                if ($node -is [System.Management.Automation.Language.TryStatementAst]) { $nested = $true; break }
+                $node = $node.Parent
+            }
+            if ($nested) { continue }
+
+            foreach ($sleep in $loop.Body.FindAll({ param($n)
+                        $n -is [System.Management.Automation.Language.CommandAst] -and
+                        $n.GetCommandName() -eq 'Start-Sleep'
+                    }, $true)) {
+                if ($sleep.Extent.StartOffset -lt $try.Extent.EndOffset) { continue }
+                if (-not (Test-AttemptDerivedDelay -Loop $loop -SleepCommand $sleep)) { continue }
+                $null = $found.Add([pscustomobject]@{
+                        Catch = $catch
+                        Loop  = $loop
+                        Try   = $try
+                        Kind  = 'fallthrough-backoff'
+                    })
+                break
+            }
         }
         return $found.ToArray()
     }
@@ -168,13 +325,32 @@ BeforeAll {
 
         $findings = [System.Collections.ArrayList]::new()
 
-        foreach ($catch in @(Get-RetryLoopCatchNode -Code $Code -Name $Name)) {
+        foreach ($retry in @(Get-RetryLoopCatchNode -Code $Code -Name $Name)) {
             $tainted = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
-            $nodes = $catch.Body.FindAll({ param($n)
-                    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -or
-                    $n -is [System.Management.Automation.Language.CommandAst]
-                }, $true) | Sort-Object { $_.Extent.StartOffset }
+            $interesting = {
+                param($n)
+                $n -is [System.Management.Automation.Language.AssignmentStatementAst] -or
+                $n -is [System.Management.Automation.Language.CommandAst]
+            }
+
+            $nodes = @($retry.Catch.Body.FindAll($interesting, $true) | Sort-Object { $_.Extent.StartOffset })
+
+            # THE RETRY PATH CAN LEAVE THE CATCH (#1783). In whmcs-api-common.ps1 and
+            # whmcs-domain-export.ps1 the catch only sets $transientReason and the
+            # Write-Warning that logs it sits in the while body, after the catch closes,
+            # so a scan of catch.Body alone examines the assignment and never the sink.
+            # The fall-through region is appended in source order with the SAME taint
+            # set, which is what carries a tainted $transientReason from the catch to
+            # the warning. Only for a fall-through backoff: in a catch-backoff loop the
+            # code after the try is not the error path, and scanning it would report
+            # per-item sinks in working files.
+            if ($retry.Kind -eq 'fallthrough-backoff') {
+                $after = @($retry.Loop.Body.FindAll($interesting, $true) |
+                        Where-Object { $_.Extent.StartOffset -ge $retry.Try.Extent.EndOffset } |
+                        Sort-Object { $_.Extent.StartOffset })
+                $nodes = @($nodes) + @($after)
+            }
 
             foreach ($node in $nodes) {
                 if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) {
@@ -256,6 +432,20 @@ BeforeAll {
                 @(Get-RetryLoopCatchNode -Code (Get-Content -Raw -LiteralPath $_.FullName) -Name $_.Name).Count -gt 0
             } |
             Select-Object -ExpandProperty Name
+    )
+
+    # The FALL-THROUGH half of that population, kept separately because it is the half
+    # #1783 added and the half a permissive widening would inflate. A throttle loop
+    # wrongly read as a retry can only ever arrive here - a pacing sleep is never
+    # inside a catch - so asserting this set exactly is what makes the five named
+    # pacing loops rejected rather than merely absent.
+    $script:FallThroughRetryFiles = @(
+        Get-ChildItem -LiteralPath $script:ScriptsDir -Filter '*.ps1' -File |
+            Where-Object {
+                @(Get-RetryLoopCatchNode -Code (Get-Content -Raw -LiteralPath $_.FullName) -Name $_.Name |
+                        Where-Object { $_.Kind -eq 'fallthrough-backoff' }).Count -gt 0
+                } |
+                Select-Object -ExpandProperty Name
     )
 }
 
@@ -533,12 +723,83 @@ Describe 'Source guard: retry loops are DISCOVERED, not listed' {
     }
 
     It 'discovered <_>, a retry loop it is meant to cover' -ForEach @(
-        'candid-api-common.ps1', 'fraudlabspro-api-common.ps1', 'cloudflare-api-common.ps1'
+        'candid-api-common.ps1', 'fraudlabspro-api-common.ps1', 'cloudflare-api-common.ps1',
+        'whmcs-api-common.ps1', 'whmcs-domain-export.ps1'
     ) {
         # Pinned so a discovery that stops reaching a known instance fails here rather
         # than reporting the file clean. cloudflare-api-common.ps1 is on this list
         # because discovery found it, not because anyone enumerated it.
+        #
+        # The two whmcs files are the #1783 addition, and they are the reason this
+        # pin matters rather than being decoration: they are the files #1753/#1755
+        # remediated - the canonical pair this whole family exists for - and the
+        # catch-only predicate reached neither of them, so the family's own two files
+        # were the only ones with no discovered cover.
         $script:RetryLoopFiles | Should -Contain $_
+    }
+
+    Context 'the fall-through backoff shape (#1783)' {
+        It 'discovered the fall-through retry in <_>' -ForEach @(
+            'whmcs-api-common.ps1', 'whmcs-domain-export.ps1'
+        ) {
+            # These log and back off in the WHILE BODY, after the catch closes. Measured
+            # against the catch-only predicate: 0 retry catches in either file.
+            $script:FallThroughRetryFiles | Should -Contain $_
+        }
+
+        It 'did not read the pacing loop in <_> as a retry backoff' -ForEach @(
+            'whmcs-invoices-lookup.ps1', 'whmcs-clients-export.ps1',
+            'whmcs-client-fields-survey.ps1', 'whmcs-application-triage.ps1', 'm365-dkim.ps1'
+        ) {
+            # The five loops that a sleep-anywhere-in-the-loop widening pulls in. Each is
+            # a throttle: it paces a sweep over a collection, or polls for a value to
+            # populate. Asserted PER FILE and by name, because a widening that passes the
+            # set-equality test below by being permissive has to fail somewhere specific.
+            #
+            # Two of these are `for` loops, and whmcs-application-triage.ps1 counts a
+            # variable actually called $attempt, so this is not the foreach-versus-while
+            # distinction it looks like. m365-dkim.ps1 and whmcs-application-triage.ps1
+            # are in the overall population already, on genuine retry catches elsewhere
+            # in the file - which is exactly why the claim has to be about the
+            # fall-through half and not about whether the file appears at all.
+            $script:FallThroughRetryFiles | Should -Not -Contain $_
+        }
+
+        It 'the fall-through population is exactly the two files of the #1753 family' {
+            # Set equality, so a future permissive widening fails here even if it adds a
+            # file nobody thought to name above.
+            ($script:FallThroughRetryFiles | Sort-Object) -join ', ' |
+                Should -Be 'whmcs-api-common.ps1, whmcs-domain-export.ps1'
+        }
+
+        It 'goes red when the #1753 defect is restored in whmcs-api-common.ps1' {
+            # THE MUTATION, run in CI rather than recorded in a PR body: put the raw
+            # exception message back into the logged reason and the guard must fail.
+            # Measured against the catch-only predicate, this mutation produced 0
+            # findings - the guard was green against the defect it exists to catch,
+            # because the sink is in the loop body and only catch.Body was scanned.
+            #
+            # In memory: the file on disk is never written, so no restore can go wrong
+            # and a failing assertion cannot leave the tree mutated.
+            $path = Join-Path $script:ScriptsDir 'whmcs-api-common.ps1'
+            $clean = Get-Content -Raw -LiteralPath $path
+
+            $anchor = '$transientReason = $emLabel'
+            # Assert the anchor BEFORE substituting: a refactor that moved this line
+            # must fail loudly here instead of silently testing nothing.
+            $clean | Should -BeLike "*$anchor*" -Because 'the mutation anchor must exist or this test proves nothing'
+
+            $mutated = $clean.Replace($anchor, '$transientReason = "$($_.Exception.Message)"')
+            $mutated | Should -Not -Be $clean
+
+            @(Get-RetryLoopWarningLeak -Code $clean -Name 'whmcs-api-common.ps1').Count |
+                Should -Be 0 -Because 'the file on disk is compliant'
+
+            $caught = @(Get-RetryLoopWarningLeak -Code $mutated -Name 'whmcs-api-common.ps1')
+            $caught.Count | Should -BeGreaterThan 0
+            $caught[0].Sink | Should -Be 'Write-Warning'
+            $caught[0].Leaked | Should -Be '$transientReason'
+        }
     }
 
     It 'does not log exception text on retry in any discovered retry loop' {
@@ -696,6 +957,136 @@ while ($true) {
 }
 '@
             @(Get-RetryLoopWarningLeak -Code $code -Name 'fixture').Count | Should -Be 0
+        }
+
+        It 'flags a FALL-THROUGH warning built from the exception message (#1783)' {
+            # The whmcs shape with the #1753 defect restored: the catch sets the reason
+            # from the raw message and the sink is in the while body, past the catch.
+            # The catch-only scan examined the assignment and never reached the sink.
+            $code = @'
+$attempt = 0
+while ($true) {
+    $attempt++
+    try {
+        $resp = Invoke-RestMethod -Uri $u
+        return $resp
+    }
+    catch {
+        $transientReason = "$($_.Exception.Message)"
+    }
+
+    if ($attempt -ge $maxAttempts) { throw "gave up" }
+    $delay = [int][math]::Min(30, [math]::Pow(2, $attempt))
+    Write-Warning "transient (attempt $attempt): $transientReason. Retrying in ${delay}s..."
+    Start-Sleep -Seconds $delay
+}
+'@
+            $f = @(Get-RetryLoopWarningLeak -Code $code -Name 'fixture')
+            $f.Count | Should -Be 1
+            $f[0].Sink | Should -Be 'Write-Warning'
+            $f[0].Leaked | Should -Be '$transientReason'
+        }
+
+        It 'passes the compliant fall-through shape, where the reason is a label' {
+            # The same shape as it stands on main: discrimination, not permissiveness.
+            $code = @'
+$attempt = 0
+while ($true) {
+    $attempt++
+    try {
+        $resp = Invoke-RestMethod -Uri $u
+        return $resp
+    }
+    catch {
+        $emLabel = Get-WhmcsTransientLabel "$($_.Exception.Message)"
+        if ($emLabel) { $transientReason = $emLabel } else { throw }
+    }
+
+    if ($attempt -ge $maxAttempts) { throw "gave up" }
+    $delay = [int][math]::Min(30, [math]::Pow(2, $attempt))
+    Write-Warning "transient (attempt $attempt): $transientReason. Retrying in ${delay}s..."
+    Start-Sleep -Seconds $delay
+}
+'@
+            @(Get-RetryLoopWarningLeak -Code $code -Name 'fixture').Count | Should -Be 0
+        }
+
+        It 'ignores an ITERATION loop that paces at the END of each iteration' {
+            # The false positive a position-only rule would produce, and the most
+            # plausible shape to appear in this tree next: a sweep that reports a failed
+            # item and then paces before the next one. The sleep IS after the try, so
+            # position alone does not reject it - the delay being a constant is what
+            # does.
+            $code = @'
+foreach ($z in $zones) {
+    try { Invoke-RestMethod -Uri $z.url }
+    catch {
+        Write-Warning "[$($z.name)] failed: $($_.Exception.Message)"
+    }
+    Start-Sleep -Milliseconds 200
+}
+'@
+            @(Get-RetryLoopCatchNode -Code $code -Name 'fixture').Count | Should -Be 0
+            @(Get-RetryLoopWarningLeak -Code $code -Name 'fixture').Count | Should -Be 0
+        }
+
+        It 'ignores a COUNTED poll loop whose sleep is a constant (the m365-dkim shape)' {
+            # for ($i = 0; $i -lt 12; $i++) with Start-Sleep -Seconds 5: attempt-counted,
+            # not a foreach, and not a retry. The counter lives in the for iterator and
+            # the delay never grows, so neither signal reads this as a backoff.
+            $code = @'
+for ($i = 0; $i -lt 12; $i++) {
+    if ($ready) { break }
+    Start-Sleep -Seconds 5
+    try { $config = Get-Thing -Id $d }
+    catch { break }
+}
+'@
+            @(Get-RetryLoopCatchNode -Code $code -Name 'fixture').Count | Should -Be 0
+        }
+
+        It 'ignores a pace taken from a fixed parameter, not from the attempt count' {
+            # Start-Sleep -Milliseconds $ThrottleMs. The argument is a variable, so "not
+            # a literal" is not the test; the test is that it never grows with a counter
+            # the loop increments.
+            $code = @'
+foreach ($cid in $ids) {
+    $seen++
+    try { $d = Invoke-WhmcsGet -ApiUrl $api -Body $b }
+    catch { Write-Warning "lookup failed" }
+    Start-Sleep -Milliseconds $ThrottleMs
+}
+'@
+            @(Get-RetryLoopCatchNode -Code $code -Name 'fixture').Count | Should -Be 0
+        }
+
+        It 'does not select a catch nested inside the retry try, which reports per parse' {
+            # whmcs-api-common.ps1 has an inner try/catch around ConvertFrom-Json that
+            # shares the while loop and the same fall-through region. Selecting it would
+            # bring a once-per-response error report into a guard about a per-ATTEMPT
+            # repeat - so only the loop's own try is eligible. One retry catch, not two.
+            $code = @'
+$attempt = 0
+while ($true) {
+    $attempt++
+    try {
+        $raw = Invoke-RestMethod -Uri $u
+        try { $resp = $raw | ConvertFrom-Json }
+        catch { throw "WHMCS API returned unparseable content" }
+        return $resp
+    }
+    catch {
+        $transientReason = 'gateway error'
+    }
+
+    $delay = [int][math]::Pow(2, $attempt)
+    Write-Warning "transient: $transientReason"
+    Start-Sleep -Seconds $delay
+}
+'@
+            $found = @(Get-RetryLoopCatchNode -Code $code -Name 'fixture')
+            $found.Count | Should -Be 1
+            $found[0].Kind | Should -Be 'fallthrough-backoff'
         }
 
         It 'refuses to report a verdict on code that does not parse' {

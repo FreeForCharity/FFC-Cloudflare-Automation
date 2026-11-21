@@ -1,0 +1,68 @@
+name: '803. Candid - Seal Widget Check [CANDID]'
+run-name: 'Candid Seal Check'
+
+# Read-only: fetches each charity's Candid Seal of Transparency widget and shareable profile link as
+# a signed-out visitor would, and reports whether the seal really loads and the link really opens.
+# No credentials. Runs on a GitHub runner because cloud agent containers cannot reach Candid.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile_urls:
+        description:
+          'Shareable app.candid.org profile links, one per line or comma-separated (blank = the
+          known set)'
+        required: false
+        default: ''
+      seal_ids:
+        description: 'Extra Candid profile ids to fetch the seal widget for (comma-separated)'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - 'scripts/candid-seal-check.ps1'
+      - '.github/workflows/803-candid-seal-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 803-candid-seal-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch seals and profile links
+        shell: pwsh
+        env:
+          PROFILE_URLS: ${{ inputs.profile_urls }}
+          SEAL_IDS: ${{ inputs.seal_ids }}
+        run: |
+          $known = @(
+            # freeforcharity.org's own footer link (known-good control)
+            'https://app.candid.org/profile/9326392/free-for-charity/?pkId=7232730a-03b5-467f-a82c-443dcd2122ed&isActive=true',
+            # order 883
+            'https://app.candid.org/profile/15935725/restorative-expressive-arts-corp-99-1579845/?pkId=e115d60f-1499-4a15-9aea-56fe7d8b413d',
+            # order 886, shareable and plain (the plain one should NOT open signed out)
+            'https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true',
+            'https://app.candid.org/profile/16766185/ritual-azteca-inc/'
+          )
+          $urls = @("$env:PROFILE_URLS" -split '[,\r\n]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($urls.Count -eq 0) { $urls = $known }
+          # Ids that cannot be real awarded seals, to see what Candid returns for one.
+          $controls = @('1', '999999999')
+          $ids = @("$env:SEAL_IDS" -split '[,\s]+' | Where-Object { $_ -match '^\d{1,12}$' }) + $controls
+          ./scripts/candid-seal-check.ps1 -ProfileUrl $urls -SealId $ids -Raw -JsonOut candid-seal-report.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: candid-seal-report
+          path: candid-seal-report.json
+          if-no-files-found: ignore

@@ -193,6 +193,59 @@ for lbl, u in [
     s, h, b, dt, final = fetch(u, max_bytes=200000)
     p(f"- {lbl}: HTTP {s} final={final} title={title(b)!r}")
 
+
+# ---------------------------------------------------------------- round 2
+p("\n## Round 2")
+s2, h2, b2, _, _ = fetch("https://www.irs.gov/charities-non-profits/tax-exempt-organization-search-bulk-data-downloads")
+links = sorted(set(re.findall(rb'href="([^"]+\.(?:zip|txt|csv))"', b2 or b"")))
+p(f"- bulk page HTTP {s2}; download links: {[l.decode() for l in links]}")
+rev = [l.decode() for l in links if b"evocation" in l or b"revoc" in l.lower()]
+revoked = None
+for u in rev:
+    if u.startswith("/"):
+        u = "https://www.irs.gov" + u
+    s, h, b, dt, _ = fetch(u, timeout=300)
+    p(f"- revocation file {u}: HTTP {s} bytes={len(b) if s==200 else 0} last-modified={h.get('Last-Modified')}")
+    if s == 200 and u.endswith(".zip"):
+        name, lines = zip_lines(b)
+        p(f"  rows={len(lines)} first={lines[0][:160]!r} last={lines[-1][:160]!r}")
+        for ln in reversed(lines):
+            parts = ln.split("|")
+            if re.fullmatch(r"\d{9}", parts[0].strip()):
+                revoked = parts[0].strip(); p(f"  revoked control: {ln[:200]!r}"); break
+        hits = [ln[:160] for ln in lines if ln.split("|",1)[0].strip() in EINS]
+        p(f"  test EIN hits: {hits}")
+        break
+
+def detail(ein, lbl):
+    p(f"\n### {ein} ({lbl})")
+    s, h, b, _, _ = fetch(f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json")
+    if s == 200:
+        o = json.loads(b).get("organization", {})
+        p(f"- ProPublica API: 200 name={o.get('name')!r} subsection={o.get('subsection_code')} deductibility={o.get('deductibility_code')} revocation_date={o.get('revocation_date')} exemption_status={o.get('exempt_organization_status_code')}")
+    else:
+        p(f"- ProPublica API: HTTP {s}")
+    s, h, b, _, _ = fetch(f"https://partners.every.org/v0.2/nonprofit/{ein}")
+    p(f"- Every.org partner API (no key): HTTP {s} body={b[:700].decode('utf-8','replace')!r}")
+    s, h, b, _, _ = fetch(f"https://www.charitynavigator.org/ein/{ein}", max_bytes=900000)
+    t = re.sub(r"<[^>]+>", " ", b.decode("utf-8","replace")); t = re.sub(r"\s+", " ", t)
+    kw = [m.group(0) for m in re.finditer(r"[^.]{0,80}(501\(c\)|tax-deductible|Tax-deductible|deductib|IRS|rating|Rating|stars?|Encompass)[^.]{0,80}", t)][:8]
+    p(f"- Charity Navigator page: HTTP {s} snippets={kw}")
+    s, h, b, _, _ = fetch(f"https://www.guidestar.org/profile/{ein[:2]}-{ein[2:]}", max_bytes=900000)
+    t = re.sub(r"<script.*?</script>", " ", b.decode("utf-8","replace"), flags=re.S); t = re.sub(r"<[^>]+>", " ", t); t = re.sub(r"\s+", " ", t)
+    kw = [m.group(0) for m in re.finditer(r"[^.]{0,80}(501\(c\)|Seal|seal|IRS|Pub 78|ruling|Ruling|sign in|Sign in|log in)[^.]{0,80}", t)][:8]
+    p(f"- GuideStar profile page: HTTP {s} len={len(b)} snippets={kw}")
+    s, h, b, _, _ = fetch(f"https://www.irs.gov/charities-non-profits/tax-exempt-organization-search?ein={ein}", max_bytes=900000)
+    t = b.decode("utf-8","replace")
+    p(f"- TEOS page: HTTP {s} name_in_html={('Restorative' in t) or ('Free For Charity' in t) or ('Red Cross' in t)} ein_count={t.count(ein)} (EIN may only echo the query)")
+    time.sleep(0.5)
+
+for e in ["991579845", "462471893"]:
+    detail(e, EINS[e])
+if revoked:
+    detail(revoked, "revoked control")
+detail("000000001", "non-existent EIN")
+
 with open("probe-report.md", "w", encoding="utf-8") as fh:
     fh.write("\n".join(OUT) + "\n")
 sys.exit(0)

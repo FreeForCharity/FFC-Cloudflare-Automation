@@ -124,7 +124,7 @@
         "cloudflare-prod-read",
         "cloudflare-prod-write"
       ],
-      "description": "Serialize runs: a second dispatch queues behind the first instead of racing it.",
+      "description": "Serialize runs per record, not per workflow. GitHub keeps at most ONE pending run per concurrency group and cancels any older pending one, so a single workflow-wide group turned a batch of dispatches (NHEG, 2026-11-21) into one run plus cancellations. Keying on zone + type + name still serializes the read-modify-write on any one record set, while dispatches for different records, or different zones, run instead of cancelling each other. A labeled issue gets its own group by number, so a label on an unrelated issue no longer displaces a queued dispatch either.",
       "safetyLevel": "Writes (dry-run default)",
       "approvalEnv": "\u2705 cloudflare-prod-write",
       "guard": "`dry_run` (default true); issue-label trig",

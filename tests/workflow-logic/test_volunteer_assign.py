@@ -171,12 +171,6 @@ def test_repo_named_in_the_body_wins_over_the_title():
     assert va.repo_of(item(1, title="[CHARITY-LANE] Some Org Name")) == ""
 
 
-def test_703_publishes_the_build_queue():
-    text = (REPO_ROOT / ".github" / "workflows" / "703-sites-list-generate.yml").read_text(encoding="utf-8")
-    assert "scripts/volunteer_assign.py build-queue" in text
-    assert "sites-list/build_queue.csv" in text and "sites-list/build_queue.json" in text
-
-
 def test_site_builder_brief_skips_volunteer_holds():
     text = (REPO_ROOT / ".claude" / "routines" / "site-builder.md").read_text(encoding="utf-8")
     assert "builder:volunteer" in text

@@ -1,29 +1,59 @@
 name: 999. Research - EIN provider probe (temporary, do not merge)
 
 # One-off research probe for the "Find alternatives to Candid verification" thread.
-# Read-only: fetches public pages and IRS bulk files, no secrets, no writes.
+# Read-only: clones public FFC-EX repos, reads this repo's own 232 verdict artifact,
+# downloads public IRS files and queries ProPublica. No secrets, no writes.
 on:
   push:
     branches:
       - claude/project-thread-37d1o2
     paths:
-      - scripts/probe_profiles.py
+      - scripts/probe_ffc_eins.py
       - .github/workflows/999-probe-ein-providers.yml
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Probe providers
+      - name: Collect FFC charity repos
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: '0'
         run: |
-          python3 scripts/probe_profiles.py
-          cat probe-profiles.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p work/repos work/artifacts
+          {
+            gh api --paginate 'orgs/FreeForCharity/repos?per_page=100&type=all' --jq '.[].name' || true
+            python3 -c "import csv;[print(r['Repo URL'].rstrip('/').split('/')[-1]) for r in csv.DictReader(open('sites-list/sites_list.csv')) if r['Repo URL'].strip()]"
+          } | grep -E '^FFC-EX-' | sort -u > work/repo-names.txt
+          echo "candidate repos: $(wc -l < work/repo-names.txt)"
+          : > work/repos-failed.txt
+          while read -r name <&3; do
+            if ! git clone -q --depth 1 --filter=blob:limit=2m "https://github.com/FreeForCharity/${name}.git" "work/repos/${name}" </dev/null 2>/dev/null; then
+              echo "$name" >> work/repos-failed.txt
+            fi
+          done 3< work/repo-names.txt
+          echo "cloned: $(ls work/repos | wc -l)  failed: $(wc -l < work/repos-failed.txt)"
+      - name: Download latest 232 verdicts artifact (WHMCS-derived, read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" -w 232-whmcs-charity-lane-verdicts.yml -s success -L 1 --json databaseId --jq '.[0].databaseId' || true)
+          echo "232 run: ${id:-none}"
+          if [ -n "$id" ]; then
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n charity-lane-verdicts -D work/artifacts/232 || echo "download failed"
+          fi
+          ls -la work/artifacts/232 2>/dev/null || true
+      - name: Check EINs against IRS and ProPublica
+        run: |
+          python3 scripts/probe_ffc_eins.py
+          cat probe-ffc-eins.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: probe-report
-          path: probe-profiles.md
+          name: probe-ffc-eins
+          path: probe-ffc-eins.md

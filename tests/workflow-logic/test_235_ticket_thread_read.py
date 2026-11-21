@@ -184,6 +184,57 @@ def test_decrypt_helper_keygen_round_trip_and_wrong_key():
             raise AssertionError("decrypted an envelope addressed to another key")
 
 
+def _log_block(env: dict, width: int = 64, prefix: str = "2026-11-20T15:17:12.0000000Z ") -> list[str]:
+    """Build the log block exactly as Format-EnvelopeLogBlock does."""
+    b64 = base64.b64encode(json.dumps(env, separators=(",", ":")).encode()).decode()
+    chunks = [b64[i : i + width] for i in range(0, len(b64), width)]
+    sha = hashlib.sha256(b64.encode("ascii")).hexdigest()
+    return (
+        [f"{prefix}BEGIN-FFC-TICKET-ENVELOPE sha256={sha} chunks={len(chunks)}"]
+        + [f"{prefix}FFC-ENV {c}" for c in chunks]
+        + [f"{prefix}END-FFC-TICKET-ENVELOPE"]
+    )
+
+
+def test_decrypt_helper_reads_the_envelope_copy_in_a_job_log():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    helper = _helper()
+    priv = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    doc = {"tickets": [{"tid": "692991", "replies": [{"message": "SENTINEL"}]}]}
+    env = _envelope(priv.public_key(), json.dumps(doc).encode("utf-8"))
+    lines = _log_block(env)
+    log = "\n".join(["noise before"] + lines + ["noise after"])
+    assert "SENTINEL" not in log
+    got = helper.envelope_from_log(log)
+    assert json.loads(helper.decrypt_envelope(got, priv)) == doc
+
+    def refused(text: str, why: str):
+        try:
+            helper.envelope_from_log(text)
+        except ValueError as e:
+            assert why in str(e), e
+        else:
+            raise AssertionError(f"accepted a log that should fail: {why}")
+
+    damaged = list(lines)
+    last = damaged[2][-1]
+    damaged[2] = damaged[2][:-1] + ("A" if last != "A" else "B")
+    refused("\n".join(damaged), "SHA-256")
+    refused("\n".join(lines[:-1]), "no end marker")
+    refused("\n".join(lines[:2] + lines[3:]), "chunks")
+    refused("no block here", "no envelope block")
+    refused("\n".join(lines + lines), "more than one")
+
+
+def test_callee_also_logs_the_envelope_and_takes_client_numbers():
+    text = CALLEE.read_text(encoding="utf-8")
+    assert "Format-EnvelopeLogBlock -Envelope $envelope" in text
+    assert "ticketnum = $num" in text
+    wf = WORKFLOW.read_text(encoding="utf-8")
+    assert "#692991" in wf and "decrypt-log" in wf
+
+
 TESTS = [
     test_gated_lane_and_read_scope,
     test_no_write_permissions,
@@ -193,6 +244,8 @@ TESTS = [
     test_callee_sends_read_actions_only,
     test_callee_log_lines_carry_no_thread_fields,
     test_decrypt_helper_keygen_round_trip_and_wrong_key,
+    test_decrypt_helper_reads_the_envelope_copy_in_a_job_log,
+    test_callee_also_logs_the_envelope_and_takes_client_numbers,
 ]
 
 if __name__ == "__main__":

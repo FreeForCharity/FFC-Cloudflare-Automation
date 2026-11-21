@@ -8,7 +8,7 @@
 # run can never diverge in what they check (the 749 shape).
 #
 # Why this exists: FFC volunteers are recorded as verified by membership of an
-# org team (ffcadmin's `sponsoring-admins`, program plan section 8), and only an
+# org team (ffcadmin's `next-gen-website-team`, program plan section 8), and only an
 # org owner could change that by hand. This lets a thread add a new volunteer
 # when Clarke approves the github-prod gate.
 #

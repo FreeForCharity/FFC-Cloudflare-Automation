@@ -1,59 +1,70 @@
 name: 999. Research - EIN provider probe (temporary, do not merge)
 
-# One-off research probe for the "Find alternatives to Candid verification" thread.
-# Read-only: clones public FFC-EX repos, reads this repo's own 232 verdict artifact,
-# downloads public IRS files and queries ProPublica. No secrets, no writes.
+# One-off research run for the "Find alternatives to Candid verification" thread.
+# Read-only. Job 1 clones the public FFC-EX repos and lists the EIN each site
+# shows. Job 2 reads every WHMCS onboarding application (read lane, same identity
+# and environment as 232) and checks its EIN against the IRS lists, ProPublica and
+# the site's EIN. Output carries no EIN and no personal data.
 on:
   push:
     branches:
       - claude/project-thread-37d1o2
     paths:
-      - scripts/probe_ffc_eins.py
       - .github/workflows/999-probe-ein-providers.yml
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  probe:
+  site_eins:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Collect FFC charity repos
+      - uses: actions/checkout@v7.0.1
+      - name: Clone FFC charity repos
         env:
           GH_TOKEN: ${{ github.token }}
           GIT_TERMINAL_PROMPT: '0'
         run: |
-          mkdir -p work/repos work/artifacts
+          mkdir -p work/repos
           {
             gh api --paginate 'orgs/FreeForCharity/repos?per_page=100&type=all' --jq '.[].name' || true
             python3 -c "import csv;[print(r['Repo URL'].rstrip('/').split('/')[-1]) for r in csv.DictReader(open('sites-list/sites_list.csv')) if r['Repo URL'].strip()]"
           } | grep -E '^FFC-EX-' | sort -u > work/repo-names.txt
-          echo "candidate repos: $(wc -l < work/repo-names.txt)"
-          : > work/repos-failed.txt
           while read -r name <&3; do
-            if ! git clone -q --depth 1 --filter=blob:limit=2m "https://github.com/FreeForCharity/${name}.git" "work/repos/${name}" </dev/null 2>/dev/null; then
-              echo "$name" >> work/repos-failed.txt
-            fi
+            git clone -q --depth 1 --filter=blob:limit=2m "https://github.com/FreeForCharity/${name}.git" "work/repos/${name}" </dev/null 2>/dev/null || echo "clone failed: $name"
           done 3< work/repo-names.txt
-          echo "cloned: $(ls work/repos | wc -l)  failed: $(wc -l < work/repos-failed.txt)"
-      - name: Download latest 232 verdicts artifact (WHMCS-derived, read-only)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          id=$(gh run list -R "$GITHUB_REPOSITORY" -w 232-whmcs-charity-lane-verdicts.yml -s success -L 1 --json databaseId --jq '.[0].databaseId' || true)
-          echo "232 run: ${id:-none}"
-          if [ -n "$id" ]; then
-            gh run download "$id" -R "$GITHUB_REPOSITORY" -n charity-lane-verdicts -D work/artifacts/232 || echo "download failed"
-          fi
-          ls -la work/artifacts/232 2>/dev/null || true
-      - name: Check EINs against IRS and ProPublica
-        run: |
-          python3 scripts/probe_ffc_eins.py
-          cat probe-ffc-eins.md >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/collect_site_eins.py work/repos site-eins.json
       - uses: actions/upload-artifact@v4
         with:
-          name: probe-ffc-eins
-          path: probe-ffc-eins.md
+          name: site-eins
+          path: site-eins.json
+          retention-days: 1
+
+  application_eins:
+    needs: site_eins
+    runs-on: windows-latest
+    timeout-minutes: 40
+    environment: whmcs-prod-read
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-eins
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+      - name: Check application EINs (read-only)
+        shell: pwsh
+        run: |
+          & .\scripts\whmcs-application-ein-check.ps1 -ApiUrl 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php' -SiteEinFile site-eins.json
+          if ($LASTEXITCODE -ne 0) { throw "EIN check failed (exit $LASTEXITCODE)." }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: application-ein-check
+          path: artifacts/whmcs/application-ein-check.*

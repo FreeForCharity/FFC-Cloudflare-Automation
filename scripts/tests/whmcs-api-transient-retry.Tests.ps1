@@ -368,10 +368,43 @@ Describe 'Source guards over every copy of the retry loop' {
     # scripts/whmcs-domain-export.ps1 is self-contained by design - it duplicates
     # Resolve-WhmcsCredentials and Invoke-WhmcsApi rather than dot-sourcing them - so
     # it carried the identical defect. It cannot be dot-sourced here (mandatory param
-    # block, runs a live sweep), so it is asserted on its source. A future copy should
-    # be added to this list.
+    # block, runs a live sweep), so it is asserted on its source.
+    #
+    # THIS LIST IS A PIN, NOT A DISCOVERY MECHANISM (#1783). Since #1783 the AST guard
+    # in api-transient-label.Tests.ps1 discovers both of these files from the tree, so
+    # the general question - "is there a retry loop nobody enumerated?" - is answered
+    # there and is no longer this list's job. What stays here are the WHMCS-specific
+    # properties that guard does not check: ErrorDetails, the loose status alternation,
+    # the 800-character response slice and the $transientReason assignments. Those are
+    # claims about these two files, so naming them is correct rather than a shortcut.
+    #
+    # It no longer falls behind silently either: the completeness test below fails if a
+    # third copy of this loop appears in scripts/ and is not added here.
     BeforeDiscovery {
         $script:RetryLoopFiles = @('whmcs-api-common.ps1', 'whmcs-domain-export.ps1')
+
+        # Swept at DISCOVERY time, and handed to the pin test below as data. Pester
+        # runs BeforeDiscovery in the discovery phase, so a $script: variable set here
+        # is visible to -ForEach and is EMPTY inside an It body - which is why the
+        # guards above consume the list only through -ForEach. Measured: reading
+        # $script:RetryLoopFiles inside an It compares the carriers against '' and
+        # fails with an empty expectation.
+        #
+        # The tokenizer is inlined rather than calling Get-PowerShellCodeOnly, which is
+        # defined in the BeforeAll below and so does not exist yet in this phase.
+        $script:RetryLoopCarriers = @(
+            Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot -Parent) -Filter '*.ps1' -File |
+                Where-Object {
+                    $t = $null
+                    $e = $null
+                    $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e)
+                    if ($e -and @($e).Count -gt 0) { return $false }
+                    $code = ((@($t) | Where-Object { $_.Kind -ne 'Comment' } | ForEach-Object { $_.Text }) -join ' ')
+                    $code -match '\$transientReason'
+                } |
+                Select-Object -ExpandProperty Name |
+                Sort-Object
+        )
     }
 
     BeforeAll {
@@ -437,6 +470,21 @@ Describe 'Source guards over every copy of the retry loop' {
         $code = Get-RetryLoopCode $_
         $code | Should -Not -Match '\$transientReason\s*=\s*\$msg\b'
         $code | Should -Not -Match '\$transientReason\s*=\s*\$em\b'
+    }
+
+    It 'pins every copy of this loop that exists: no third copy is unguarded' -ForEach @(
+        @{ Pinned = @($script:RetryLoopFiles | Sort-Object); Carriers = $script:RetryLoopCarriers }
+    ) {
+        # What makes the list above a PIN rather than a stale enumeration (#1783). Every
+        # assertion in this Describe is about $transientReason, so any further copy of
+        # this loop carries that variable by construction - which makes it the right
+        # signature to sweep for, and makes a new copy fail here instead of being
+        # guarded by nothing.
+        #
+        # Comment-stripped, for the same reason as the guards above: these files quote
+        # the pre-fix shapes in comments that explain why they were wrong.
+        @($Carriers).Count | Should -BeGreaterThan 0 -Because 'a sweep that finds nothing must not read as a pass'
+        (@($Carriers) -join ', ') | Should -Be (@($Pinned) -join ', ')
     }
 
     It 'routes the retry reason through the label helper in <_>' -ForEach $script:RetryLoopFiles {

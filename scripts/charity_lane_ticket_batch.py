@@ -114,6 +114,12 @@ ITEMS: dict[str, tuple[int, str]] = {
 
 # Codes the applicant cannot act on: ours to check, or internal routing.
 NOT_FOR_APPLICANT = {
+    # IRS-list results: a human decides (revoked), or the review waits for the
+    # next monthly IRS update (not yet listed). Never a ticket item.
+    "EIN_REVOKED",
+    "EIN_NOT_IN_PUB78",
+    "EIN_NOT_YET_LISTED",
+    "IRS_LISTS_UNAVAILABLE",
     "TRACK_MISMATCH",
     "ORDER_HAS_MULTIPLE_LANE_ITEMS",
     "DUPLICATE_DOMAIN_OTHER_CLIENT",

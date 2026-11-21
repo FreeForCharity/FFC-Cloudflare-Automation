@@ -84,6 +84,7 @@ for repo in repos:
     eins = {}
     for e, f in hits:
         eins.setdefault(e, set()).add(f)
+    eins.pop("462471893", None) if repo not in ("FFC-EX-freeforcharity.org",) else None
     if not eins:
         repos_no_ein.append(repo)
     for e, fs in eins.items():

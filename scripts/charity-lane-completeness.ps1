@@ -153,7 +153,7 @@ $script:LaneCompletenessCodes = [ordered]@{
     VOLUNTEER_URL_NOT_PUBLIC      = @{ severity = 'NEED_INFO'; description = "Idealist answer is not your organization's public page (admin link or the Idealist home page)."; applicant = "Your organization's PUBLIC Idealist page or volunteer-opportunity link. The link we have is an admin page or the Idealist home page." }
     VOLUNTEER_URL_NOT_FOUND       = @{ severity = 'NEED_INFO'; description = 'Idealist URL answers 404/410.'; applicant = 'Your Idealist link: the link we have does not open (page not found).' }
     CANDID_URL_MISSING            = @{ severity = 'NEED_INFO'; description = 'Candid / GuideStar public profile link not answered.'; applicant = "Your organization's public Candid (GuideStar) profile link." }
-    CANDID_URL_NOT_PUBLIC         = @{ severity = 'NEED_INFO'; description = "Candid answer is not the organization's public profile (an app.candid.org, login or user page)."; applicant = "Your organization's PUBLIC Candid (GuideStar) profile link, for example https://www.guidestar.org/profile/12-3456789. The link we have is a Candid app or login page that the public cannot open." }
+    CANDID_URL_NOT_PUBLIC         = @{ severity = 'NEED_INFO'; description = "Candid answer is not an organization profile (a Candid home, login, account, search or user page)."; applicant = "Your organization's Candid (GuideStar) profile link, for example https://app.candid.org/profile/1234567/your-organization or https://www.guidestar.org/profile/12-3456789. The link we have is a Candid home, login or search page, not your organization's profile." }
     CANDID_URL_NOT_FOUND          = @{ severity = 'NEED_INFO'; description = 'Candid profile URL answers 404/410.'; applicant = 'Your Candid (GuideStar) profile link: the link we have does not open (page not found).' }
     CURRENT_SITE_URL_INVALID      = @{ severity = 'NEED_INFO'; description = 'Current-website answer is not a usable public link.'; applicant = 'The full public link to your current website or page (or leave that question blank if you have none).' }
     CURRENT_SITE_UNREACHABLE      = @{ severity = 'NEED_INFO'; description = 'Current website URL answers 404/410.'; applicant = 'Your current website link: the link we have does not open. Please send the working link, or tell us you have no current site.' }
@@ -245,6 +245,20 @@ function Test-LaneLinkAnswered {
     return 'unverified'
 }
 
+function Get-LaneCandidEinProfileUrl {
+    # The GuideStar profile-by-EIN page for a Candid answer, else ''. Pure.
+    # The EIN comes from the link itself (an app.candid.org slug ending in the
+    # EIN, or a guidestar.org/profile/<EIN> path) or, failing that, from the
+    # application's own EIN answer. It is a second, public way to see the same
+    # profile when the given link does not answer a signed-out GET.
+    param([string]$CandidUrl, [string]$Ein)
+    $m = [regex]::Match([string]$CandidUrl, '(?i)/profile/(?:\d+/[^/?#]*?-)?(\d{2})-?(\d{7})/?(?:[?#]|$)')
+    if ($m.Success) { return "https://www.guidestar.org/profile/$($m.Groups[1].Value)-$($m.Groups[2].Value)" }
+    $e = [regex]::Match([string]$Ein, '^(\d{2})-?(\d{7})$')
+    if ($e.Success) { return "https://www.guidestar.org/profile/$($e.Groups[1].Value)-$($e.Groups[2].Value)" }
+    return ''
+}
+
 function Get-LaneCompletenessTargets {
     <#
     .SYNOPSIS
@@ -256,6 +270,11 @@ function Get-LaneCompletenessTargets {
     $links = [ordered]@{}
     foreach ($k in $script:LaneProbedLinkFields.Keys) {
         if ($doc.fields.Contains($k)) { $links[$k] = [string]$doc.fields[$k] }
+    }
+    if ($links.Contains('candidProfileUrl')) {
+        $ein = if ($doc.fields.Contains('ein')) { [string]$doc.fields['ein'] } else { '' }
+        $fallback = Get-LaneCandidEinProfileUrl -CandidUrl $links['candidProfileUrl'] -Ein $ein
+        if ($fallback -and $fallback -ne $links['candidProfileUrl']) { $links['candidEinProfile'] = $fallback }
     }
     $gh = if ($doc.fields.Contains('maintainerGithub')) { [string]$doc.fields['maintainerGithub'] } else { '' }
     return [pscustomobject]@{ Links = $links; GithubUser = $gh }
@@ -300,7 +319,16 @@ function Get-LaneCompletenessCodes {
         if (-not $doc.fields.Contains($k)) { continue }
         $url = [string]$doc.fields[$k]
         $probe = if ($LinkProbes.ContainsKey($url)) { $LinkProbes[$url] } else { $null }
-        switch (Test-LaneLinkAnswered -Probe $probe) {
+        $answered = Test-LaneLinkAnswered -Probe $probe
+        if ($k -eq 'candidProfileUrl' -and $answered -eq 'unverified') {
+            # A Candid profile link that would not answer a signed-out GET is
+            # still verified when the same organization's GuideStar profile,
+            # found by EIN, opens publicly. A 404 on the given link stays dead.
+            $ein = if ($doc.fields.Contains('ein')) { [string]$doc.fields['ein'] } else { '' }
+            $fallback = Get-LaneCandidEinProfileUrl -CandidUrl $url -Ein $ein
+            if ($fallback -and $LinkProbes.ContainsKey($fallback) -and (Test-LaneLinkAnswered -Probe $LinkProbes[$fallback]) -eq 'ok') { $answered = 'ok' }
+        }
+        switch ($answered) {
             'ok' { }
             'dead' { & $add $script:LaneProbedLinkFields[$k] }
             'botwall' { & $add 'LINK_BOT_WALL' }

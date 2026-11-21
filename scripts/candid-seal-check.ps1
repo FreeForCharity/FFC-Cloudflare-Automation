@@ -120,26 +120,6 @@ function Get-CandidSealVerdict {
     return [pscustomobject]$r
 }
 
-function Invoke-CandidRender {
-    # Render a page in headless Chrome as a signed-out visitor and return the
-    # DOM after scripts ran (Candid profile pages are a script-built app, so a
-    # plain GET only returns the same empty shell for every link).
-    param([Parameter(Mandatory = $true)][string]$Url, [string]$Chrome = '')
-    if (-not $Chrome) {
-        foreach ($c in 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser') {
-            $cmd = Get-Command $c -ErrorAction SilentlyContinue
-            if ($cmd) { $Chrome = $cmd.Source; break }
-        }
-    }
-    if (-not $Chrome) { return '' }
-    $profileDir = Join-Path ([IO.Path]::GetTempPath()) ("candid-" + [guid]::NewGuid().ToString('n'))
-    try {
-        $out = & $Chrome --headless=new --no-sandbox --disable-gpu --no-first-run "--user-data-dir=$profileDir" --virtual-time-budget=20000 --window-size=1280, 2000 --dump-dom $Url 2>$null
-        return ($out -join "`n")
-    }
-    finally { Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue }
-}
-
 function Get-CandidReport {
     # Fetch every profile link and seal widget asked for. Returns a list of
     # raw fetch records tagged with kind (profile | seal) and profileId.
@@ -180,17 +160,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         if ($r.kind -eq 'seal') {
             $v = Get-CandidSealVerdict -Fetch $r
             Write-Host "SEAL VERDICT: $($v.verdict) $($v.level)"
-        }
-        if ($r.kind -eq 'profile') {
-            $dom = Invoke-CandidRender -Url $r.url
-            $text = (($dom -replace '(?is)<(script|style)[^>]*>.*?</\1>', ' ') -replace '<[^>]+>', ' ' -replace '\s+', ' ').Trim()
-            Write-Host "rendered dom: $($dom.Length) chars, visible text $($text.Length) chars"
-            Write-Host "rendered title: $(([regex]::Match($dom, '(?is)<title[^>]*>(.*?)</title>')).Groups[1].Value.Trim())"
-            foreach ($w in 'Sign in', 'Log in', 'Create account', 'Seal of Transparency', 'Mission', 'EIN', 'Platinum', 'Gold', 'Silver', 'Bronze', 'Unlock', 'not authorized') {
-                Write-Host ("  rendered contains {0,-24} {1}" -f "'$w':", ($text.IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -ge 0))
-            }
-            $snip = if ($text.Length -gt 2500) { $text.Substring(0, 2500) } else { $text }
-            Write-Host "rendered text: $snip"
         }
         foreach ($w in 'sign in', 'log in', 'login', 'Platinum', 'Gold', 'Silver', 'Bronze', 'seal', 'Transparency', 'not found', 'pkId') {
             Write-Host ("  contains {0,-14} {1}" -f "'$w':", (([string]$r.body).IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -ge 0))

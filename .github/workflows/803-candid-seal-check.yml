@@ -21,6 +21,7 @@ on:
   pull_request:
     paths:
       - 'scripts/candid-seal-check.ps1'
+      - 'scripts/candid-render.js'
       - '.github/workflows/803-candid-seal-check.yml'
 
 permissions:
@@ -36,6 +37,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+
+      - name: Install Playwright
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
 
       - name: Fetch seals and profile links
         shell: pwsh
@@ -58,11 +64,28 @@ jobs:
           $controls = @('1', '999999999')
           $ids = @("$env:SEAL_IDS" -split '[,\s]+' | Where-Object { $_ -match '^\d{1,12}$' }) + $controls
           ./scripts/candid-seal-check.ps1 -ProfileUrl $urls -SealId $ids -Raw -JsonOut candid-seal-report.json
+          $urls -join "`n" | Set-Content -Path candid-urls.txt
+
+      - name: Render profile links and footer badges in Chromium
+        run: |
+          mapfile -t urls < candid-urls.txt
+          node scripts/candid-render.js "${urls[@]}" > candid-render.jsonl
+          python3 -c "
+          import json
+          for line in open('candid-render.jsonl', encoding='utf-8'):
+              r = json.loads(line); p = r['profile']; f = r['footer'] or {}
+              print('===', r['url'])
+              print('  page:', p.get('status'), p.get('finalUrl'), '|', p.get('title'), '|', p.get('error', ''))
+              print('  text:', p.get('text', '')[:1500])
+              print('  footer badge:', f.get('width'), 'x', f.get('height'), 'complete', f.get('complete'), f.get('error', ''))
+          "
 
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: candid-seal-report
-          path: candid-seal-report.json
+          path: |
+            candid-seal-report.json
+            candid-render.jsonl
           if-no-files-found: ignore

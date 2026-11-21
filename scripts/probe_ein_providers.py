@@ -177,9 +177,10 @@ for ein in ["462471893", "991579845", "530196605"]:
     for lbl, tpl in PAGES:
         u = tpl.format(ein=ein, d=d)
         s, h, b, dt, final = fetch(u, max_bytes=600000, timeout=40)
+        snip = repr(b[:100]) if s and s != 200 else ""
         p(
             f"- {ein} {lbl}: HTTP {s} ein_on_page={mentions(b, ein) if s else '-'} "
-            f"final={final[:110]} title={title(b)!r} snippet={b[:100]!r if s and s != 200 else ''}"
+            f"final={final[:110]} title={title(b)!r} snippet={snip}"
         )
         time.sleep(0.3)
 

@@ -263,7 +263,8 @@
         "^/user/",
         "^/?$",
         "(?i)^/(account|login|log-in|signin|sign-in|signup|sign-up|register|dashboard|search)(/|$)"
-      ]
+      ],
+      "hostRequiredQueryParams": [{ "host": "app.candid.org", "param": "pkId" }]
     },
     {
       "key": "templateChoice",

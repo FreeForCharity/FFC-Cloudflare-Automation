@@ -379,11 +379,12 @@ Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)'
     BeforeAll {
         $script:AppCandid = 'https://app.candid.org/profile/15935725/restorative-expressive-arts-corp-99-1579845'
         $script:AppCandidShared = 'https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true'
+        $script:AppCandidSharedEin = 'https://app.candid.org/profile/15935725/restorative-expressive-arts-corp-99-1579845/?pkId=e115d60f-1499-4a15-9aea-56fe7d8b413d'
     }
 
-    It 'an app.candid.org profile link is accepted when it opens' {
+    It 'an app.candid.org profile link without its shareable pkId is NOT_PUBLIC (it opens only signed in)' {
         $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:AppCandid, $script:Current)
-        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -BeNullOrEmpty
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -Contain 'CANDID_URL_NOT_PUBLIC'
     }
 
     It 'a shared app.candid.org profile link with its pkId is accepted when it opens' {
@@ -403,25 +404,34 @@ Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)'
 
     It 'a profile link that will not answer a signed-out GET passes when the GuideStar EIN page opens' {
         $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current, 'https://www.guidestar.org/profile/99-1579845')
-        $p[$script:AppCandid] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
-        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -BeNullOrEmpty
+        $p[$script:AppCandidSharedEin] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -BeNullOrEmpty
     }
 
     It 'the runner is asked to open the GuideStar EIN page too' {
-        $t = Get-LaneCompletenessTargets -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid }) -ProductPid 33
+        $t = Get-LaneCompletenessTargets -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin }) -ProductPid 33
         @($t.Links.Values) | Should -Contain 'https://www.guidestar.org/profile/99-1579845'
     }
 
     It 'still unverified when neither the link nor the GuideStar EIN page opens' {
         $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current)
-        $p[$script:AppCandid] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
+        $p[$script:AppCandidSharedEin] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
         $p['https://www.guidestar.org/profile/99-1579845'] = @{ status = $null; mitigated = ''; host = 'www.guidestar.org' }
-        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -Contain 'LINK_UNVERIFIED'
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -Contain 'LINK_UNVERIFIED'
     }
 
     It 'a 404 on the given profile link stays NOT_FOUND even if the EIN page opens' {
         $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current, 'https://www.guidestar.org/profile/99-1579845')
-        $p[$script:AppCandid] = @{ status = 404; mitigated = ''; host = 'app.candid.org' }
-        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -Contain 'CANDID_URL_NOT_FOUND'
+        $p[$script:AppCandidSharedEin] = @{ status = 404; mitigated = ''; host = 'app.candid.org' }
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'with both answers given, the shareable link is chosen over the signed-in-only one (order 883)' {
+        $fields = New-AppFields -Override @{
+            'Public GuideStar Profile Link'                         = $script:AppCandid
+            'Candid / GuideStar direct (shared) profile link (optional)' = $script:AppCandidSharedEin
+        }
+        $t = Get-LaneCompletenessTargets -Fields $fields -ProductPid 33
+        $t.Links['candidProfileUrl'] | Should -Be $script:AppCandidSharedEin
     }
 }

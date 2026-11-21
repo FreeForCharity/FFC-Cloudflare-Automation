@@ -372,6 +372,44 @@ def test_a_template_requiring_sealUrl_keeps_the_key_and_gets_it_empty():
         shutil.rmtree(td)
 
 
+
+def test_an_app_candid_profile_link_gives_the_charity_its_own_seal_widget():
+    # Candid's seal widget is keyed on the numeric Candid profile id, and that
+    # id is in a charity's own shareable app.candid.org profile link. So when
+    # the charity gave one, sealUrl is Candid's widget for THAT id: the same
+    # form freeforcharity.org's footer uses for FFC. Never FFC's id.
+    footer_only_shape = SITE_CONFIG.replace(
+        "  guidestar: {\n"
+        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+        "  },",
+        "  guidestar: {\n"
+        "    sealUrl: 'https://widgets.guidestar.org/prod/v1/pdp/"
+        "transparency-seal/9326392/svg',\n"
+        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+        "  },",
+    )
+    assert "sealUrl:" in footer_only_shape, "fixture substitution did not apply"
+    shared = (
+        "https://app.candid.org/profile/16766185/ritual-azteca-inc/"
+        "?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true"
+    )
+    td, repo, proc = applied(
+        {**FULL_ARGS, "GuideStarProfileUrl": shared, "GuideStarDirectProfileUrl": shared},
+        site_config=footer_only_shape,
+    )
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert (
+            "sealUrl: 'https://widgets.guidestar.org/prod/v1/pdp/"
+            "transparency-seal/16766185/svg'," in cfg
+        ), cfg
+        assert "9326392" not in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
 def test_address_line_breaks_real_or_literal_but_never_commas():
     cases = {
         "12 Main St\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],

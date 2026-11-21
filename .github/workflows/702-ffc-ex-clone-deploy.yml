@@ -170,9 +170,29 @@ jobs:
           # cname=null, and five had been forced past this guard for no reason.
           #
           # Fails safe: only an affirmative read of an UNBOUND domain downgrades an empty
-          # apex to "expected". A 404 from this endpoint means Pages is not configured at
-          # all, which is also unbound. Any other failure leaves cname_known=false, and an
-          # empty apex then still refuses exactly as before.
+          # apex to "expected". Any other outcome leaves cname_known=false, and an empty
+          # apex then still refuses exactly as before.
+          #
+          # A 404 from this endpoint has TWO causes and they are NOT interchangeable, so
+          # it is not on its own an affirmative read of anything. `has_pages` tells them
+          # apart, and it comes out of the repo metadata already read above — no extra
+          # API call:
+          #   has_pages=false -> Pages is genuinely not configured, so no custom domain
+          #                      is bound either and a silent apex IS expected.
+          #   has_pages=true  -> /pages should have answered, so a 404 is a DENIED read
+          #                      rather than an answer. This job is ungated and runs with
+          #                      `github.token`, whose permissions apply only to the
+          #                      repository containing the workflow; `$canonical` is a
+          #                      DIFFERENT repo, and GitHub answers 404 — not 403 — for a
+          #                      repository resource a token has no permission on. A
+          #                      `permissions:` block cannot fix that: it scopes the token
+          #                      for this repo and cannot grant cross-repo access. Every
+          #                      other cross-repo Pages read here is made from a gated job
+          #                      with the Key Vault PAT, for this reason
+          #                      (746-bulk-enable-pages.yml, 120-bulk-cutover-to-github-pages.yml).
+          # An absent or unparseable `has_pages` also leaves cname_known=false, so the
+          # refusal stands rather than resting on a field that was not there.
+          has_pages=$(printf '%s' "$resp" | jq -r 'if has("has_pages") then (.has_pages | tostring) else "" end' 2>/dev/null || true)
           set +e
           cname_resp=$(gh api "repos/$canonical/pages" --jq '.cname // empty' 2>&1)
           cname_rc=$?
@@ -182,7 +202,7 @@ jobs:
           if [ $cname_rc -eq 0 ]; then
             pages_cname=$(printf '%s' "$cname_resp" | tr -d '[:space:]')
             cname_known=true
-          elif printf '%s' "$cname_resp" | grep -q "HTTP 404"; then
+          elif printf '%s' "$cname_resp" | grep -q "HTTP 404" && [ "$has_pages" = "false" ]; then
             cname_known=true
           fi
           apex_expected_unbound=false
@@ -209,7 +229,7 @@ jobs:
               echo "::error::Apex https://${IN_DOMAIN}/ answered nothing, but $canonical has the custom domain \`$pages_cname\` bound on Pages — a bound domain should respond. Check DNS and certificate state (workflow 120 reports both) before cloning; the target may already be mid-cutover."
               echo "⛔ Refused: apex silent while \`$pages_cname\` is bound on Pages — resolve the cutover state first." >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::error::Apex https://${IN_DOMAIN}/ answered nothing and the Pages configuration of $canonical could not be read, so whether a custom domain is bound is unknown. Failing safe. Details: $cname_resp"
+              echo "::error::Apex https://${IN_DOMAIN}/ answered nothing and the Pages configuration of $canonical could not be read, so whether a custom domain is bound is unknown. Failing safe. Repo metadata reports has_pages=${has_pages:-<unread>}; if that is true while the read below 404s, the read was DENIED rather than answered — this job runs with github.token, which holds no permissions on $canonical. Details: $cname_resp"
               echo "⛔ Refused: apex silent and the target's Pages configuration is unreadable — could not verify target state." >> "$GITHUB_STEP_SUMMARY"
             fi
             exit 1

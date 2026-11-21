@@ -11,6 +11,7 @@ force=true.
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,28 @@ from wf_extract import child_env, step_run
 
 HARNESS_DIR = pathlib.Path(__file__).resolve().parent / "harness"
 
-CANONICAL_META = '{"full_name": "FreeForCharity/FFC-EX-AllTypeTowing.com", "archived": false}'
+# `has_pages` is read from this same response, so the fixture has to carry it. true is
+# the realistic value for every target this workflow runs against: 720 creates the repo
+# with the FFC template already deployed, which is what makes the default Pages URL
+# answer 200. The two variants below are the cases where it is not true, and the
+# preflight treats them differently — see the 404-shaped-denial tests.
+CANONICAL_META = (
+    '{"full_name": "FreeForCharity/FFC-EX-AllTypeTowing.com", "archived": false,'
+    ' "has_pages": true}'
+)
+
+# Pages genuinely never enabled on the target. The only shape in which a 404 from
+# `repos/<r>/pages` is an affirmative "no custom domain is bound".
+NO_PAGES_META = (
+    '{"full_name": "FreeForCharity/FFC-EX-AllTypeTowing.com", "archived": false,'
+    ' "has_pages": false}'
+)
+
+# The field absent altogether — a trimmed or unexpected metadata response. Must fail
+# safe rather than be read as either answer.
+NO_HAS_PAGES_FIELD_META = (
+    '{"full_name": "FreeForCharity/FFC-EX-AllTypeTowing.com", "archived": false}'
+)
 
 
 def run_preflight(env_overrides: dict) -> tuple[subprocess.CompletedProcess, str, str]:
@@ -344,13 +366,74 @@ def test_unreadable_pages_config_with_silent_apex_fails_safe():
 
 
 def test_pages_not_configured_counts_as_unbound():
-    # A 404 from repos/<r>/pages means Pages is not set up at all, which is also
-    # "no custom domain bound" -- it must not read as an unreadable config.
+    # A 404 from repos/<r>/pages WHEN the repo metadata agrees Pages is not set up
+    # means no custom domain is bound either -- it must not read as an unreadable
+    # config. `has_pages: false` is what makes this the genuine case rather than the
+    # denial below; the two are indistinguishable from the 404 alone.
     proc, _, outputs = run_preflight(
-        {**FRESH_TARGET, "TEST_PAGES_CODE": "404", "TEST_PAGES_NOT_CONFIGURED": "1"}
+        {
+            **FRESH_TARGET,
+            "TEST_REPO_META": NO_PAGES_META,
+            "TEST_PAGES_CODE": "404",
+            "TEST_PAGES_NOT_CONFIGURED": "1",
+        }
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "repo_name=" in outputs, outputs
+
+
+def test_a_404_shaped_denial_of_the_pages_read_refuses_rather_than_reading_as_unbound():
+    """The failure mode this guard's own fail-safe depended on not existing.
+
+    `repos/<canonical>/pages` is a CROSS-REPO read and this job is ungated with
+    `github.token`, which holds no permissions on `$canonical`. GitHub answers 404 --
+    not 403 -- for a repository resource a token cannot see, so a denial arrives in
+    exactly the shape the code read as "Pages is not configured, therefore unbound".
+
+    `has_pages: true` with a 404 from /pages is that denial: the endpoint should have
+    answered. It is not an affirmative read of anything, so it must not downgrade a
+    silent apex to "expected" -- otherwise the mid-cutover case (custom domain bound,
+    DNS not yet propagated) passes through to the gate, which is the one state
+    `test_silent_apex_with_a_bound_domain_still_refuses` exists to stop.
+    """
+    proc, summary, _ = run_preflight(
+        {**FRESH_TARGET, "TEST_PAGES_NOT_CONFIGURED": "1"}
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "could not be read" in proc.stdout, proc.stdout
+    assert "has_pages=true" in proc.stdout, proc.stdout
+    assert "Refused" in summary, summary
+
+
+def test_an_absent_has_pages_field_fails_safe_rather_than_picking_an_answer():
+    # The disambiguator is only as good as the field being there. Absent => neither
+    # cause is established => refuse, the same as any other unreadable config.
+    proc, summary, _ = run_preflight(
+        {
+            **FRESH_TARGET,
+            "TEST_REPO_META": NO_HAS_PAGES_FIELD_META,
+            "TEST_PAGES_NOT_CONFIGURED": "1",
+        }
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "could not be read" in proc.stdout, proc.stdout
+    assert "Refused" in summary, summary
+
+
+def test_the_pages_read_is_not_made_twice_to_answer_the_has_pages_question():
+    """`has_pages` comes out of the repo-existence response, so the disambiguation
+    costs no extra API call. Pinned because the obvious alternative -- a second
+    `gh api repos/<r>` -- would pass every test above while doubling the calls this
+    ungated preflight makes against a repo it cannot read."""
+    with tempfile.TemporaryDirectory() as td:
+        log = pathlib.Path(td) / "gh.log"
+        proc, _, _ = run_preflight({**FRESH_TARGET, "TEST_GH_LOG": str(log)})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        calls = log.read_text(encoding="utf-8").splitlines()
+    # Matched by shape, not by name: the metadata read uses the DISPATCHED casing
+    # ("…-alltypetowing.com"), because resolving the canonical name is what it is for.
+    meta_reads = [c for c in calls if re.fullmatch(r"api repos/[^/ ]+/[^/ ]+", c.strip())]
+    assert len(meta_reads) == 1, f"repo metadata read {len(meta_reads)} times:\n" + "\n".join(calls)
 
 
 def test_default_url_200_on_the_template_seed_is_not_a_completed_migration():

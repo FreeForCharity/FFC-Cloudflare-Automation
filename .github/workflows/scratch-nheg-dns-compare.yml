@@ -1,0 +1,38 @@
+name: 'SCRATCH - NHEG live vs Cloudflare DNS compare (read-only, do not merge)'
+
+# Temporary, read-only: queries the Bluehost and Cloudflare authoritative
+# nameservers for newheightseducation.org and prints every difference.
+# No secrets, no environments, contents: read only. Runs on push to this
+# scratch branch; delete before any merge.
+on:
+  push:
+    branches: ['claude/project-thread-ucp1r0']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: pip install --quiet dnspython
+      - name: Compare
+        run: |
+          python3 scripts/dns-zone-compare.py --domain newheightseducation.org \
+            --old ns1.bluehost.com,ns2.bluehost.com \
+            --new dane.ns.cloudflare.com,zainab.ns.cloudflare.com,ns1.freeforcharity.org,ns2.freeforcharity.org \
+            --json compare.json
+      - name: Delegation check
+        if: always()
+        run: |
+          dig +noall +answer +authority NS newheightseducation.org @a0.org.afilias-nst.info || true
+          dig +short NS newheightseducation.org @1.1.1.1 || true
+          whois newheightseducation.org 2>/dev/null | grep -iE 'registrar:|name server|expir' || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dns-compare
+          path: compare.json

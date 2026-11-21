@@ -319,6 +319,29 @@ Describe 'Invoke-WhmcsApi retry path' {
         $script:Warnings[0] | Should -BeLike '*connection dropped (read)*'
     }
 
+    It 'does not treat a server-supplied error body as a dropped connection' {
+        # On an HTTP error status Invoke-RestMethod puts the RESPONSE BODY on
+        # $_.ErrorDetails.Message and its own text on the exception. Measured against
+        # a real socket: a 400 whose body read 'upstream says connection reset' was
+        # classified as a dropped connection and retried while the predicate read
+        # ErrorDetails. A body is proof the connection did NOT drop, so body text must
+        # never reach the predicate - otherwise the host decides our retry policy.
+        $env:WHMCS_API_MAX_ATTEMPTS = '2'
+        $script:Calls = 0
+        Mock Invoke-RestMethod {
+            $script:Calls++
+            $er = [System.Management.Automation.ErrorRecord]::new(
+                [System.Exception]::new('Response status code does not indicate success: 400 (Bad Request).'),
+                'WhmcsHttpError', [System.Management.Automation.ErrorCategory]::InvalidOperation, $null)
+            $er.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('upstream says connection reset')
+            throw $er
+        }
+
+        { Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetClientsProducts' } } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        $script:Warnings.Count | Should -Be 0
+    }
+
     It 'does not retry a write whose response ended prematurely: <_>' -ForEach @('AcceptOrder', 'OpenTicket', 'UpdateClient') {
         $action = $_
         Mock Invoke-RestMethod { throw 'The response ended prematurely. (ResponseEnded)' }
@@ -379,6 +402,18 @@ Describe 'Source guards over every copy of the retry loop' {
             param([Parameter(Mandatory = $true)][string]$Name)
             return Get-PowerShellCodeOnly (Join-Path (Split-Path $PSScriptRoot -Parent) $Name)
         }
+    }
+
+    It 'never classifies a transient on a serialized response body in <_>' -ForEach $script:RetryLoopFiles {
+        # The retry decision must be driven by transport facts, not by anything the
+        # host sends in a response body. ErrorDetails.Message IS that body for an HTTP
+        # error status, so reading it hands an outside party a lever on our retry
+        # policy and on what the exhaustion throw then reports.
+        #
+        # Asserted on comment-stripped code: the fix documents the trap by NAME in
+        # whmcs-api-common.ps1, so a raw-text guard would flag the explanation.
+        $code = Get-RetryLoopCode $_
+        $code | Should -Not -Match 'ErrorDetails'
     }
 
     It 'has no loose status alternation in <_>' -ForEach $script:RetryLoopFiles {

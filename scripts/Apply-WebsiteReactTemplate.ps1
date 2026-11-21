@@ -48,6 +48,12 @@ param(
 
     [string]$GuideStarDirectProfileUrl,
 
+    # The seal widget is only written after it was fetched and seen to be a
+    # real, visible seal (scripts/candid-seal-check.ps1). Blank = fetch it now.
+    # Tests pass a verdict instead of reaching Candid: ok | no_seal | no_org |
+    # not_svg | unverified.
+    [string]$CandidSealVerdict,
+
     [string[]]$FooterSocial = @(),
 
     [string[]]$LeadershipLines = @(),
@@ -898,6 +904,19 @@ function Update-SiteConfig {
         if ($currentGuidestar -match '(?m)^\s*sealUrl\s*:') {
             $sealUrl = Get-CandidSealUrl -ProfileUrl $directUrl
             if (-not $sealUrl) { $sealUrl = Get-CandidSealUrl -ProfileUrl $profileUrl }
+            if ($sealUrl) {
+                # Built from the id is not proof: Candid answers 200 with an
+                # empty, invisible box for an organization that has no seal.
+                $verdict = $CandidSealVerdict
+                if (-not $verdict) {
+                    . (Join-Path $PSScriptRoot 'candid-seal-check.ps1')
+                    $verdict = (Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url $sealUrl)).verdict
+                }
+                if ($verdict -ne 'ok') {
+                    Write-Warning "Candid seal widget $sealUrl is not a visible seal ($verdict); the footer shows no seal."
+                    $sealUrl = ''
+                }
+            }
             $sealTs = "`n    sealUrl: $(ConvertTo-TsString $sealUrl),"
         }
     }

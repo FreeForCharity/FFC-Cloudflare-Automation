@@ -2541,7 +2541,7 @@
         "workflow_dispatch"
       ],
       "environments": [],
-      "description": "Read-only: fetches each charity's Candid Seal of Transparency widget and shareable profile link as a signed-out visitor would, and reports whether the seal really loads and the link really opens. No credentials. Runs on a GitHub runner because cloud agent containers cannot reach Candid.",
+      "description": "Read-only: checks each charity's Candid footer badge the way a signed-out visitor meets it. The seal widget must be a real, visible seal, the badge must render in a page, and the shareable profile link must show the full profile. Blank input = self-test against known live answers. No credentials. Runs on a GitHub runner because cloud agent containers cannot reach Candid.",
       "safetyLevel": "Reads",
       "approvalEnv": "none (no credentials)",
       "guard": "read-only signed-out fetch of public seal widgets and profile links",

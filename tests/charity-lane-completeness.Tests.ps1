@@ -435,3 +435,90 @@ Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)'
         $t.Links['candidProfileUrl'] | Should -Be $script:AppCandidSharedEin
     }
 }
+
+Describe 'Candid seal widget answers (workflow 803, measured 2026-11-21)' {
+    BeforeAll {
+        $script:SealShared = 'https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true'
+        # Shapes copied from what Candid returned to a GitHub runner.
+        $script:GoldSvg = @'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" height="108" width="108">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #d3aa41;
+      }
+      .cls-3 {
+        fill: #fff;
+      }
+    </style>
+  </defs>
+    <rect class="cls-1" x="0" width="108" height="108"/>
+    <rect class="cls-3" x="9.45" y="9.45" width="89.1" height="89.1"/>
+</svg>
+'@
+        $script:EmptySvg = @'
+<?xml version="1.0"?>
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+    <path fill="none" stroke="#fff" stroke-width="2" d="M1,1V199H199V1z"/>
+</svg>
+'@
+        function New-Fetch { param($Status, $Type, $Body) [pscustomobject]@{ status = $Status; contentType = $Type; body = $Body } }
+    }
+
+    It 'a coloured 108x108 seal is ok, and names its level' {
+        $v = Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' $script:GoldSvg)
+        $v.verdict | Should -Be 'ok'
+        $v.level | Should -Be 'Gold'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' ($script:GoldSvg -replace '#d3aa41', '#a6c0ce'))).level | Should -Be 'Platinum'
+    }
+
+    It 'the 200 empty white outline Candid serves for an org with no seal is no_seal, not ok' {
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' $script:EmptySvg)).verdict | Should -Be 'no_seal'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' ($script:GoldSvg -replace '#d3aa41', '#fff'))).verdict | Should -Be 'no_seal'
+    }
+
+    It 'a 404 is no_org, a non-SVG is not_svg, a transport error is unverified' {
+        (Get-CandidSealVerdict -Fetch (New-Fetch 404 'application/json' '{"Message":"Organization 999999999 not found"}')).verdict | Should -Be 'no_org'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'text/html' '<html></html>')).verdict | Should -Be 'not_svg'
+        (Get-CandidSealVerdict -Fetch (New-Fetch $null '' '')).verdict | Should -Be 'unverified'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 503 'text/html' '')).verdict | Should -Be 'unverified'
+    }
+
+    It 'the review flags a Candid link whose profile id Candid does not know as NOT_FOUND' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'no_org' })
+        $codes | Should -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'no seal yet is INFO only and does not block acceptance' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'no_seal' })
+        $codes | Should -Contain 'CANDID_SEAL_NONE'
+        @(Get-LaneCompletenessBlocking -Codes $codes) | Should -Not -Contain 'CANDID_SEAL_NONE'
+    }
+
+    It 'a visible seal adds nothing' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'ok' })
+        $codes | Should -Not -Contain 'CANDID_SEAL_NONE'
+        $codes | Should -Not -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'a rendered shareable profile is the full page; the plain link is only a summary signed out' {
+        $full = 'Skip to content Donate to Candid Log in/Register Ritual Azteca Inc Documents Info Summary Programs Impact People Forms 990 EIN 42-4285263 IRS subsection 501(c)(3) Public Charity Mission ...'
+        $stub = 'Candid search Ritual Azteca Inc Location: Los Angeles, CA EIN: 42-4285263 Tax status: 501(c)(3) Public Charity Suggest an edit Do you manage Ritual Azteca Inc? Claim it here. Summary Forms 990 Programs'
+        Get-CandidProfilePageVerdict -Text $full | Should -Be 'full'
+        Get-CandidProfilePageVerdict -Text $stub | Should -Be 'summary_only'
+        Get-CandidProfilePageVerdict -Text '' | Should -Be 'unverified'
+    }
+
+    It 'a footer badge works only with a visible seal, a rendered image and a full signed-out page' {
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 108 -PageVerdict 'full').ok | Should -BeTrue
+        $v = Get-CandidBadgeVerdict -SealVerdict 'no_seal' -FooterWidth 200 -PageVerdict 'full'
+        $v.ok | Should -BeFalse
+        $v.why | Should -Match 'seal no_seal'
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 0 -PageVerdict 'full').why | Should -Match 'did not render'
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 108 -PageVerdict 'summary_only').why | Should -Match 'summary_only'
+    }
+}

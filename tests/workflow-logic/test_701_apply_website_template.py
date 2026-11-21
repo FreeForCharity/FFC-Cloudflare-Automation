@@ -373,31 +373,39 @@ def test_a_template_requiring_sealUrl_keeps_the_key_and_gets_it_empty():
 
 
 
+FOOTER_ONLY_SHAPE = SITE_CONFIG.replace(
+    "  guidestar: {\n"
+    "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+    "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+    "  },",
+    "  guidestar: {\n"
+    "    sealUrl: 'https://widgets.guidestar.org/prod/v1/pdp/"
+    "transparency-seal/9326392/svg',\n"
+    "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
+    "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
+    "  },",
+)
+RITUAL_AZTECA_SHARED = (
+    "https://app.candid.org/profile/16766185/ritual-azteca-inc/"
+    "?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true"
+)
+
+
 def test_an_app_candid_profile_link_gives_the_charity_its_own_seal_widget():
     # Candid's seal widget is keyed on the numeric Candid profile id, and that
     # id is in a charity's own shareable app.candid.org profile link. So when
-    # the charity gave one, sealUrl is Candid's widget for THAT id: the same
-    # form freeforcharity.org's footer uses for FFC. Never FFC's id.
-    footer_only_shape = SITE_CONFIG.replace(
-        "  guidestar: {\n"
-        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
-        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
-        "  },",
-        "  guidestar: {\n"
-        "    sealUrl: 'https://widgets.guidestar.org/prod/v1/pdp/"
-        "transparency-seal/9326392/svg',\n"
-        "    profileUrl: 'https://www.guidestar.org/profile/46-2471893',\n"
-        "    directProfileUrl: 'https://www.guidestar.org/profile/shared/bbbe173a',\n"
-        "  },",
-    )
-    assert "sealUrl:" in footer_only_shape, "fixture substitution did not apply"
-    shared = (
-        "https://app.candid.org/profile/16766185/ritual-azteca-inc/"
-        "?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true"
-    )
+    # the charity gave one AND the widget was seen to be a real seal, sealUrl
+    # is Candid's widget for THAT id: the same form freeforcharity.org's
+    # footer uses for FFC. Never FFC's id.
+    assert "sealUrl:" in FOOTER_ONLY_SHAPE, "fixture substitution did not apply"
     td, repo, proc = applied(
-        {**FULL_ARGS, "GuideStarProfileUrl": shared, "GuideStarDirectProfileUrl": shared},
-        site_config=footer_only_shape,
+        {
+            **FULL_ARGS,
+            "GuideStarProfileUrl": RITUAL_AZTECA_SHARED,
+            "GuideStarDirectProfileUrl": RITUAL_AZTECA_SHARED,
+            "CandidSealVerdict": "ok",
+        },
+        site_config=FOOTER_ONLY_SHAPE,
     )
     try:
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -409,6 +417,31 @@ def test_an_app_candid_profile_link_gives_the_charity_its_own_seal_widget():
         assert "9326392" not in cfg, cfg
     finally:
         shutil.rmtree(td)
+
+
+def test_a_seal_widget_that_is_not_a_visible_seal_is_never_written():
+    # Measured 2026-11-21 (803): Candid answers 200 image/svg+xml with an
+    # empty white outline for an organization that has no seal, so a footer
+    # built from the id alone would ship an invisible badge. Not 'ok' = empty.
+    for verdict in ("no_seal", "no_org", "unverified"):
+        td, repo, proc = applied(
+            {
+                **FULL_ARGS,
+                "GuideStarProfileUrl": RITUAL_AZTECA_SHARED,
+                "GuideStarDirectProfileUrl": RITUAL_AZTECA_SHARED,
+                "CandidSealVerdict": verdict,
+            },
+            site_config=FOOTER_ONLY_SHAPE,
+        )
+        try:
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            cfg = read(repo, "src/lib/site.config.ts")
+            assert "sealUrl: ''," in cfg, (verdict, cfg)
+            assert "transparency-seal" not in cfg, (verdict, cfg)
+            assert "not a visible seal" in proc.stdout + proc.stderr, (verdict, proc.stdout + proc.stderr)
+        finally:
+            shutil.rmtree(td)
+
 
 def test_address_line_breaks_real_or_literal_but_never_commas():
     cases = {

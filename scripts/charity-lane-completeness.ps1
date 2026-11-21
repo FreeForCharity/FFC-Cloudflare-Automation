@@ -153,8 +153,9 @@ $script:LaneCompletenessCodes = [ordered]@{
     VOLUNTEER_URL_NOT_PUBLIC      = @{ severity = 'NEED_INFO'; description = "Idealist answer is not your organization's public page (admin link or the Idealist home page)."; applicant = "Your organization's PUBLIC Idealist page or volunteer-opportunity link. The link we have is an admin page or the Idealist home page." }
     VOLUNTEER_URL_NOT_FOUND       = @{ severity = 'NEED_INFO'; description = 'Idealist URL answers 404/410.'; applicant = 'Your Idealist link: the link we have does not open (page not found).' }
     CANDID_URL_MISSING            = @{ severity = 'NEED_INFO'; description = 'Candid / GuideStar public profile link not answered.'; applicant = "Your organization's public Candid (GuideStar) profile link." }
-    CANDID_URL_NOT_PUBLIC         = @{ severity = 'NEED_INFO'; description = "Candid answer is not a profile link the public can open: a Candid home, login, account, search or user page, or an app.candid.org profile link without its shareable pkId."; applicant = "Your organization's shareable Candid profile link, the one that opens for visitors who are not signed in to Candid. In your Candid profile, copy the sharable full profile link; it looks like https://app.candid.org/profile/1234567/your-organization/?pkId=... The link we have only opens for someone signed in to Candid, or is a Candid home, login or search page." }
-    CANDID_URL_NOT_FOUND          = @{ severity = 'NEED_INFO'; description = 'Candid profile URL answers 404/410.'; applicant = 'Your Candid (GuideStar) profile link: the link we have does not open (page not found).' }
+    CANDID_URL_NOT_PUBLIC         = @{ severity = 'NEED_INFO'; description = "Candid answer is not a profile link the public can open: a Candid home, login, account, search or user page, or an app.candid.org profile link without its shareable pkId."; applicant = "Your organization's shareable Candid profile link, the one that opens for visitors who are not signed in to Candid. In your Candid profile, copy the sharable full profile link; it looks like https://app.candid.org/profile/1234567/your-organization/?pkId=... The link we have shows visitors who are not signed in only a short summary instead of your full profile, or is a Candid home, login or search page." }
+    CANDID_URL_NOT_FOUND          = @{ severity = 'NEED_INFO'; description = 'Candid profile URL answers 404/410, or the Candid seal service does not know the profile id in it.'; applicant = 'Your Candid (GuideStar) profile link: the link we have does not open (page not found).' }
+    CANDID_SEAL_NONE              = @{ severity = 'INFO'; description = "Candid's seal widget for this profile is an empty box: the organization has no Seal of Transparency yet, so the site footer shows none. Not blocking."; applicant = '' }
     CURRENT_SITE_URL_INVALID      = @{ severity = 'NEED_INFO'; description = 'Current-website answer is not a usable public link.'; applicant = 'The full public link to your current website or page (or leave that question blank if you have none).' }
     CURRENT_SITE_UNREACHABLE      = @{ severity = 'NEED_INFO'; description = 'Current website URL answers 404/410.'; applicant = 'Your current website link: the link we have does not open. Please send the working link, or tell us you have no current site.' }
     LINK_UNVERIFIED               = @{ severity = 'ESCALATE'; description = 'A required public link (Zeffy, Idealist, Candid or current site) did not answer 2xx/3xx or 404/410 (timeout, server error, block); a human must open it.'; applicant = '' }
@@ -245,6 +246,8 @@ function Test-LaneLinkAnswered {
     return 'unverified'
 }
 
+. (Join-Path $PSScriptRoot 'candid-seal-check.ps1')
+
 function Get-LaneCandidEinProfileUrl {
     # The GuideStar profile-by-EIN page for a Candid answer, else ''. Pure.
     # The EIN comes from the link itself (an app.candid.org slug ending in the
@@ -287,6 +290,9 @@ function Get-LaneCompletenessCodes {
     .DESCRIPTION
         $LinkProbes: hashtable URL -> @{ status; mitigated; host } (from
         Invoke-LaneLinkProbe). A link with no probe entry is unverified.
+        $CandidSeals: hashtable Candid profile id -> seal verdict (from
+        Get-CandidSealVerdict): no_org makes the Candid link NOT_FOUND, no_seal
+        adds the INFO code CANDID_SEAL_NONE; any other answer adds nothing.
         $GithubLookup: hashtable username -> $true (exists), $false (404), or
         $null (lookup failed). A username with no entry is unverified.
         Returns the reason codes (unique, catalog order).
@@ -296,6 +302,7 @@ function Get-LaneCompletenessCodes {
         [Parameter(Mandatory = $true)][int]$ProductPid,
         [Parameter()][hashtable]$LinkProbes = @{},
         [Parameter()][hashtable]$GithubLookup = @{},
+        [Parameter()][hashtable]$CandidSeals = @{},
         [Parameter()]$Config
     )
     $codes = [System.Collections.Generic.List[string]]::new()
@@ -333,6 +340,17 @@ function Get-LaneCompletenessCodes {
             'dead' { & $add $script:LaneProbedLinkFields[$k] }
             'botwall' { & $add 'LINK_BOT_WALL' }
             default { & $add 'LINK_UNVERIFIED' }
+        }
+    }
+
+    # 2b. Candid's seal service knows the profile id in the Candid link.
+    if ($doc.fields.Contains('candidProfileUrl')) {
+        $cid = Get-CandidProfileId -ProfileUrl ([string]$doc.fields['candidProfileUrl'])
+        if ($cid -and $CandidSeals.ContainsKey($cid)) {
+            switch ([string]$CandidSeals[$cid]) {
+                'no_org' { & $add 'CANDID_URL_NOT_FOUND' }
+                'no_seal' { & $add 'CANDID_SEAL_NONE' }
+            }
         }
     }
 
@@ -491,6 +509,17 @@ function Invoke-LaneCompletenessReview {
     foreach ($u in $t.Links.Values) { $probes[$u] = Invoke-LaneLinkProbe -Url $u -Cache $LinkCache }
     $gh = @{}
     if ($t.GithubUser) { $gh[$t.GithubUser] = Test-LaneGithubUser -User $t.GithubUser -Cache $GithubCache }
-    $codes = Get-LaneCompletenessCodes -Fields $Fields -ProductPid $ProductPid -LinkProbes $probes -GithubLookup $gh
+    $seals = @{}
+    if ($t.Links.Contains('candidProfileUrl')) {
+        $cid = Get-CandidProfileId -ProfileUrl $t.Links['candidProfileUrl']
+        if ($cid) {
+            $sealKey = "candid-seal:$cid"
+            if (-not $LinkCache.ContainsKey($sealKey)) {
+                $LinkCache[$sealKey] = (Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url (Get-CandidSealWidgetUrl -ProfileId $cid))).verdict
+            }
+            $seals[$cid] = $LinkCache[$sealKey]
+        }
+    }
+    $codes = Get-LaneCompletenessCodes -Fields $Fields -ProductPid $ProductPid -LinkProbes $probes -GithubLookup $gh -CandidSeals $seals
     return [pscustomobject]@{ Codes = @($codes); Blocking = @(Get-LaneCompletenessBlocking -Codes $codes) }
 }

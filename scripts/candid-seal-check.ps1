@@ -23,10 +23,15 @@ param(
     [string[]]$SealId = @(),
     [string]$JsonOut = '',
     [switch]$Raw,
-    [switch]$FailOnBad
+    # Judge mode: the JSON lines scripts/candid-render.js wrote. Each link is
+    # judged on its seal, its rendered footer badge and its signed-out page.
+    [string]$RenderJsonl = '',
+    # Optional JSON object { "<link>": true|false } of the answer each link
+    # should get (803's self-test against live Candid). Without it, any link
+    # that does not pass fails the run.
+    [string]$ExpectJson = ''
 )
 
-$ErrorActionPreference = 'Stop'
 
 function Get-CandidProfileId {
     # The numeric Candid profile id in an app.candid.org profile link, else ''. Pure.
@@ -120,6 +125,41 @@ function Get-CandidSealVerdict {
     return [pscustomobject]$r
 }
 
+function Get-CandidProfilePageVerdict {
+    <#
+    .SYNOPSIS
+        What a signed-out visitor sees on a rendered Candid profile page. Pure.
+    .DESCRIPTION
+        Measured in Chromium on a GitHub runner, 2026-11-21 (workflow 803).
+        Both link forms answer 200 with the same script shell, so only the
+        rendered text tells them apart:
+          shareable link (?pkId=...)  the full profile: Summary, Programs,
+                                      People, "IRS subsection 501(c)(3)", ...
+          plain profile link          a short Candid search summary: name,
+                                      EIN, mission, "Suggest an edit",
+                                      "Do you manage <org>? Claim it here."
+        Returns full | summary_only | unverified.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    $t = [string]$Text
+    if ($t -match '(?i)Claim it here' -or $t -match '(?i)Suggest an edit') { return 'summary_only' }
+    if ($t -match '(?i)IRS subsection' -and $t -match '(?i)\bPrograms\b') { return 'full' }
+    return 'unverified'
+}
+
+function Get-CandidBadgeVerdict {
+    # The footer badge works only when all three hold: the seal widget is a
+    # real visible seal, the <img> rendered in a page with a size, and the
+    # link it points at shows the full profile signed out. Pure.
+    param([string]$SealVerdict, [int]$FooterWidth, [string]$PageVerdict)
+    $why = [System.Collections.Generic.List[string]]::new()
+    if ($SealVerdict -ne 'ok') { $why.Add("seal $SealVerdict") }
+    if ($FooterWidth -le 0) { $why.Add('badge image did not render') }
+    if ($PageVerdict -ne 'full') { $why.Add("profile link shows $PageVerdict signed out") }
+    $ok = $why.Count -eq 0
+    return [pscustomobject]@{ ok = $ok; why = if ($ok) { '' } else { $why -join '; ' } }
+}
+
 function Get-CandidReport {
     # Fetch every profile link and seal widget asked for. Returns a list of
     # raw fetch records tagged with kind (profile | seal) and profileId.
@@ -145,11 +185,54 @@ function Get-CandidReport {
     return $records
 }
 
+function Invoke-CandidJudge {
+    # Judge every rendered link. Returns rows: url, profileId, seal, level,
+    # badge (rendered width), page, ok, why.
+    param([Parameter(Mandatory = $true)][string]$RenderJsonl)
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in Get-Content -Path $RenderJsonl -Encoding utf8) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $r = $line | ConvertFrom-Json
+        $id = [string]$r.profileId
+        $seal = [pscustomobject]@{ verdict = 'unverified'; level = '' }
+        if ($id) { $seal = Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url (Get-CandidSealWidgetUrl -ProfileId $id)) }
+        $width = if ($r.footer) { [int]$r.footer.width } else { 0 }
+        $page = Get-CandidProfilePageVerdict -Text ([string]$r.profile.text)
+        $badge = Get-CandidBadgeVerdict -SealVerdict $seal.verdict -FooterWidth $width -PageVerdict $page
+        $rows.Add([pscustomobject]@{ url = [string]$r.url; profileId = $id; seal = $seal.verdict; level = $seal.level; badge = $width; page = $page; ok = $badge.ok; why = $badge.why })
+    }
+    return $rows
+}
+
+if ($MyInvocation.InvocationName -ne '.' -and $RenderJsonl) {
+    $ErrorActionPreference = 'Stop'
+    $rows = Invoke-CandidJudge -RenderJsonl $RenderJsonl
+    $expect = @{}
+    if ($ExpectJson) { ($ExpectJson | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $expect[$_.Name] = [bool]$_.Value } }
+    $md = [System.Collections.Generic.List[string]]::new()
+    $md.Add('| Candid link | Seal | Footer badge | Signed-out page | Works | Why not |')
+    $md.Add('| --- | --- | --- | --- | --- | --- |')
+    $bad = 0
+    foreach ($row in $rows) {
+        $mark = if ($row.ok) { 'yes' } else { 'no' }
+        if ($expect.Count) {
+            if (-not $expect.ContainsKey($row.url) -or $expect[$row.url] -ne $row.ok) { $bad++; $mark += ' (UNEXPECTED)' }
+        }
+        elseif (-not $row.ok) { $bad++ }
+        $md.Add("| $($row.url) | $($row.seal) $($row.level) | $($row.badge)px | $($row.page) | $mark | $($row.why) |")
+    }
+    $md | ForEach-Object { Write-Host $_ }
+    if ($env:GITHUB_STEP_SUMMARY) { ($md -join "`n") + "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 }
+    if ($JsonOut) { $rows | ConvertTo-Json -Depth 3 | Set-Content -Path $JsonOut -Encoding utf8 }
+    if ($bad -gt 0) { Write-Host "::error::$bad Candid link(s) did not get the expected answer."; exit 1 }
+    exit 0
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
+    $ErrorActionPreference = 'Stop'
     $records = Get-CandidReport -ProfileUrl $ProfileUrl -SealId $SealId
     foreach ($r in $records) {
         $title = ([regex]::Match([string]$r.body, '(?is)<title[^>]*>(.*?)</title>')).Groups[1].Value.Trim()
-        $texts = @([regex]::Matches([string]$r.body, '(?is)<text[^>]*>(.*?)</text>') | ForEach-Object { ($_.Groups[1].Value -replace '<[^>]+>', '').Trim() } | Where-Object { $_ } | Select-Object -First 12)
         Write-Host "=== $($r.kind) id=$($r.profileId)"
         Write-Host "url:          $($r.url)"
         Write-Host "status:       $($r.status) $($r.error)"

@@ -56,6 +56,12 @@ addresses anywhere in GitHub. Org name, domain, WHMCS order id and client id are
 
 Skip any step whose prerequisite (in brackets) is not on `main` yet, and say so in the report.
 
+**Volunteer holds.** An item labelled `builder:volunteer` is a volunteer's charity
+(docs/volunteer-site-builders.md). Do not provision, deliver, validate, relabel or run Gate 4 steps
+for it; list it in the report with its holder and leave it to the volunteer and Clarke. Before
+queueing a charity in step 3, a `[CHARITY-LANE]` item already held by a volunteer counts as
+`ALREADY_KNOWN`.
+
 0. **Lease.** Read #1608's JSON state block. If `lease.until` is in the future and the holder is not
    you, comment `LEASE HELD - exiting` and end. Otherwise take the lease for 60 minutes and re-read
    to confirm. Then record the environment check for the report:

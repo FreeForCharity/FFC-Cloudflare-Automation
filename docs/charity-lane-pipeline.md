@@ -257,21 +257,22 @@ list (`sequence weekly-sites-list`).
 
 ## Components
 
-| Piece                             | Where                                                                            | PR                       |
-| --------------------------------- | -------------------------------------------------------------------------------- | ------------------------ |
-| Design (this page)                | `docs/charity-lane-pipeline.md`                                                  | #1617, #1624             |
-| Gate 1/2 verdicts                 | `232-whmcs-charity-lane-verdicts.yml`                                            | #1620                    |
-| Gate clearing                     | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json`           | #1621, #1627             |
-| Conductor brief                   | `.claude/routines/onboarding-conductor.md`                                       | #1622, #1625, #1630      |
-| Content delivery                  | `707-website-content-apply.yml`; `205` templates                                 | #1623                    |
-| Land content PRs (G3.3b)          | `707` waits for the site's CI, then merges                                       | #1626                    |
-| Worker brief and queue            | `.claude/routines/site-builder.md`                                               | #1625                    |
-| Duplicate lookup                  | `750-charity-lane-lookup.yml`, `scripts/charity_lane_lookup.py`                  | #1628                    |
-| Existing live site: build, no DNS | `701` input `skip_dns`                                                           | #1631                    |
-| Onboarding need-info ticket       | `onboarding_need_info` in `config/whmcs-ticket-templates.json`                   | #1632                    |
-| Charity reply classifier          | `233-whmcs-charity-lane-ticket-reply.yml` (no reply text printed)                | #1638                    |
-| Public website fields             | `234-whmcs-charity-lane-site-fields.yml`, `config/charity-lane-site-fields.json` | #1639                    |
-| Gate 3 validation rows            | ffcadmin `gate3-validate`                                                        | FFC-IN-ffcadmin.org#1448 |
-| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                                   | #1635                    |
-| Security Audit fix (site deps)    | `751-website-security-overrides-sync.yml`, `scripts/fleet-overrides-sync.js`     | #1641                    |
-| Conductor runs 751 (audit only)   | rule `751-overrides-sync`, brief step 6                                          | #1644                    |
+| Piece                             | Where                                                                                   | PR                       |
+| --------------------------------- | --------------------------------------------------------------------------------------- | ------------------------ |
+| Design (this page)                | `docs/charity-lane-pipeline.md`                                                         | #1617, #1624             |
+| Gate 1/2 verdicts                 | `232-whmcs-charity-lane-verdicts.yml`                                                   | #1620                    |
+| Gate clearing                     | `scripts/charity_lane_gate.py`, `config/charity-lane-gate-policy.json`                  | #1621, #1627             |
+| Conductor brief                   | `.claude/routines/onboarding-conductor.md`                                              | #1622, #1625, #1630      |
+| Content delivery                  | `707-website-content-apply.yml`; `205` templates                                        | #1623                    |
+| Land content PRs (G3.3b)          | `707` waits for the site's CI, then merges                                              | #1626                    |
+| Worker brief and queue            | `.claude/routines/site-builder.md`                                                      | #1625                    |
+| Duplicate lookup                  | `750-charity-lane-lookup.yml`, `scripts/charity_lane_lookup.py`                         | #1628                    |
+| Existing live site: build, no DNS | `701` input `skip_dns`                                                                  | #1631                    |
+| Onboarding need-info ticket       | `onboarding_need_info` in `config/whmcs-ticket-templates.json`                          | #1632                    |
+| Charity reply classifier          | `233-whmcs-charity-lane-ticket-reply.yml` (no reply text printed)                       | #1638                    |
+| Public website fields             | `234-whmcs-charity-lane-site-fields.yml`, `config/charity-lane-site-fields.json`        | #1639                    |
+| Gate 3 validation rows            | ffcadmin `gate3-validate`                                                               | FFC-IN-ffcadmin.org#1448 |
+| Fraud screening in the verdicts   | `232` + FraudLabs via `fraudlabspro-prod-read`                                          | #1635                    |
+| Security Audit fix (site deps)    | `751-website-security-overrides-sync.yml`, `scripts/fleet-overrides-sync.js`            | #1641                    |
+| Conductor runs 751 (audit only)   | rule `751-overrides-sync`, brief step 6                                                 | #1644                    |
+| Volunteer holds, build queue      | `scripts/volunteer_assign.py`, [volunteer-site-builders.md](volunteer-site-builders.md) | this PR                  |

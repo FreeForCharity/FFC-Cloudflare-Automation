@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-11-21T02:49:30Z",
+  "source": "FreeForCharity/FFC-Cloudflare-Automation charity-lane items",
+  "rows": [
+    {
+      "item": 1729,
+      "charity": "eastridgepto.org",
+      "category": "unclassified",
+      "stage": "build-ready",
+      "holder": "Open",
+      "held_since": "",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-eastridgepto.org",
+      "preview_url": "https://freeforcharity.github.io/FFC-EX-eastridgepto.org/",
+      "last_repo_activity": "2026-11-17",
+      "stale": "",
+      "charity_maintainers": ""
+    },
+    {
+      "item": 1769,
+      "charity": "genesisbridgecharities.org",
+      "category": "food_water_shelter",
+      "stage": "building",
+      "holder": "Volunteer @yojoe26",
+      "held_since": "2026-11-21",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-genesisbridgecharities.org",
+      "preview_url": "https://freeforcharity.github.io/FFC-EX-genesisbridgecharities.org/",
+      "last_repo_activity": "2026-11-18",
+      "stale": "no",
+      "charity_maintainers": ""
+    },
+    {
+      "item": 1787,
+      "charity": "cactuswrenpreschool.com",
+      "category": "other",
+      "stage": "live",
+      "holder": "Volunteer @Tyler-Carlotto",
+      "held_since": "2026-11-21",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-cactuswrenpreschool.com",
+      "preview_url": "https://cactuswrenpreschool.com/",
+      "last_repo_activity": "2026-11-17",
+      "stale": "no",
+      "charity_maintainers": "BrianLenzmeier"
+    },
+    {
+      "item": 1788,
+      "charity": "newheightseducation.org",
+      "category": "other",
+      "stage": "gate3-done",
+      "holder": "Volunteer @phoganuci",
+      "held_since": "2026-11-21",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-newheightseducation.org",
+      "preview_url": "https://freeforcharity.github.io/FFC-EX-newheightseducation.org/",
+      "last_repo_activity": "2026-11-19",
+      "stale": "no",
+      "charity_maintainers": ""
+    },
+    {
+      "item": 1738,
+      "charity": "btsscv.org",
+      "category": "unclassified",
+      "stage": "validate",
+      "holder": "Automated builder",
+      "held_since": "2026-11-12",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-btsscv.org",
+      "preview_url": "https://freeforcharity.github.io/FFC-EX-btsscv.org/",
+      "last_repo_activity": "2026-11-17",
+      "stale": "",
+      "charity_maintainers": ""
+    },
+    {
+      "item": 1739,
+      "charity": "projectherinc.org",
+      "category": "unclassified",
+      "stage": "validate",
+      "holder": "Automated builder",
+      "held_since": "2026-11-12",
+      "repo": "https://github.com/FreeForCharity/FFC-EX-projectherinc.org",
+      "preview_url": "https://freeforcharity.github.io/FFC-EX-projectherinc.org/",
+      "last_repo_activity": "2026-11-17",
+      "stale": "",
+      "charity_maintainers": ""
+    }
+  ]
+}

@@ -2469,6 +2469,27 @@
       "categoryCode": "GH"
     },
     {
+      "number": 754,
+      "title": "Org - Team Membership",
+      "apis": [
+        "Org"
+      ],
+      "file": "754-org-team-membership.yml",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "environments": [
+        "github-prod",
+        "github-prod-read"
+      ],
+      "description": "Lists the organization's teams, or adds / removes people on one team.  Why this exists: FFC records a verified volunteer by membership of an org team (ffcadmin's `sponsoring-admins`, program plan section 8, docs/volunteer-site-builders.md), and until now only an org owner could change that by hand in the GitHub UI. With this a thread can add a new volunteer on Clarke's word, and he approves one github-prod gate.  Team membership only. Nothing here touches repository permissions: 729 gives a volunteer `push` on their one charity repo, and 749 invites them to the org. Adding someone who is not yet an org member makes GitHub send them an org invitation, and their team membership stays `pending` until they accept.  Two jobs, one script (`scripts/org-team-membership.sh`): preflight  ungated, github-prod-read, READ PAT. Always runs. action=list prints every team and its members; add/remove print the plan (who would be added, who is already on the team or pending). apply      github-prod (approval gate), WRITE PAT. Skipped entirely on a dry run and for action=list, so neither parks on the gate nor mints a writer credential (#983). Runs the identical file with IN_DRY=false.  `dry_run` defaults to TRUE. Dispatch once to read the plan, then again with dry_run=false and approve the gate.",
+      "safetyLevel": "Writes (dry-run default)",
+      "approvalEnv": "\u2705 github-prod (apply job only)",
+      "guard": "dry_run default true; action=list is read only; ungated `preflight` on `github-prod-read` lists teams and members or plans (user exists, current team membership, pending); the gated `apply` job is skipped at job level on a dry run or a list (#983 shape); add/remove are idempotent `PUT`/`DELETE /orgs/{org}/teams/{slug}/memberships/{user}`; `create_team` (default false) makes a closed team with no repository access; never touches org membership or repository permissions",
+      "category": "GitHub (Website + Repo)",
+      "categoryCode": "GH"
+    },
+    {
       "number": 801,
       "title": "Candid - Charity Check (EIN)",
       "apis": [

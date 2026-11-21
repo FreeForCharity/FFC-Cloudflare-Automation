@@ -275,6 +275,20 @@ jobs:
             --curated sites-list/pending_applications_curated.csv \
             --repos tmp_data/ffc_repos.txt --out-dir sites-list
 
+      # Build queue: every open charity-lane item with who holds it (Open,
+      # Automated builder, or a volunteer), so volunteers and the lane never
+      # take the same charity (docs/volunteer-site-builders.md). Read-only: it
+      # reads hub issues and each charity repo's newest commit. A failed read
+      # keeps last week's files rather than publishing a partial queue.
+      - name: Generate build queue (CSV + JSON)
+        run: |
+          set -uo pipefail
+          if ! python3 scripts/volunteer_assign.py build-queue --out-dir tmp_data/build-queue; then
+            echo "::warning::Build queue not regenerated; sites-list/build_queue.* left unchanged."
+            exit 0
+          fi
+          cp tmp_data/build-queue/build_queue.csv tmp_data/build-queue/build_queue.json sites-list/
+
       # main is protected (changes via PR + merge queue only), so publish the
       # regenerated data as a pull request rather than pushing directly. Using
       # CBM_TOKEN (a PAT) so the PR can trigger required checks.
@@ -288,6 +302,8 @@ jobs:
             sites-list/sites_list.json
             sites-list/pending_applications.csv
             sites-list/pending_applications.json
+            sites-list/build_queue.csv
+            sites-list/build_queue.json
           commit-message: 'chore(sites-list): automated regeneration (CSV + JSON)'
           branch: data/sites-list-auto
           delete-branch: true

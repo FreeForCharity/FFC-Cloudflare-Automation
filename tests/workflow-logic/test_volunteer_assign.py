@@ -204,6 +204,12 @@ def test_site_builder_brief_skips_volunteer_holds():
     assert "builder:volunteer" in text
 
 
+def test_703_publishes_the_build_queue():
+    text = (REPO_ROOT / ".github" / "workflows" / "703-sites-list-generate.yml").read_text(encoding="utf-8")
+    assert "scripts/volunteer_assign.py build-queue" in text
+    assert "sites-list/build_queue.csv" in text and "sites-list/build_queue.json" in text
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

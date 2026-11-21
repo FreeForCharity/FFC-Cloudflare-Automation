@@ -156,7 +156,13 @@ else {
         $b.noemail = '1'
         $order = Invoke-WhmcsApi -ApiUrl $api -Body $b
         $domainId = ("$($order.domainids)").Split(',')[0].Trim()
-        if ([string]::IsNullOrWhiteSpace($domainId)) { throw "AddOrder did not return a domainid for $domainLc (response: $($order | ConvertTo-Json -Compress))" }
+        if ([string]::IsNullOrWhiteSpace($domainId)) {
+            # SECURITY (#1762). This throw reaches a world-readable Actions log via
+            # 223-whmcs-import-cloudflare-domains.yml, and an AddOrder response carries
+            # orderid / invoiceid / clientid / serviceids plus WHMCS's own message text.
+            # Report the response's FIELD NAMES, never its values: names are schema.
+            throw "AddOrder did not return a domainid for $domainLc (response keys: $(Get-WhmcsResponseShape $order))"
+        }
         # Accept exactly the order AddOrder created (targeted; no side effects).
         $orderId = "$($order.orderid)"
         if ($orderId) {

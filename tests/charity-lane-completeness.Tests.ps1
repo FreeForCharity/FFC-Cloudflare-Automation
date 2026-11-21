@@ -402,6 +402,15 @@ Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)'
         Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandidShared -Ein '' | Should -Be ''
     }
 
+    It "an EIN in the link that disagrees with the application's EIN gets no fallback (#1793 review)" {
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandid -Ein '12-3456789' | Should -Be ''
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandid -Ein '991579845' | Should -Be 'https://www.guidestar.org/profile/99-1579845'
+    }
+
+    It 'a bare 9-digit Candid id is never read as an EIN (#1793 review)' {
+        Get-LaneCandidEinProfileUrl -CandidUrl 'https://app.candid.org/profile/123456789/?pkId=a' -Ein '' | Should -Be ''
+    }
+
     It 'a profile link that will not answer a signed-out GET passes when the GuideStar EIN page opens' {
         $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current, 'https://www.guidestar.org/profile/99-1579845')
         $p[$script:AppCandidSharedEin] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }

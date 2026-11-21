@@ -254,10 +254,19 @@ function Get-LaneCandidEinProfileUrl {
     # EIN, or a guidestar.org/profile/<EIN> path) or, failing that, from the
     # application's own EIN answer. It is a second, public way to see the same
     # profile when the given link does not answer a signed-out GET.
+    #
+    # An EIN in the link that disagrees with the application's own EIN gets no
+    # fallback: another organization's page opening proves nothing about this
+    # charity's link. A bare numeric app.candid.org id is a Candid id, never
+    # an EIN, so only a slug ending in the EIN (or a guidestar.org path) counts.
     param([string]$CandidUrl, [string]$Ein)
-    $m = [regex]::Match([string]$CandidUrl, '(?i)/profile/(?:\d+/[^/?#]*?-)?(\d{2})-?(\d{7})/?(?:[?#]|$)')
-    if ($m.Success) { return "https://www.guidestar.org/profile/$($m.Groups[1].Value)-$($m.Groups[2].Value)" }
-    $e = [regex]::Match([string]$Ein, '^(\d{2})-?(\d{7})$')
+    $m = [regex]::Match([string]$CandidUrl, '(?i)^https://(?:app\.candid\.org/profile/\d+/[^/?#]*?-|(?:www\.)?guidestar\.org/profile/)(\d{2})-?(\d{7})/?(?:[?#]|$)')
+    $e = [regex]::Match([string]$Ein, '^\s*(\d{2})-?(\d{7})\s*$')
+    if ($m.Success) {
+        $linkEin = "$($m.Groups[1].Value)-$($m.Groups[2].Value)"
+        if ($e.Success -and "$($e.Groups[1].Value)-$($e.Groups[2].Value)" -ne $linkEin) { return '' }
+        return "https://www.guidestar.org/profile/$linkEin"
+    }
     if ($e.Success) { return "https://www.guidestar.org/profile/$($e.Groups[1].Value)-$($e.Groups[2].Value)" }
     return ''
 }

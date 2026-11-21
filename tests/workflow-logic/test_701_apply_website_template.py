@@ -443,6 +443,31 @@ def test_a_seal_widget_that_is_not_a_visible_seal_is_never_written():
             shutil.rmtree(td)
 
 
+def test_checking_the_seal_live_keeps_the_charitys_profile_link():
+    # Review of #1793: the live seal check dot-sources candid-seal-check.ps1,
+    # whose param() block declares $ProfileUrl. Dot-sourced straight into
+    # Update-SiteConfig it reset that function's $profileUrl (names ignore
+    # case) to an empty array, and the site shipped profileUrl: ''. No
+    # CandidSealVerdict here, so the live branch runs; whatever Candid answers
+    # (or a blocked network), the charity's own link must survive.
+    td, repo, proc = applied(
+        {
+            **FULL_ARGS,
+            "GuideStarProfileUrl": RITUAL_AZTECA_SHARED,
+            "GuideStarDirectProfileUrl": RITUAL_AZTECA_SHARED,
+        },
+        site_config=FOOTER_ONLY_SHAPE,
+    )
+    try:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        cfg = read(repo, "src/lib/site.config.ts")
+        assert f"profileUrl: '{RITUAL_AZTECA_SHARED}'," in cfg, cfg
+        assert f"directProfileUrl: '{RITUAL_AZTECA_SHARED}'," in cfg, cfg
+        assert "profileUrl: ''," not in cfg, cfg
+    finally:
+        shutil.rmtree(td)
+
+
 def test_address_line_breaks_real_or_literal_but_never_commas():
     cases = {
         "12 Main St\nSpringfield, IL 62701": ["12 Main St", "Springfield, IL 62701"],

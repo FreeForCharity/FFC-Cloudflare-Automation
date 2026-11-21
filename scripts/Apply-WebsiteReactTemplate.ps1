@@ -909,8 +909,15 @@ function Update-SiteConfig {
                 # empty, invisible box for an organization that has no seal.
                 $verdict = $CandidSealVerdict
                 if (-not $verdict) {
-                    . (Join-Path $PSScriptRoot 'candid-seal-check.ps1')
-                    $verdict = (Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url $sealUrl)).verdict
+                    # Dot-source inside a child scope: the checker's param()
+                    # block declares $ProfileUrl, and dot-sourcing it here
+                    # directly would reset this function's $profileUrl to an
+                    # empty array (names ignore case), shipping profileUrl: ''.
+                    $sealCheck = Join-Path $PSScriptRoot 'candid-seal-check.ps1'
+                    $verdict = & {
+                        . $sealCheck
+                        (Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url $sealUrl)).verdict
+                    }
                 }
                 if ($verdict -ne 'ok') {
                     Write-Warning "Candid seal widget $sealUrl is not a visible seal ($verdict); the footer shows no seal."

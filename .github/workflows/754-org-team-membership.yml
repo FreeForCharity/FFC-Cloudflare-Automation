@@ -6,7 +6,7 @@ run-name:
 # Lists the organization's teams, or adds / removes people on one team.
 #
 # Why this exists: FFC records a verified volunteer by membership of an org
-# team (ffcadmin's `next-gen-website-team`, program plan section 8,
+# team (ffcadmin's `sponsoring-admins`, program plan section 8,
 # docs/volunteer-site-builders.md), and until now only an org owner could
 # change that by hand in the GitHub UI. With this a thread can add a new
 # volunteer on Clarke's word, and he approves one github-prod gate.
@@ -41,7 +41,7 @@ on:
           - add
           - remove
       team:
-        description: 'Team slug, e.g. next-gen-website-team (not needed for list).'
+        description: 'Team slug, e.g. sponsoring-admins (not needed for list).'
         required: false
         default: ''
         type: string

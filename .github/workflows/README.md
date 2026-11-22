@@ -676,5 +676,6 @@ No additional setup is required for these workflows to run. However, to get the 
 | --- | --- | --- | --- | --- | --- |
 | 801 | Candid - Charity Check (EIN) [CANDID] | `801-candid-charity-check.yml` | workflow_dispatch | Reads | candid-prod-read |
 | 802 | Candid - Essentials Search [CANDID] | `802-candid-essentials-search.yml` | workflow_dispatch | Reads | candid-prod-read |
+| 803 | Candid - Seal Widget Check [CANDID] | `803-candid-seal-check.yml` | pull_request, workflow_dispatch | Reads | none (no credentials) |
 
 <!-- catalog:end -->

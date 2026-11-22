@@ -202,21 +202,21 @@ try {
         $irsLabel = Get-EinCheckIrsLabel -Status $irs
         $ppLabel = Get-EinCheckProPublicaLabel -Result $pp
         [pscustomobject][ordered]@{
-            order_id      = [string]$svc.orderid
-            client_id     = $clientId
-            pid           = $entry.Pid
-            status        = [string]$svc.status
-            domain        = $domain
-            site_repo     = if ($site) { $site.Repo } else { '' }
-            org_name      = [string]$org.Name
-            has_ein       = [bool]$hasEin
-            irs           = $irsLabel
+            order_id       = [string]$svc.orderid
+            client_id      = $clientId
+            pid            = $entry.Pid
+            status         = [string]$svc.status
+            domain         = $domain
+            site_repo      = if ($site) { $site.Repo } else { '' }
+            org_name       = [string]$org.Name
+            has_ein        = [bool]$hasEin
+            irs            = $irsLabel
             irs_revoked_on = if ($irs -and $irs.Revoked) { [string]$irs.RevocationDate } else { '' }
-            irs_name      = $irsName
-            name_mismatch = [bool]$nameMismatch
-            propublica    = $ppLabel
-            site_compare  = $siteCompare
-            finding       = (Get-EinCheckVerdict -HasEin $hasEin -Irs $irsLabel -ProPublica $ppLabel -SiteCompare $siteCompare -NameMismatch $nameMismatch)
+            irs_name       = $irsName
+            name_mismatch  = [bool]$nameMismatch
+            propublica     = $ppLabel
+            site_compare   = $siteCompare
+            finding        = (Get-EinCheckVerdict -HasEin $hasEin -Irs $irsLabel -ProPublica $ppLabel -SiteCompare $siteCompare -NameMismatch $nameMismatch)
         }
     }
     $rows = @($rows)

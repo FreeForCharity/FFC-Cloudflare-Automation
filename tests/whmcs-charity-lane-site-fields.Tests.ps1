@@ -545,7 +545,10 @@ Describe 'Validators' {
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/dashboard/'; why = 'url_path_is_admin' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/home/'; why = 'url_path_not_allowed' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/'; why = 'url_path_not_allowed' }
-            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_host_not_public' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/search?q=pantry'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://guidestar.org'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
             @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }

@@ -190,17 +190,22 @@ function Read-SiteFieldsConfig {
             throw "Site-fields config: field '$key' uses the maintainer GitHub label pattern but is not of type githubUser."
         }
         $fields.Add([pscustomobject]@{
-                key                  = $key
-                type                 = $type
-                clientField          = $client
-                productFields        = $products
-                productLabelPatterns = $patterns
-                maxLength            = if ($f.maxLength) { [int]$f.maxLength } else { 0 }
-                maxItems             = if ($f.maxItems) { [int]$f.maxItems } else { 0 }
-                multiline            = [bool]$f.multiline
-                hosts                = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
-                rejectPathPatterns   = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
-                rejectHosts          = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                key                     = $key
+                type                    = $type
+                clientField             = $client
+                productFields           = $products
+                productLabelPatterns    = $patterns
+                maxLength               = if ($f.maxLength) { [int]$f.maxLength } else { 0 }
+                maxItems                = if ($f.maxItems) { [int]$f.maxItems } else { 0 }
+                multiline               = [bool]$f.multiline
+                hosts                   = @($f.hosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                rejectPathPatterns      = @($f.rejectPathPatterns | Where-Object { $_ } | ForEach-Object { [string]$_ })
+                rejectHosts             = @($f.rejectHosts | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+                # host -> query parameter a link on that host must carry to open
+                # signed out (Candid's shareable profile link carries pkId).
+                hostRequiredQueryParams = @($f.hostRequiredQueryParams | Where-Object { $_ -and $_.host -and $_.param } | ForEach-Object {
+                        [pscustomobject]@{ host = ([string]$_.host).ToLowerInvariant(); param = [string]$_.param }
+                    })
             })
     }
     if ($fields.Count -eq 0) { throw 'Site-fields config lists no fields.' }
@@ -300,6 +305,13 @@ function Test-SiteFieldUrl {
         if ($u.AbsolutePath -match $p) { return @{ ok = $false; reason = 'url_path_not_allowed' } }
     }
     if ($u.AbsolutePath -match $script:SiteFieldAdminPath) { return @{ ok = $false; reason = 'url_path_is_admin' } }
+    foreach ($rq in @($Field.hostRequiredQueryParams)) {
+        if (-not $rq) { continue }
+        if ($hostName -eq $rq.host -or $hostName.EndsWith(".$($rq.host)")) {
+            $needle = '(?i)(^|[?&])' + [regex]::Escape($rq.param) + '=[^&]+'
+            if ($u.Query -notmatch $needle) { return @{ ok = $false; reason = 'url_not_shareable' } }
+        }
+    }
     if ($u.Query -match '(?i)[?&][^=&]*(token|secret|password|passwd|pwd|key|sig|signature|auth|session|code|credential)[^=&]*=') {
         return @{ ok = $false; reason = 'url_query_secret' }
     }

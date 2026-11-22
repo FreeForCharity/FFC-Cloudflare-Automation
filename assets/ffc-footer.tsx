@@ -87,6 +87,17 @@ function assertedParentOrg() {
 // the site is rebranded, comments included.
 const TEMPLATE_EIN = ['46', '2471893'].join('-')
 const TEMPLATE_GUIDESTAR = `https://www.guidestar.org/profile/${TEMPLATE_EIN}`
+// The Single Page template's default is now FFC's shareable app.candid.org
+// link, keyed on FFC's Candid organization id rather than its EIN. Same
+// reason for assembling it: check-drift flags that id in a profile link.
+const TEMPLATE_CANDID_ID = ['9326', '392'].join('')
+const TEMPLATE_CANDID_PROFILE = new RegExp(
+  `candid\\.org/profile/${TEMPLATE_CANDID_ID}(?:[/?#]|$)`,
+  'i'
+)
+function isTemplateProfile(url: string | undefined): boolean {
+  return url === TEMPLATE_GUIDESTAR || TEMPLATE_CANDID_PROFILE.test(url ?? '')
+}
 
 /**
  * Footer-standard fields the charity has not supplied yet (`siteConfig.pending`,
@@ -116,7 +127,7 @@ export default function FfcFooter() {
   const rawEin = siteConfig.ein?.trim() ?? ''
   const ein = rawEin === TEMPLATE_EIN ? '' : rawEin
   const profileUrl = siteConfig.guidestar?.profileUrl
-  const candidUrl = profileUrl === TEMPLATE_GUIDESTAR ? '' : profileUrl
+  const candidUrl = isTemplateProfile(profileUrl) ? '' : profileUrl
   // SiteConfig carries no dedicated tax-status field (checked against both
   // FFC templates' shared shape). The 501(c)(3) status line is a Level-2
   // footer-standard item, and the skill's own Level 1/Level 2 split is

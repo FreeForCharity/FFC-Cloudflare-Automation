@@ -90,7 +90,7 @@ def _run_collect(repos: dict[str, dict[str, str]]) -> list[dict]:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(body, encoding="utf-8")
         out = pathlib.Path(tmp) / "site-eins.json"
-        r = subprocess.run([sys.executable, str(COLLECT), str(root), str(out)], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(COLLECT), str(root), str(out)], capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0, r.stderr
         return json.loads(out.read_text(encoding="utf-8"))
 

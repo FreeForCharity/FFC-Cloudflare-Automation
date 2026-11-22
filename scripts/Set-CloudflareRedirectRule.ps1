@@ -127,6 +127,29 @@ function Get-AuthToken {
     throw "No Cloudflare API token has access to zone '$ZoneName'."
 }
 
+# True when an edge certificate can serve HTTPS for $HostName once it is proxied.
+# Universal SSL covers the zone apex and one level below it (example.org,
+# *.example.org), so www.school.example.org is NOT covered by it. Hosts from any
+# certificate pack on the zone (Advanced, Total TLS, custom) are also accepted;
+# a "*." entry covers exactly one label.
+function Test-EdgeCertificateCovers {
+    param([string]$HostName, [string]$ZoneName, [string[]]$PackHosts)
+    $h = $HostName.ToLowerInvariant()
+    $z = $ZoneName.ToLowerInvariant()
+    if ($h -eq $z) { return $true }
+    if ($h.EndsWith(".$z") -and ($h.Substring(0, $h.Length - $z.Length - 1) -notmatch '\.')) { return $true }
+    foreach ($ph in @($PackHosts)) {
+        if ([string]::IsNullOrWhiteSpace($ph)) { continue }
+        $ph = $ph.ToLowerInvariant()
+        if ($ph -eq $h) { return $true }
+        if ($ph.StartsWith('*.')) {
+            $suffix = $ph.Substring(1)
+            if ($h.EndsWith($suffix) -and ($h.Substring(0, $h.Length - $suffix.Length) -notmatch '\.')) { return $true }
+        }
+    }
+    return $false
+}
+
 # Candidate zones for a host, most specific first: school.example.org -> school.example.org,
 # example.org. Stops at two labels; a public suffix is never a Cloudflare zone.
 function Get-ZoneCandidates {
@@ -171,6 +194,22 @@ $recordsToProxy = @()
 if ($ProxySourceRecords) {
     $hosts = @($SourceDomain)
     if ($IncludeWww) { $hosts += "www.$SourceDomain" }
+
+    # A proxied host with no covering edge certificate fails the TLS handshake,
+    # so HTTPS visitors never reach the redirect. Check before any write.
+    $packHosts = @()
+    try {
+        $packResp = Invoke-RestMethod -Method Get -Uri "$ApiBase/zones/$zoneId/ssl/certificate_packs?status=all" -Headers $Headers -TimeoutSec 30
+        if ($packResp.success) { $packHosts = @($packResp.result | ForEach-Object { $_.hosts }) }
+    }
+    catch {
+        Write-Host "  could not read certificate packs ($($_.Exception.Message)); checking Universal SSL coverage only."
+    }
+    $uncovered = @($hosts | Where-Object { -not (Test-EdgeCertificateCovers -HostName $_ -ZoneName $zoneName -PackHosts $packHosts) })
+    if ($uncovered.Count -gt 0) {
+        throw ("-ProxySourceRecords: no edge certificate covers {0}, so HTTPS would fail once proxied. Universal SSL covers only {1} and *.{1}. Re-run with include_www=false (and repoint any www.<source> record separately), or add certificate coverage first." -f ($uncovered -join ', '), $zoneName)
+    }
+
     foreach ($hostName in $hosts) {
         $encodedHost = [uri]::EscapeDataString($hostName)
         $recResp = Invoke-RestMethod -Method Get -Uri "$ApiBase/zones/$zoneId/dns_records?name=$encodedHost&per_page=100" -Headers $Headers -TimeoutSec 30

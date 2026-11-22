@@ -137,6 +137,7 @@ gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
   --repo FreeForCharity/FFC-Cloudflare-Automation \
   -f source_domain=school.newheightseducation.org \
   -f target_domain=newheightseducation.org/school \
+  -f include_www=false \
   -f proxy_source_records=true \
   -f dry_run=true
 ```
@@ -148,6 +149,11 @@ gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
 - A subdomain's record is usually DNS-only, pointing at the legacy host, so the rule would never
   run. `proxy_source_records=true` proxies it (and `www.<source>` if present) **after** the rule is
   written, so the edge answers with the redirect and the legacy host is no longer contacted.
+- Certificates: Universal SSL covers only `<zone>` and `*.<zone>`. A subdomain source like
+  `school.<zone>` is covered, but `www.school.<zone>` is not, and a proxied host with no covering
+  certificate fails HTTPS before the redirect runs. The script checks coverage (Universal SSL plus
+  any certificate packs on the zone) and refuses to proxy an uncovered host. For a subdomain source,
+  dispatch with `include_www=false` unless `www.<source>` has its own certificate coverage.
 - Rollback: set the source records back to DNS-only in Cloudflare, then remove the rule.
 
 ### Running the script locally

@@ -42,6 +42,8 @@ def _smoke_step() -> dict:
 def _run_smoke(status: str, location: str) -> subprocess.CompletedProcess:
     if not PWSH:
         raise Skip("pwsh not installed")
+    if os.name == "nt":
+        raise Skip("the bash curl fixture cannot execute natively on Windows")
     step = _smoke_step()
     with tempfile.TemporaryDirectory() as tmp:
         bindir = pathlib.Path(tmp, "bin")
@@ -57,6 +59,7 @@ def _run_smoke(status: str, location: str) -> subprocess.CompletedProcess:
         # The step sleeps to let Cloudflare propagate; nothing propagates here.
         script.write_text(step["run"].replace("Start-Sleep -Seconds 5", ""), encoding="utf-8")
         env = {
+            **os.environ,
             "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
             "HOME": tmp,
             "INPUT_SOURCE": "school.example.org",

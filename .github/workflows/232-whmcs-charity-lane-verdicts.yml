@@ -7,7 +7,8 @@ run-name: 'WHMCS Charity-Lane Verdicts (Gate 1/2)'
 # with machine-readable reason codes, from the machine-checkable subset of the ffcadmin
 # inventory section 5 checks: org Facebook + LinkedIn Page URLs present and answering HTTP
 # 2xx/3xx, ToS + US attestations ticked, track vs legal status, EIN present (pid 33:
-# a 501(c)(3) on ProPublica, as 226 checks it), no duplicate client / org / domain,
+# in IRS Publication 78 and not on the IRS revocation list, with ProPublica as a
+# second opinion), no duplicate client / org / domain,
 # and for pid 40 an Active Gate 1 service. Anything it cannot classify is ESCALATE.
 # Every order is then screened with FraudLabs Pro exactly as 228 does it (G1.3b), on
 # 228's own fraudlabspro-prod-read environment and key, deciding on the FraudLabs

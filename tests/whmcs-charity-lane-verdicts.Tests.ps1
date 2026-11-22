@@ -70,6 +70,7 @@ BeforeAll {
                 einChecked = $true; einVerified = $true; einIs501c3 = ($ProductPid -eq 33)
                 subsectionCode = $(if ($ProductPid -eq 33) { 3 } else { 4 }); nameMismatch = $false
                 guidestarChecked = $true; guidestarLive = $true; guidestarEinMismatch = $false; einSource = 'field'
+                einNotFound = $false; irsChecked = $true; irsInPub78 = ($ProductPid -eq 33); irsRevoked = $false; irsRevocationDate = ''
             }
             urlProbes            = @{ $script:Fb = 200; $script:Li = 302 }
             otherClientsSameOrg  = 0
@@ -371,13 +372,77 @@ Describe 'Get-CharityLaneVerdict - Gate 1 (pid 16 / 33)' {
         $r.reason_codes | Should -Contain 'EIN_NOT_501C3'
     }
 
-    It 'pid 33: ESCALATE EIN_NOT_VERIFIED when ProPublica did not find it or did not run' {
+    It 'pid 33: without the IRS lists, ESCALATE IRS_LISTS_UNAVAILABLE and fall back to ProPublica' {
         $notFound = New-Gate1App -ProductPid 33
+        $notFound.verification.irsChecked = $false
         $notFound.verification.einVerified = $false
         $notFound.verification.einIs501c3 = $null
-        (Get-CharityLaneVerdict -Application $notFound -Context $script:Ctx).reason_codes | Should -Contain 'EIN_NOT_VERIFIED'
+        $codes = (Get-CharityLaneVerdict -Application $notFound -Context $script:Ctx).reason_codes
+        $codes | Should -Contain 'IRS_LISTS_UNAVAILABLE'
+        $codes | Should -Contain 'EIN_NOT_VERIFIED'
         $notRun = New-Gate1App -ProductPid 33 -Set @{ verification = $null }
-        (Get-CharityLaneVerdict -Application $notRun -Context $script:Ctx).reason_codes | Should -Contain 'EIN_NOT_VERIFIED'
+        $r = Get-CharityLaneVerdict -Application $notRun -Context $script:Ctx
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Contain 'EIN_NOT_VERIFIED'
+        $r.reason_codes | Should -Contain 'IRS_LISTS_UNAVAILABLE'
+    }
+
+    It 'pid 33: an EIN in Pub 78 passes even when the ProPublica lookup failed' {
+        $app = New-Gate1App -ProductPid 33
+        $app.verification.einVerified = $false
+        $app.verification.einIs501c3 = $null
+        $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+        foreach ($c in @('EIN_NOT_VERIFIED', 'EIN_NOT_501C3', 'EIN_NOT_IN_PUB78', 'EIN_NOT_YET_LISTED', 'IRS_LISTS_UNAVAILABLE', 'EIN_REVOKED')) {
+            $r.reason_codes | Should -Not -Contain $c
+        }
+    }
+
+    It 'pid 33: ACCEPT when the EIN is in Pub 78, not revoked, and ProPublica agrees' {
+        $r = Get-CharityLaneVerdict -Application (New-Gate1App -ProductPid 33) -Context $script:Ctx
+        $r.verdict | Should -Be 'ACCEPT'
+    }
+
+    It 'ESCALATE EIN_REVOKED for a revoked EIN on either track, and never Pub 78 codes with it' {
+        foreach ($productPid in @(16, 33)) {
+            $app = New-Gate1App -ProductPid $productPid
+            $app.verification.irsRevoked = $true
+            $app.verification.irsInPub78 = $false
+            $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+            $r.verdict | Should -Be 'ESCALATE'
+            $r.reason_codes | Should -Contain 'EIN_REVOKED'
+            $r.reason_codes | Should -Not -Contain 'EIN_NOT_IN_PUB78'
+            $r.reason_codes | Should -Not -Contain 'EIN_NOT_YET_LISTED'
+        }
+    }
+
+    It 'pid 33: hold (EIN_NOT_YET_LISTED) when no IRS list and not ProPublica has the EIN' {
+        $app = New-Gate1App -ProductPid 33
+        $app.verification.irsInPub78 = $false
+        $app.verification.einVerified = $false
+        $app.verification.einIs501c3 = $null
+        $app.verification.einNotFound = $true
+        $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Contain 'EIN_NOT_YET_LISTED'
+        $r.reason_codes | Should -Not -Contain 'EIN_NOT_VERIFIED'
+        $r.reason_codes | Should -Not -Contain 'EIN_NOT_IN_PUB78'
+    }
+
+    It 'pid 33: ESCALATE EIN_NOT_IN_PUB78 when ProPublica has a record the IRS list lacks' {
+        $app = New-Gate1App -ProductPid 33
+        $app.verification.irsInPub78 = $false
+        $r = Get-CharityLaneVerdict -Application $app -Context $script:Ctx
+        $r.verdict | Should -Be 'ESCALATE'
+        $r.reason_codes | Should -Contain 'EIN_NOT_IN_PUB78'
+        $r.reason_codes | Should -Not -Contain 'EIN_NOT_YET_LISTED'
+    }
+
+    It 'pid 33: a failed ProPublica lookup (not a 404) is not read as "not yet listed"' {
+        $app = New-Gate1App -ProductPid 33
+        $app.verification.irsInPub78 = $false
+        $app.verification.einVerified = $false
+        $app.verification.einNotFound = $false
+        (Get-CharityLaneVerdict -Application $app -Context $script:Ctx).reason_codes | Should -Contain 'EIN_NOT_IN_PUB78'
     }
 
     It 'pid 16 does not require ProPublica confirmation' {

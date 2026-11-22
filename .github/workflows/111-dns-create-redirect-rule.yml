@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       source_domain:
-        description: 'Source domain (the zone that will redirect) e.g. ffcsites.org'
+        description:
+          'Source host to redirect: a zone apex (ffcsites.org) or a host inside a zone
+          (school.example.org)'
         required: true
         type: string
       target_domain:
@@ -31,6 +33,12 @@ on:
         description: 'Forward query string through to target'
         type: boolean
         default: true
+      proxy_source_records:
+        description:
+          'Also switch the source host records (and www.) to proxied, which the redirect needs to
+          run. Set after the rule is written.'
+        type: boolean
+        default: false
       dry_run:
         description: 'Dry Run (preview the rule payload, no changes applied)'
         type: boolean
@@ -66,6 +74,7 @@ jobs:
           INPUT_STATUS: ${{ inputs.status_code }}
           INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
           INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
+          INPUT_PROXY_SOURCE: ${{ inputs.proxy_source_records }}
         run: |
           # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
           # `required: true`, so a real dispatch cannot blank them -- a deleted or
@@ -90,6 +99,7 @@ jobs:
           )
           if ($env:INPUT_INCLUDE_WWW -ne 'true') { $args += '-ApexOnly' }
           if ($env:INPUT_PRESERVE_QS  -ne 'true') { $args += '-NoPreserveQueryString' }
+          if ($env:INPUT_PROXY_SOURCE -eq 'true') { $args += '-ProxySourceRecords' }
           pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 @args
 
   apply:
@@ -114,6 +124,7 @@ jobs:
           INPUT_STATUS: ${{ inputs.status_code }}
           INPUT_INCLUDE_WWW: ${{ inputs.include_www }}
           INPUT_PRESERVE_QS: ${{ inputs.preserve_query_string }}
+          INPUT_PROXY_SOURCE: ${{ inputs.proxy_source_records }}
         run: |
           # Fail closed on an empty mapping (#1150, ledger L214). The inputs below are
           # `required: true`, so a real dispatch cannot blank them -- a deleted or
@@ -137,6 +148,7 @@ jobs:
           )
           if ($env:INPUT_INCLUDE_WWW -ne 'true') { $args += '-ApexOnly' }
           if ($env:INPUT_PRESERVE_QS  -ne 'true') { $args += '-NoPreserveQueryString' }
+          if ($env:INPUT_PROXY_SOURCE -eq 'true') { $args += '-ProxySourceRecords' }
           pwsh -NoProfile -File scripts/Set-CloudflareRedirectRule.ps1 @args
 
       - name: Smoke test

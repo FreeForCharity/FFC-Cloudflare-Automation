@@ -29,9 +29,13 @@
         pasted admin/tab LinkedIn URL is reduced to the public page first;
       - Terms of Service and US-establishment attestations ticked;
       - legal-status answer present, recognized, and matching the track;
-      - EIN present; for pid 33 confirmed as a 501(c)(3) on ProPublica (the
-        same Invoke-ProPublicaEin / Get-ApplicationVerification path 226 uses),
-        with the IRS name and the Candid-slug EIN cross-checked;
+      - EIN present; for pid 33 confirmed as a 501(c)(3) on the IRS lists
+        (Publication 78, and not on the automatic revocation list; Clarke
+        2026-11-21), with ProPublica as a second opinion (the same
+        Invoke-ProPublicaEin / Get-ApplicationVerification path 226 uses), and
+        the IRS name and the Candid-slug EIN cross-checked. An EIN found in no
+        IRS list and not on ProPublica is held (EIN_NOT_YET_LISTED) and
+        rechecked on the next run rather than ticketed;
       - no duplicate: another Pending onboarding order or an Active onboarding
         service on the same client, another client with the same org name
         (GetClients) or the same desired domain (onboarding services +
@@ -177,6 +181,10 @@ $script:LaneReasonCodes = [ordered]@{
     EIN_MISSING                   = @{ severity = 'NEED_INFO'; description = 'No valid EIN on the application (field or Candid link).' }
     EIN_NOT_VERIFIED              = @{ severity = 'ESCALATE'; description = 'pid 33: EIN not confirmed on ProPublica (not found, lookup failed, or not run).' }
     EIN_NOT_501C3                 = @{ severity = 'ESCALATE'; description = 'pid 33: ProPublica lists the EIN, but not as a 501(c)(3).' }
+    EIN_REVOKED                   = @{ severity = 'ESCALATE'; description = "The EIN is on the IRS automatic revocation list with no reinstatement: its tax exemption is revoked. A human decides; never sent to the applicant as a ticket item." }
+    EIN_NOT_IN_PUB78              = @{ severity = 'ESCALATE'; description = 'pid 33: the EIN is not in IRS Publication 78 (organizations eligible for deductible donations), though ProPublica has a record. A human checks it (a church or group-exemption member can be missing from Pub 78).' }
+    EIN_NOT_YET_LISTED            = @{ severity = 'ESCALATE'; description = 'pid 33: the EIN is in no IRS list and not on ProPublica. Hold: do not accept or ticket; this check re-runs every review, and a new EIN usually appears after the next monthly IRS update. If it is still missing after that, a human checks the application for a typo.' }
+    IRS_LISTS_UNAVAILABLE         = @{ severity = 'ESCALATE'; description = 'The IRS Pub 78 / revocation lists could not be downloaded this run, so the 501(c)(3) test did not run.' }
     EIN_NAME_MISMATCH             = @{ severity = 'ESCALATE'; description = 'The IRS name for the EIN shares no significant word with the application org name.' }
     CANDID_EIN_MISMATCH           = @{ severity = 'ESCALATE'; description = 'The EIN in the Candid/GuideStar link differs from the EIN field.' }
     NO_APPLICATION_FIELDS         = @{ severity = 'ESCALATE'; description = 'The service carries no custom fields; the application cannot be read.' }
@@ -635,9 +643,29 @@ function Get-CharityLaneVerdict {
         else {
             $einChecked = [bool](Get-LaneProp -Object $verification -Name 'einChecked')
             $einVerified = [bool](Get-LaneProp -Object $verification -Name 'einVerified')
+            $einNotFound = [bool](Get-LaneProp -Object $verification -Name 'einNotFound')
+            $irsChecked = [bool](Get-LaneProp -Object $verification -Name 'irsChecked')
+            $irsInPub78 = [bool](Get-LaneProp -Object $verification -Name 'irsInPub78')
+            $irsRevoked = [bool](Get-LaneProp -Object $verification -Name 'irsRevoked')
+            # IRS lists first (Clarke 2026-11-21): Pub 78 plus the revocation
+            # list are the 501(c)(3) test; ProPublica is the second opinion.
+            if ($irsRevoked) { $codes.Add('EIN_REVOKED') }
             if ($productPid -eq 33) {
-                if (-not $einChecked -or -not $einVerified -or $null -eq $einIs501c3) { $codes.Add('EIN_NOT_VERIFIED') }
-                elseif ($einIs501c3 -ne $true) { $codes.Add('EIN_NOT_501C3') }
+                if (-not $einChecked -or -not $irsChecked) {
+                    # Never checked, or the IRS lists did not load: fail closed.
+                    $codes.Add('IRS_LISTS_UNAVAILABLE')
+                    if (-not $einChecked -or -not $einVerified -or $null -eq $einIs501c3) { $codes.Add('EIN_NOT_VERIFIED') }
+                    elseif ($einIs501c3 -ne $true) { $codes.Add('EIN_NOT_501C3') }
+                }
+                elseif ($irsInPub78) {
+                    # On the IRS list. A ProPublica answer that disagrees is
+                    # still raised; a failed ProPublica lookup is not.
+                    if ($einVerified -and $einIs501c3 -eq $false) { $codes.Add('EIN_NOT_501C3') }
+                }
+                elseif (-not $irsRevoked) {
+                    if ($einNotFound) { $codes.Add('EIN_NOT_YET_LISTED') }
+                    else { $codes.Add('EIN_NOT_IN_PUB78') }
+                }
             }
             if ([bool](Get-LaneProp -Object $verification -Name 'nameMismatch')) { $codes.Add('EIN_NAME_MISMATCH') }
         }
@@ -1082,6 +1110,17 @@ try {
     foreach ($s in $pendingLane) { $laneItemsPerOrder[[string]$s.orderid] = 1 + [int]$laneItemsPerOrder[[string]$s.orderid] }
     Write-Host "Pending charity-lane items: $($pendingLane.Count)"
 
+    # IRS Pub 78 + revocation list, downloaded once. A failed download leaves
+    # every pid 33 row at IRS_LISTS_UNAVAILABLE (ESCALATE), never a pass.
+    $irsLists = $null
+    if (-not $skipNet) {
+        $irsLists = Import-IrsEoList
+        if ($irsLists.Loaded) {
+            Write-Host "IRS lists: Pub 78 $($irsLists.Pub78.Count) EINs (Last-Modified $($irsLists.Pub78Modified)); revocation list $($irsLists.Revocation.Count) EINs (Last-Modified $($irsLists.RevocationModified))."
+        }
+        else { Write-Warning "IRS lists unavailable: $($irsLists.Error)" }
+    }
+
     $clientCache = @{}; $einCache = @{}; $urlCache = @{}; $probeCache = @{}; $einFieldIdCache = @{}
     $reviewLinkCache = @{}; $reviewGithubCache = @{}
     $orgLookupCache = @{}; $domainLookupCache = @{}
@@ -1120,10 +1159,10 @@ try {
             $org = Get-LaneOrgName -CompanyName $app.companyName -ApplicantFullName $app.applicantFullName -Fields $app.fields
 
             if (-not $skipNet) {
-                # EIN (ProPublica) + Candid liveness, exactly as 226 does it.
+                # EIN (IRS lists + ProPublica) + Candid liveness, as 226 does it.
                 $verifyInput = [pscustomobject]@{ pid = $app.pid; fields = $app.fields; charityName = $org.Raw }
                 $app.verification = Get-ApplicationVerification -Application $verifyInput -EinBaseUrl $cfg.EinApiBaseUrl `
-                    -EinCache $einCache -UrlCache $urlCache -FieldIdCache $einFieldIdCache
+                    -EinCache $einCache -UrlCache $urlCache -FieldIdCache $einFieldIdCache -IrsLists $irsLists
                 foreach ($kind in @('facebook', 'linkedin')) {
                     $page = Get-LaneSocialPageUrl -Fields $app.fields -Kind $kind
                     if (-not $page.Code -and $page.Url) { $app.urlProbes[$page.Url] = Invoke-LaneUrlProbe -Url $page.Url -Cache $probeCache }

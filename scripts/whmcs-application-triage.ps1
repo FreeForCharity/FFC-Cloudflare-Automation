@@ -1316,7 +1316,9 @@ function Invoke-ProPublicaEin {
         [int]$TimeoutSec = 8,
         [int]$PaceMs = 250
     )
-    $unverified = { param($reason) [pscustomobject]@{ Verified = $false; Is501c3 = $null; SubsectionCode = $null; RulingDate = $null; Name = ''; Reason = $reason } }
+    # NotFound: ProPublica answered and has no record (404, or its 200
+    # "Unknown Organization" placeholder), as opposed to a lookup that failed.
+    $unverified = { param($reason, $notFound = $false) [pscustomobject]@{ Verified = $false; Is501c3 = $null; SubsectionCode = $null; RulingDate = $null; Name = ''; Reason = $reason; NotFound = [bool]$notFound } }
     $digits = ([string]$Ein -replace '\D', '')
     if ($digits.Length -ne 9) { return (& $unverified 'no valid 9-digit EIN') }
     if ($Cache.ContainsKey($digits)) { return $Cache[$digits] }
@@ -1336,15 +1338,175 @@ function Invoke-ProPublicaEin {
             $nm = if ($org.PSObject.Properties['name']) { [string]$org.name } else { '' }
             $is3 = $null
             if ($null -ne $sub) { $is3 = ([int]$sub -eq 3) }
-            $result = [pscustomobject]@{ Verified = $true; Is501c3 = $is3; SubsectionCode = $sub; RulingDate = $rul; Name = $nm; Reason = 'ok' }
+            if ($nm -eq 'Unknown Organization' -and $null -eq $sub) {
+                # ProPublica answers 200 with this placeholder for an EIN it
+                # has no record of (measured 2026-11-21 on 99-9999999).
+                $result = & $unverified 'no ProPublica record (placeholder)' $true
+            }
+            else {
+                $result = [pscustomobject]@{ Verified = $true; Is501c3 = $is3; SubsectionCode = $sub; RulingDate = $rul; Name = $nm; Reason = 'ok'; NotFound = $false }
+            }
         }
     }
     catch {
         # 404 (org not found) and every other transport/HTTP error => unverified.
-        $result = & $unverified "lookup failed: $($_.Exception.Message)"
+        # Only a 404 counts as "no record"; anything else is a failed lookup.
+        $code = $null
+        try { if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode } } catch { $code = $null }
+        $is404 = ($code -eq 404) -or ($_.Exception.Message -match '\b404\b')
+        $result = & $unverified "lookup failed: $($_.Exception.Message)" $is404
     }
     $Cache[$digits] = $result
     return $result
+}
+
+# --------------------------------------------------------------------------
+# IRS exempt-organization lists (Clarke 2026-11-21: the IRS lists are the
+# 501(c)(3) test, ProPublica a second opinion). Two bulk files, both public,
+# key-less, refreshed by the IRS about monthly:
+#   Pub 78 (organizations eligible to receive deductible contributions)
+#     https://apps.irs.gov/pub/epostcard/data-download-pub78.zip
+#     EIN|Name|City|State|Country|Deductibility codes
+#   Automatic revocation of exemption list
+#     https://apps.irs.gov/pub/epostcard/data-download-revocation.zip
+#     EIN|Name|DBA|Street|City|State|ZIP|Country|ExemptType|RevocationDate|PostingDate|ReinstatementDate
+# The parsers are pure (lines in, lookup tables out) so tests feed fixtures;
+# Import-IrsEoList is the only function that downloads.
+# --------------------------------------------------------------------------
+
+$script:IrsPub78Url = 'https://apps.irs.gov/pub/epostcard/data-download-pub78.zip'
+$script:IrsRevocationUrl = 'https://apps.irs.gov/pub/epostcard/data-download-revocation.zip'
+
+function ConvertFrom-IrsPub78Line {
+    # Pub 78 lines -> @{ <9-digit EIN> = <IRS name> }. Lines that do not start
+    # with a 9-digit EIN and a pipe (blank lines, headers) are skipped.
+    [OutputType([hashtable])]
+    param([Parameter()][AllowEmptyCollection()][string[]]$Line)
+    $map = @{}
+    foreach ($ln in @($Line)) {
+        if ([string]::IsNullOrEmpty($ln) -or $ln.Length -lt 10 -or $ln[9] -ne '|') { continue }
+        $ein = $ln.Substring(0, 9)
+        if ($ein -notmatch '^\d{9}$') { continue }
+        $parts = $ln.Split('|')
+        $map[$ein] = if ($parts.Count -gt 1) { $parts[1].Trim() } else { '' }
+    }
+    return $map
+}
+
+function ConvertFrom-IrsRevocationLine {
+    # Revocation list lines -> @{ <EIN> = [pscustomobject]@{ Name; RevocationDate;
+    # PostingDate; ReinstatementDate } }. An EIN listed more than once keeps
+    # its LAST row (the file is in posting order), so a later reinstatement wins.
+    [OutputType([hashtable])]
+    param([Parameter()][AllowEmptyCollection()][string[]]$Line)
+    $map = @{}
+    foreach ($ln in @($Line)) {
+        if ([string]::IsNullOrEmpty($ln)) { continue }
+        $parts = $ln.Split('|')
+        if ($parts.Count -lt 11) { continue }
+        $ein = $parts[0].Trim()
+        if ($ein -notmatch '^\d{9}$') { continue }
+        $map[$ein] = [pscustomobject]@{
+            Name              = $parts[1].Trim()
+            RevocationDate    = $parts[9].Trim()
+            PostingDate       = $parts[10].Trim()
+            ReinstatementDate = if ($parts.Count -gt 11) { $parts[11].Trim() } else { '' }
+        }
+    }
+    return $map
+}
+
+function Get-IrsEinStatus {
+    # One EIN against the loaded IRS lists. Pure. Revoked means listed with no
+    # reinstatement date. Checked is false when the lists did not load, so a
+    # caller can fail closed rather than read "not listed" as a pass.
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()][string]$Ein,
+        [Parameter()]$Lists
+    )
+    $digits = ([string]$Ein -replace '\D', '')
+    $loaded = $Lists -and [bool]$Lists.Loaded
+    $out = [pscustomobject]@{
+        Checked           = $false
+        InPub78           = $false
+        Pub78Name         = ''
+        Revoked           = $false
+        RevocationDate    = ''
+        ReinstatementDate = ''
+        RevocationName    = ''
+    }
+    if (-not $loaded -or $digits.Length -ne 9) { return $out }
+    $out.Checked = $true
+    if ($Lists.Pub78.ContainsKey($digits)) {
+        $out.InPub78 = $true
+        $out.Pub78Name = [string]$Lists.Pub78[$digits]
+    }
+    if ($Lists.Revocation.ContainsKey($digits)) {
+        $r = $Lists.Revocation[$digits]
+        $out.RevocationDate = [string]$r.RevocationDate
+        $out.ReinstatementDate = [string]$r.ReinstatementDate
+        $out.RevocationName = [string]$r.Name
+        $out.Revoked = [string]::IsNullOrWhiteSpace($out.ReinstatementDate)
+    }
+    return $out
+}
+
+function Read-IrsZipLine {
+    # Download one IRS zip and return the lines of its single text file
+    # (latin-1, as the IRS publishes it) plus the server's Last-Modified date.
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [int]$TimeoutSec = 300
+    )
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        $resp = Invoke-WebRequest -Uri $Url -OutFile $tmp -TimeoutSec $TimeoutSec -PassThru -UseBasicParsing -ErrorAction Stop
+        $modified = ''
+        if ($resp -and $resp.Headers -and $resp.Headers['Last-Modified']) { $modified = [string](@($resp.Headers['Last-Modified'])[0]) }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($tmp)
+        try {
+            $entry = @($zip.Entries | Where-Object { $_.Length -gt 0 })[0]
+            $reader = [System.IO.StreamReader]::new($entry.Open(), [System.Text.Encoding]::GetEncoding('iso-8859-1'))
+            $lines = [System.Collections.Generic.List[string]]::new()
+            try { while ($null -ne ($l = $reader.ReadLine())) { $lines.Add($l) } } finally { $reader.Dispose() }
+        }
+        finally { $zip.Dispose() }
+        return [pscustomobject]@{ Lines = $lines.ToArray(); LastModified = $modified }
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+function Import-IrsEoList {
+    # Download Pub 78 and the revocation list once per run. Never throws: on any
+    # failure Loaded is false and Error says why, and every EIN then reads as
+    # unchecked (callers fail closed on that).
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Pub78Url = $script:IrsPub78Url,
+        [string]$RevocationUrl = $script:IrsRevocationUrl,
+        [int]$TimeoutSec = 300
+    )
+    try {
+        $p = Read-IrsZipLine -Url $Pub78Url -TimeoutSec $TimeoutSec
+        $r = Read-IrsZipLine -Url $RevocationUrl -TimeoutSec $TimeoutSec
+        $pub78 = ConvertFrom-IrsPub78Line -Line $p.Lines
+        $rev = ConvertFrom-IrsRevocationLine -Line $r.Lines
+        if ($pub78.Count -lt 100000) { throw "Pub 78 parsed to only $($pub78.Count) rows; refusing a truncated list." }
+        return [pscustomobject]@{
+            Loaded             = $true
+            Pub78              = $pub78
+            Revocation         = $rev
+            Pub78Modified      = $p.LastModified
+            RevocationModified = $r.LastModified
+            Error              = ''
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Loaded = $false; Pub78 = @{}; Revocation = @{}; Pub78Modified = ''; RevocationModified = ''; Error = $_.Exception.Message }
+    }
 }
 
 function Invoke-UrlLiveness {
@@ -1387,11 +1549,18 @@ function Get-ApplicationVerification {
         [hashtable]$EinCache = @{},
         [hashtable]$UrlCache = @{},
         [hashtable]$FieldIdCache = @{},
-        [int]$TimeoutSec = 8
+        [int]$TimeoutSec = 8,
+        # Import-IrsEoList output. Omitted (226) => the irs* fields stay unchecked.
+        [Parameter()]$IrsLists = $null
     )
     $out = @{
         einChecked           = $false
         einVerified          = $false
+        einNotFound          = $false
+        irsChecked           = $false
+        irsInPub78           = $false
+        irsRevoked           = $false
+        irsRevocationDate    = ''
         einIs501c3           = $null
         einSource            = ''
         irsName              = ''
@@ -1414,11 +1583,24 @@ function Get-ApplicationVerification {
         $out.einChecked = $true
         $v = Invoke-ProPublicaEin -Ein $einValue -BaseUrl $EinBaseUrl -Cache $EinCache -TimeoutSec $TimeoutSec
         $out.einVerified = [bool]$v.Verified
+        $out.einNotFound = [bool]($v.PSObject.Properties['NotFound'] -and $v.NotFound)
         $out.einIs501c3 = $v.Is501c3
+        if ($IrsLists) {
+            $irs = Get-IrsEinStatus -Ein $einValue -Lists $IrsLists
+            $out.irsChecked = [bool]$irs.Checked
+            $out.irsInPub78 = [bool]$irs.InPub78
+            $out.irsRevoked = [bool]$irs.Revoked
+            $out.irsRevocationDate = [string]$irs.RevocationDate
+        }
         $out.irsName = [string]$v.Name
         $out.subsectionCode = $v.SubsectionCode
         $out.rulingDate = $v.RulingDate
         if ($out.einVerified -and -not [string]::IsNullOrWhiteSpace($out.irsName)) {
+            $out.nameMismatch = Test-NameMismatch -NameA $out.irsName -NameB ([string]$Application.charityName)
+        }
+        elseif ($IrsLists -and $irs.InPub78 -and -not [string]::IsNullOrWhiteSpace($irs.Pub78Name)) {
+            # ProPublica had no answer; Pub 78's own name is the IRS name.
+            $out.irsName = [string]$irs.Pub78Name
             $out.nameMismatch = Test-NameMismatch -NameA $out.irsName -NameB ([string]$Application.charityName)
         }
     }

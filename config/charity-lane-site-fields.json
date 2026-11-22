@@ -259,8 +259,12 @@
       "type": "url",
       "maxLength": 500,
       "hosts": ["guidestar.org", "candid.org"],
-      "rejectHosts": ["app.candid.org"],
-      "rejectPathPatterns": ["^/user/", "^/?$"]
+      "rejectPathPatterns": [
+        "^/user/",
+        "^/?$",
+        "(?i)^/(account|login|log-in|signin|sign-in|signup|sign-up|register|dashboard|search)(/|$)"
+      ],
+      "hostRequiredQueryParams": [{ "host": "app.candid.org", "param": "pkId" }]
     },
     {
       "key": "templateChoice",

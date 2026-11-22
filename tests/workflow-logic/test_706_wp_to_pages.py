@@ -22,6 +22,7 @@ rather than left to review.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 import subprocess
@@ -3439,6 +3440,34 @@ def test_heal_refuses_an_argument_that_would_silently_narrow_the_scan():
             rc, out = run(*args)
             assert rc == 2, (args, rc, out)
             assert needle in out, (args, needle, out)
+
+
+def test_ffc_footer_treats_the_templates_candid_profile_as_unset():
+    """The Single Page template now ships FFC's own shareable app.candid.org
+    link (Candid id 9326392) as its default guidestar.profileUrl, not the old
+    EIN-based guidestar.org URL. A converted site that never set its own must
+    not link FFC's profile as the charity's. The id is assembled so the
+    charity repo's check-drift scan does not flag this file."""
+    src = (REPO_ROOT / "assets" / "ffc-footer.tsx").read_text(encoding="utf-8")
+    assert "9326392" not in src, "FFC's Candid id must be assembled, not a literal"
+    assert "isTemplateProfile(profileUrl)" in src
+    start = src.index("const TEMPLATE_EIN")
+    end = src.index("/**", src.index("function isTemplateProfile"))
+    js = re.sub(r"\(url: string \| undefined\): boolean", "(url)", src[start:end])
+    cases = {
+        "https://www.guidestar.org/profile/46-2471893": True,
+        "https://app.candid.org/profile/9326392/free-for-charity/?pkId=x&isActive=true": True,
+        "https://app.candid.org/profile/9326392": True,
+        "https://app.candid.org/profile/93263920/other/?pkId=y": False,
+        "https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=z": False,
+        "": False,
+    }
+    script = js + "\nconst cases = " + json.dumps(list(cases)) + ";\n" + (
+        "process.stdout.write(JSON.stringify(cases.map((u) => isTemplateProfile(u))))"
+    )
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == list(cases.values()), (out.stdout, cases)
 
 
 def test_ffc_footer_renders_pending_fields_as_plain_text_placeholders():

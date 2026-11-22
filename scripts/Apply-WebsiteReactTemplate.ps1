@@ -48,6 +48,12 @@ param(
 
     [string]$GuideStarDirectProfileUrl,
 
+    # The seal widget is only written after it was fetched and seen to be a
+    # real, visible seal (scripts/candid-seal-check.ps1). Blank = fetch it now.
+    # Tests pass a verdict instead of reaching Candid: ok | no_seal | no_org |
+    # not_svg | unverified.
+    [string]$CandidSealVerdict,
+
     [string[]]$FooterSocial = @(),
 
     [string[]]$LeadershipLines = @(),
@@ -546,6 +552,16 @@ function Write-LfFile {
     [System.IO.File]::WriteAllText($Path, $normalized, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Get-CandidSealUrl {
+    # Candid's Seal of Transparency widget image for a charity's own
+    # app.candid.org profile link, else ''. Pure. Keyed on the numeric Candid
+    # profile id, which a guidestar.org EIN link does not carry.
+    param([AllowEmptyString()][AllowNull()][string]$ProfileUrl)
+    $m = [regex]::Match([string]$ProfileUrl, '(?i)^https://app\.candid\.org/profile/(\d{3,12})(?:[/?#]|$)')
+    if (-not $m.Success) { return '' }
+    return "https://widgets.guidestar.org/prod/v1/pdp/transparency-seal/$($m.Groups[1].Value)/svg"
+}
+
 function ConvertTo-TsString {
     param([AllowEmptyString()][string]$Value)
     if ($null -eq $Value) { $Value = '' }
@@ -869,9 +885,16 @@ function Update-SiteConfig {
     # object without it fails `tsc`, so the charity's site never builds and
     # never deploys -- measured on every sample charity in 748 run
     # 37164489698. It cannot be derived from an EIN, and FFC's own widget URL
-    # is a transparency claim about FFC, so it is written EMPTY: the template
-    # renders the seal only when it is set. Read before the write below, which
+    # is a transparency claim about FFC, so without the charity's own Candid
+    # id it is written EMPTY: the template renders the seal only when it is
+    # set. Read before the write below, which
     # replaces the span this inspects.
+    #
+    # The id it is keyed to IS in a charity's own app.candid.org profile link
+    # (app.candid.org/profile/<id>/<slug>/?pkId=...), so when the charity gave
+    # one, the seal is Candid's own widget for that id -- the same form
+    # freeforcharity.org's footer uses for FFC (transparency-seal/9326392/svg).
+    # It shows whatever seal Candid has awarded, so it claims no level itself.
     $sealTs = ''
     $existing = Get-SiteConfigProperties -Source $text
     if ($existing.ContainsKey('guidestar')) {
@@ -879,7 +902,29 @@ function Update-SiteConfig {
         $currentGuidestar = $text.Substring(
             $guidestarSpan.Start, $guidestarSpan.End - $guidestarSpan.Start)
         if ($currentGuidestar -match '(?m)^\s*sealUrl\s*:') {
-            $sealTs = "`n    sealUrl: '',"
+            $sealUrl = Get-CandidSealUrl -ProfileUrl $directUrl
+            if (-not $sealUrl) { $sealUrl = Get-CandidSealUrl -ProfileUrl $profileUrl }
+            if ($sealUrl) {
+                # Built from the id is not proof: Candid answers 200 with an
+                # empty, invisible box for an organization that has no seal.
+                $verdict = $CandidSealVerdict
+                if (-not $verdict) {
+                    # Dot-source inside a child scope: the checker's param()
+                    # block declares $ProfileUrl, and dot-sourcing it here
+                    # directly would reset this function's $profileUrl to an
+                    # empty array (names ignore case), shipping profileUrl: ''.
+                    $sealCheck = Join-Path $PSScriptRoot 'candid-seal-check.ps1'
+                    $verdict = & {
+                        . $sealCheck
+                        (Get-CandidSealVerdict -Fetch (Invoke-CandidFetch -Url $sealUrl)).verdict
+                    }
+                }
+                if ($verdict -ne 'ok') {
+                    Write-Warning "Candid seal widget $sealUrl is not a visible seal ($verdict); the footer shows no seal."
+                    $sealUrl = ''
+                }
+            }
+            $sealTs = "`n    sealUrl: $(ConvertTo-TsString $sealUrl),"
         }
     }
     $guidestarTs = "{$sealTs`n    profileUrl: $(ConvertTo-TsString $profileUrl),`n    directProfileUrl: $(ConvertTo-TsString $directUrl),`n  }"

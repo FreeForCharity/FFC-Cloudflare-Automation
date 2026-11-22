@@ -2528,6 +2528,25 @@
       "guard": "read-only profile search; public org data only",
       "category": "Candid (GuideStar)",
       "categoryCode": "CANDID"
+    },
+    {
+      "number": 803,
+      "title": "Candid - Seal Widget Check",
+      "apis": [
+        "CANDID"
+      ],
+      "file": "803-candid-seal-check.yml",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "environments": [],
+      "description": "Read-only: checks each charity's Candid footer badge the way a signed-out visitor meets it. The seal widget must be a real, visible seal, the badge must render in a page, and the shareable profile link must show the full profile. Blank input = self-test against known live answers. No credentials. Runs on a GitHub runner because cloud agent containers cannot reach Candid.",
+      "safetyLevel": "Reads",
+      "approvalEnv": "none (no credentials)",
+      "guard": "read-only signed-out fetch of public seal widgets and profile links",
+      "category": "Candid (GuideStar)",
+      "categoryCode": "CANDID"
     }
   ]
 }

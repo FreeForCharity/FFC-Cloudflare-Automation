@@ -396,6 +396,105 @@ Describe 'Live EIN verification (ProPublica, mocked)' {
     }
 }
 
+Describe 'ProPublica no-record answers' {
+    It 'marks a 404 as NotFound' {
+        Mock -CommandName Invoke-RestMethod -MockWith { throw 'Response status code does not indicate success: 404 (Not Found).' }
+        $v = Invoke-ProPublicaEin -Ein '99-9999998' -BaseUrl 'https://stub.test/orgs' -Cache @{} -PaceMs 0
+        $v.Verified | Should -BeFalse
+        $v.NotFound | Should -BeTrue
+    }
+
+    It 'marks the 200 "Unknown Organization" placeholder as NotFound, not verified' {
+        Mock -CommandName Invoke-RestMethod -MockWith { [pscustomobject]@{ organization = [pscustomobject]@{ name = 'Unknown Organization' } } }
+        $v = Invoke-ProPublicaEin -Ein '99-9999999' -BaseUrl 'https://stub.test/orgs' -Cache @{} -PaceMs 0
+        $v.Verified | Should -BeFalse
+        $v.NotFound | Should -BeTrue
+    }
+
+    It 'does not mark a timeout as NotFound' {
+        Mock -CommandName Invoke-RestMethod -MockWith { throw 'The operation has timed out.' }
+        $v = Invoke-ProPublicaEin -Ein '12-3456780' -BaseUrl 'https://stub.test/orgs' -Cache @{} -PaceMs 0
+        $v.Verified | Should -BeFalse
+        $v.NotFound | Should -BeFalse
+    }
+}
+
+Describe 'IRS exempt-organization lists (Pub 78 + revocation)' {
+    BeforeAll {
+        $script:IrsLists = [pscustomobject]@{
+            Loaded     = $true
+            Pub78      = (ConvertFrom-IrsPub78Line -Line @(
+                    '',
+                    '462471893|Free For Charity|State College|PA|United States|PC',
+                    '582013130|Veterans & Community Outreach Foundation|Clarkston|GA|United States|PC',
+                    'not an ein line'
+                ))
+            Revocation = (ConvertFrom-IrsRevocationLine -Line @(
+                    '933862625|SEPA ORGANIZATION||1 Main St|Somewhere|VA|22000|United States|03|15-MAY-2026|11-AUG-2026|',
+                    '582013130|VETERANS & COMMUNITY OUTREACH FOUNDATION||2 Oak|Clarkston|GA|30021|United States|03|15-NOV-2016|13-MAR-2017|15-NOV-2016',
+                    'short|row'
+                ))
+        }
+    }
+
+    It 'parses Pub 78 rows and skips lines without a 9-digit EIN' {
+        $script:IrsLists.Pub78.Count | Should -Be 2
+        $script:IrsLists.Pub78['462471893'] | Should -Be 'Free For Charity'
+    }
+
+    It 'reads an EIN in Pub 78 and not revoked as listed' {
+        $s = Get-IrsEinStatus -Ein '46-2471893' -Lists $script:IrsLists
+        $s.Checked | Should -BeTrue
+        $s.InPub78 | Should -BeTrue
+        $s.Revoked | Should -BeFalse
+    }
+
+    It 'reads a revocation with no reinstatement as revoked' {
+        $s = Get-IrsEinStatus -Ein '93-3862625' -Lists $script:IrsLists
+        $s.Revoked | Should -BeTrue
+        $s.InPub78 | Should -BeFalse
+        $s.RevocationDate | Should -Be '15-MAY-2026'
+    }
+
+    It 'reads a reinstated revocation as not revoked' {
+        $s = Get-IrsEinStatus -Ein '58-2013130' -Lists $script:IrsLists
+        $s.Revoked | Should -BeFalse
+        $s.ReinstatementDate | Should -Be '15-NOV-2016'
+        $s.InPub78 | Should -BeTrue
+    }
+
+    It 'reports unchecked (never a pass) when the lists did not load' {
+        $s = Get-IrsEinStatus -Ein '46-2471893' -Lists ([pscustomobject]@{ Loaded = $false; Pub78 = @{}; Revocation = @{} })
+        $s.Checked | Should -BeFalse
+        $s.InPub78 | Should -BeFalse
+    }
+
+    It 'carries the IRS results through Get-ApplicationVerification' {
+        Mock -CommandName Invoke-RestMethod -MockWith { throw 'Response status code does not indicate success: 404 (Not Found).' }
+        Mock -CommandName Invoke-WebRequest -MockWith { [pscustomobject]@{ StatusCode = 200 } }
+        $app = [pscustomobject]@{
+            orderid = '6100'; charityName = 'Free For Charity'; pid = 33
+            fields = (New-Fields @{ 'EIN' = '46-2471893' })
+        }
+        $v = Get-ApplicationVerification -Application $app -EinBaseUrl 'https://stub.test/orgs' -IrsLists $script:IrsLists
+        $v.irsChecked  | Should -BeTrue
+        $v.irsInPub78  | Should -BeTrue
+        $v.irsRevoked  | Should -BeFalse
+        $v.einNotFound | Should -BeTrue
+        # ProPublica had nothing, so the Pub 78 name is the IRS name.
+        $v.irsName     | Should -Be 'Free For Charity'
+        $v.nameMismatch | Should -BeFalse
+    }
+
+    It 'leaves the IRS fields unchecked when no lists are passed (226 unchanged)' {
+        Mock -CommandName Invoke-RestMethod -MockWith { [pscustomobject]@{ organization = [pscustomobject]@{ subsection_code = 3; name = 'Free For Charity' } } }
+        $app = [pscustomobject]@{ orderid = '6101'; charityName = 'Free For Charity'; pid = 33; fields = (New-Fields @{ 'EIN' = '46-2471893' }) }
+        $v = Get-ApplicationVerification -Application $app -EinBaseUrl 'https://stub.test/orgs'
+        $v.irsChecked | Should -BeFalse
+        $v.einVerified | Should -BeTrue
+    }
+}
+
 Describe 'Candid/GuideStar link checks' {
     It 'extracts an EIN from a candid profile slug' {
         Get-EinFromCandidUrl -Value 'https://www.candid.org/profile/12-3456789' | Should -Be '123456789'

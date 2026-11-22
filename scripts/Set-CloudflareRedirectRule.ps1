@@ -16,10 +16,20 @@
     Matches existing rule by description to avoid duplicates. Re-running updates in place.
 
 .PARAMETER SourceDomain
-    The Cloudflare zone whose traffic should be redirected (e.g. ffcsites.org).
+    The host whose traffic should be redirected. Either a Cloudflare zone apex (e.g. ffcsites.org)
+    or a host inside one (e.g. school.newheightseducation.org). For a host inside a zone, the zone
+    is found by walking up the labels, and the rule is added to that zone's ruleset.
 
 .PARAMETER TargetDomain
-    The destination domain (e.g. ffcadmin.org). The script always uses https://.
+    The destination host, optionally with a path prefix (e.g. ffcadmin.org, or
+    newheightseducation.org/school). The request path is appended to it. The script always uses
+    https://.
+
+.PARAMETER ProxySourceRecords
+    Also set the source host's A/AAAA/CNAME records (and www.<source>'s, unless -ApexOnly) to
+    proxied. A redirect rule only runs for proxied hostnames, so a DNS-only source record would
+    never reach it. The rule is written first, so the records are never proxied without it.
+    Fails if the source host has no such record.
 
 .PARAMETER StatusCode
     HTTP status code for the redirect. Default 301.
@@ -45,6 +55,10 @@
 
 .EXAMPLE
     .\Set-CloudflareRedirectRule.ps1 -SourceDomain ffcsites.org -TargetDomain ffcadmin.org -DryRun
+
+.EXAMPLE
+    .\Set-CloudflareRedirectRule.ps1 -SourceDomain school.newheightseducation.org `
+        -TargetDomain newheightseducation.org/school -ProxySourceRecords -DryRun
 #>
 [CmdletBinding()]
 param(
@@ -55,6 +69,7 @@ param(
     [switch]$NoPreserveQueryString,
     [string]$Description,
     [string]$Token,
+    [switch]$ProxySourceRecords,
     [switch]$DryRun
 )
 
@@ -63,6 +78,16 @@ $PreserveQueryString = -not $NoPreserveQueryString.IsPresent
 
 $ErrorActionPreference = 'Stop'
 $ApiBase = 'https://api.cloudflare.com/client/v4'
+
+# --- Validate inputs (they are interpolated into a Cloudflare rule expression) ---
+$SourceDomain = $SourceDomain.Trim().ToLowerInvariant().TrimEnd('.')
+$TargetDomain = $TargetDomain.Trim().TrimEnd('/')
+if ($SourceDomain -notmatch '^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$') {
+    throw "SourceDomain '$SourceDomain' is not a valid host name."
+}
+if ($TargetDomain -notmatch '^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}(?:/[A-Za-z0-9._~/-]*)?$') {
+    throw "TargetDomain '$TargetDomain' must be a host with an optional path prefix (e.g. example.org or example.org/section)."
+}
 
 if ([string]::IsNullOrWhiteSpace($Description)) {
     $Description = "Repoint $SourceDomain to $TargetDomain"
@@ -102,18 +127,71 @@ function Get-AuthToken {
     throw "No Cloudflare API token has access to zone '$ZoneName'."
 }
 
-$AuthToken = Get-AuthToken -ZoneName $SourceDomain
-$Headers = @{ Authorization = "Bearer $AuthToken"; 'Content-Type' = 'application/json' }
-
-# --- Resolve zone ID ---
-Write-Host "Resolving zone ID for $SourceDomain..."
-$encoded = [uri]::EscapeDataString($SourceDomain)
-$zoneResp = Invoke-RestMethod -Method Get -Uri "$ApiBase/zones?name=$encoded" -Headers $Headers -TimeoutSec 30
-if (-not $zoneResp.success -or -not $zoneResp.result -or $zoneResp.result.Count -eq 0) {
-    throw "Zone '$SourceDomain' not found or token lacks access."
+# Candidate zones for a host, most specific first: school.example.org -> school.example.org,
+# example.org. Stops at two labels; a public suffix is never a Cloudflare zone.
+function Get-ZoneCandidates {
+    param([string]$HostName)
+    $labels = $HostName.Split('.')
+    for ($i = 0; $i -le $labels.Count - 2; $i++) {
+        ($labels[$i..($labels.Count - 1)] -join '.')
+    }
 }
-$zoneId = $zoneResp.result[0].id
+
+# --- Resolve the zone that holds the source host ---
+# Fail on a missing token here, not inside the loop below, which skips candidates
+# whose token lookup fails and would otherwise report "no zone found" instead.
+if (-not $Token -and -not ($env:CLOUDFLARE_API_TOKEN -or $env:CLOUDFLARE_API_TOKEN_FFC -or $env:CLOUDFLARE_API_TOKEN_CM)) {
+    throw 'Cloudflare API token not found. Pass -Token or set CLOUDFLARE_API_TOKEN, CLOUDFLARE_API_TOKEN_FFC, or CLOUDFLARE_API_TOKEN_CM.'
+}
+Write-Host "Resolving zone for $SourceDomain..."
+$zoneName = $null
+$zoneId = $null
+$AuthToken = $null
+foreach ($candidate in (Get-ZoneCandidates -HostName $SourceDomain)) {
+    try { $candidateToken = Get-AuthToken -ZoneName $candidate } catch { continue }
+    $h = @{ Authorization = "Bearer $candidateToken"; 'Content-Type' = 'application/json' }
+    $encoded = [uri]::EscapeDataString($candidate)
+    $zoneResp = Invoke-RestMethod -Method Get -Uri "$ApiBase/zones?name=$encoded" -Headers $h -TimeoutSec 30
+    if ($zoneResp.success -and $zoneResp.result -and $zoneResp.result.Count -gt 0) {
+        $zoneName = $candidate
+        $zoneId = $zoneResp.result[0].id
+        $AuthToken = $candidateToken
+        break
+    }
+}
+if (-not $zoneId) {
+    throw "No Cloudflare zone found for '$SourceDomain' (tried: $((Get-ZoneCandidates -HostName $SourceDomain) -join ', ')), or no token has access."
+}
+$Headers = @{ Authorization = "Bearer $AuthToken"; 'Content-Type' = 'application/json' }
+Write-Host "  zone:    $zoneName"
 Write-Host "  zone_id: $zoneId"
+
+# --- Source host DNS records that -ProxySourceRecords would proxy ---
+$recordsToProxy = @()
+if ($ProxySourceRecords) {
+    $hosts = @($SourceDomain)
+    if ($IncludeWww) { $hosts += "www.$SourceDomain" }
+    foreach ($hostName in $hosts) {
+        $encodedHost = [uri]::EscapeDataString($hostName)
+        $recResp = Invoke-RestMethod -Method Get -Uri "$ApiBase/zones/$zoneId/dns_records?name=$encodedHost&per_page=100" -Headers $Headers -TimeoutSec 30
+        $recs = @($recResp.result | Where-Object { $_.type -in @('A', 'AAAA', 'CNAME') })
+        if ($recs.Count -eq 0) {
+            if ($hostName -eq $SourceDomain) {
+                throw "-ProxySourceRecords: no A/AAAA/CNAME record exists for '$hostName', so the redirect rule could never run. Create the record first."
+            }
+            Write-Host "  no A/AAAA/CNAME record for $hostName (skipping)."
+            continue
+        }
+        foreach ($rec in $recs) {
+            if ($rec.proxied) {
+                Write-Host ("  {0} {1} -> {2} already proxied." -f $rec.type, $rec.name, $rec.content)
+            }
+            else {
+                $recordsToProxy += $rec
+            }
+        }
+    }
+}
 
 # --- Build the rule we want to ensure exists ---
 $hostExpression = '(http.host eq "{0}")' -f $SourceDomain
@@ -179,6 +257,13 @@ Write-Host "  preserve_query_string: $PreserveQueryString"
 Write-Host "  description: $Description"
 Write-Host ""
 Write-Host "Ruleset will have $($newRules.Count) total rule(s) after apply." -ForegroundColor Cyan
+if ($ProxySourceRecords) {
+    Write-Host ""
+    Write-Host "Records to switch to proxied (after the rule is written): $($recordsToProxy.Count)" -ForegroundColor Cyan
+    foreach ($rec in $recordsToProxy) {
+        Write-Host ("  {0} {1} -> {2} (proxied=false -> true)" -f $rec.type, $rec.name, $rec.content)
+    }
+}
 
 if ($DryRun) {
     if ($existingRuleset) {
@@ -223,4 +308,15 @@ if (-not $applyResp.success) {
 
 Write-Host "SUCCESS: redirect rule for $SourceDomain → https://$TargetDomain is live." -ForegroundColor Green
 Write-Host "Ruleset ID: $($applyResp.result.id)"
+
+# --- Proxy the source records, only now that the rule exists ---
+foreach ($rec in $recordsToProxy) {
+    $patchBody = @{ proxied = $true } | ConvertTo-Json -Compress
+    $patchResp = Invoke-RestMethod -Method Patch -Uri "$ApiBase/zones/$zoneId/dns_records/$($rec.id)" -Headers $Headers -Body $patchBody -TimeoutSec 30
+    if (-not $patchResp.success) {
+        Write-Error ("Failed to proxy {0} {1}: {2}" -f $rec.type, $rec.name, ($patchResp.errors | ConvertTo-Json -Depth 5))
+        exit 1
+    }
+    Write-Host ("  proxied {0} {1} -> {2}" -f $rec.type, $rec.name, $rec.content) -ForegroundColor Green
+}
 Write-Host "Verify with: curl -sI https://$SourceDomain  # expect HTTP $StatusCode → https://$TargetDomain"

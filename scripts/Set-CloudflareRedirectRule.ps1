@@ -82,10 +82,10 @@ $ApiBase = 'https://api.cloudflare.com/client/v4'
 # --- Validate inputs (they are interpolated into a Cloudflare rule expression) ---
 $SourceDomain = $SourceDomain.Trim().ToLowerInvariant().TrimEnd('.')
 $TargetDomain = $TargetDomain.Trim().TrimEnd('/')
-if ($SourceDomain -notmatch '^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$') {
+if ($SourceDomain -notmatch '^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,}|xn--[a-z0-9-]{1,59})$') {
     throw "SourceDomain '$SourceDomain' is not a valid host name."
 }
-if ($TargetDomain -notmatch '^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}(?:/[A-Za-z0-9._~/-]*)?$') {
+if ($TargetDomain -notmatch '^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:[A-Za-z]{2,}|xn--[A-Za-z0-9-]{1,59})(?:/[A-Za-z0-9._~/-]*)?$') {
     throw "TargetDomain '$TargetDomain' must be a host with an optional path prefix (e.g. example.org or example.org/section)."
 }
 

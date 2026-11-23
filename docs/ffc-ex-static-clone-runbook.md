@@ -127,8 +127,12 @@ Read that line before approving:
   branch and the PR URL.
 
 A refused preflight (target missing, archived, already live, sibling repo, probe failure) prints no
-plan, so a summary without that section is a run that never reached the gate. `force=true` is called
-out in the plan as having skipped the live-site, probe-failure and sibling-repo guards.
+plan, so a summary without that section is a run that never reached the gate. The plan calls out
+each bypass flag separately, and they are **not** interchangeable: `force=true` is reported as
+having skipped the live-site and probe-failure guards, and `force_sibling=true` as having skipped
+the sibling-repo guard. `force` alone does not skip the sibling-domain scan — it is a read-only org
+listing, and a deliberate re-clone is no reason to stop asking whether the org already hosts another
+repo for this domain, one of which may be the charity's real site.
 
 ## Validation status
 

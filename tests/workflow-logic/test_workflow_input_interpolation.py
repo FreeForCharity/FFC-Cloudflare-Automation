@@ -155,8 +155,16 @@ jobs:
             const issueNumber = Number('${{ inputs.issue_number }}');
 """
 
-# 702-ffc-ex-clone-deploy.yml:271 — the input reaches the script through a
-# `format()` inside a larger expression, not the bare `${{ inputs.x }}` spelling.
+# The shape: an input reaching a run-step through a `format()` inside a larger
+# expression, not the bare `${{ inputs.x }}` spelling. 702-ffc-ex-clone-deploy.yml:3
+# is the live example of the nested expression itself — in its `run-name:`, which is
+# not a run-step, so 702 is NOT an instance of the defect; every input it hands a
+# script arrives through `env:`, which is the remedy. Re-measured 2026-11-21: this
+# comment cited `:271` when written (a Key Vault error message, never a `format()`
+# site) and was then offset to `:385` (a plan `echo`) by a PR that shifted the file.
+# Both coordinates were wrong, and the second inherited the first; line 3 has never
+# moved. Offsetting an anchor preserves an error — re-measure it in the tree it
+# lives in.
 _DEFECT_NESTED_EXPRESSION = """
 name: '999. Sample'
 on:

@@ -166,7 +166,7 @@ jobs:
           Start-Sleep -Seconds 5
           # Use curl over Invoke-WebRequest: PS7's Invoke-WebRequest throws on 3xx with
           # -MaximumRedirection 0 instead of returning the response, even with -SkipHttpErrorCheck.
-          $raw = (curl.exe -sS -o /dev/null -w "status=%{http_code}`nlocation=%{redirect_url}`n" --max-time 30 "https://$src") -join "`n"
+          $raw = (curl -sS -o /dev/null -w "status=%{http_code}`nlocation=%{redirect_url}`n" --max-time 30 "https://$src") -join "`n"
           $status = ([regex]::Match($raw, 'status=(\d+)').Groups[1].Value) -as [int]
           $location = ([regex]::Match($raw, 'location=(\S*)').Groups[1].Value).Trim()
           Write-Host "  status:   $status"

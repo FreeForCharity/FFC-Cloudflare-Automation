@@ -142,8 +142,49 @@ jobs:
             printf '%s' "${v%"${v##*[![:space:]]}"}"
           }
 
+          # Workflow-command escaping for input-derived text. Same helper, and
+          # the same measurement, as 704/112/119: an un-escaped value carrying
+          # newlines emits workflow-command lines the runner obeys, and the
+          # value has to stay in the message because an operator needs to see
+          # what was rejected. `%` is substituted first so the `%0D`/`%0A` the
+          # later replacements introduce are not re-escaped.
+          esc() {
+            local s=${1//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
+
+          # A value carrying a newline or a carriage return is refused OUTRIGHT,
+          # before any other check. `$GITHUB_OUTPUT` is line-based `key=value`,
+          # so a multiline value does not land as one awkward output — it writes
+          # EXTRA outputs, and on a duplicate key the last line wins. Escaping is
+          # no remedy there; only refusal is (#1724).
+          #
+          # Measured on this step before the guard existed: `domain` =
+          # 'a.org\ndomain=evil.org' passed every check and wrote both lines, so
+          # `steps.resolve.outputs.domain` resolved to `evil.org` — the value the
+          # concurrency group keys on and the capture script is handed. The first
+          # line is a valid hostname, which is why the hostname pattern never
+          # fired: `grep` matches per LINE, so its `^…$` anchors bound the first
+          # line and not the value. The checks below use bash's own `=~`, which
+          # anchors the whole string, so each one is correct on its own rather
+          # than relying on this guard having run first.
+          require_oneline() {
+            case "$2" in
+              *$'\n'*|*$'\r'*)
+                echo "::error::$1 must be a single line (got '$(esc "$2")'). A newline or carriage return in a dispatch input writes extra step outputs, so the value is refused rather than trimmed or escaped."
+                exit 1
+                ;;
+            esac
+          }
+
+          # Anchored against the WHOLE value by `[[ =~ ]]`, not per line.
+          host_re='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+
           domain="$(trim "${INPUT_DOMAIN:-}" | tr '[:upper:]' '[:lower:]')"
           domain="${domain#www.}"
+          require_oneline domain "$domain"
 
           # `domain` is a required dispatch input, so an empty value here means
           # the input did not arrive rather than that a default is wanted. There
@@ -156,16 +197,17 @@ jobs:
           # Reject anything that is not a bare hostname before it reaches the
           # script, so a pasted URL or a stray argument fails here with a clear
           # message rather than as a confusing DNS error 200 lines into a run.
-          if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
-            echo "::error::domain must be a bare hostname (got '$domain'). No scheme and no path; a leading 'www.' is accepted and stripped."
+          if ! [[ $domain =~ $host_re ]]; then
+            echo "::error::domain must be a bare hostname (got '$(esc "$domain")'). No scheme and no path; a leading 'www.' is accepted and stripped."
             exit 1
           fi
 
           mode="${INPUT_MODE:-}"
           if [ -z "$mode" ]; then mode="inspect"; fi
+          require_oneline mode "$mode"
           case "$mode" in
             inspect|capture) ;;
-            *) echo "::error::mode must be 'inspect' or 'capture' (got '$mode')."; exit 1 ;;
+            *) echo "::error::mode must be 'inspect' or 'capture' (got '$(esc "$mode")')."; exit 1 ;;
           esac
 
           # Validated here, in the job that holds no concurrency slot, so a
@@ -174,20 +216,40 @@ jobs:
           # is silently catastrophic rather than loud: a NaN timeout aborts
           # every request instantly and a NaN cap paginates zero times, both of
           # which read as findings about the site.
-          max="${INPUT_MAX:-}"
+          #
+          # These two carried the same line-based defect as `domain`, and it
+          # survived here in a form that LOOKS like it cannot (#1724). Measured
+          # before the fix with max_items = '500\n::error::forged': `grep`
+          # matched the first line, so `! grep` was false and the bounds were
+          # evaluated — and `[ '500\n::error::forged' -lt 1 ]` is not false, it
+          # is an ERROR. It printed `integer expression expected` to stderr and
+          # returned 2, which the `||` chain reads as "this bound is satisfied".
+          # So the step wrote the forged line into `$GITHUB_OUTPUT` while
+          # complaining loudly on stderr that it could not evaluate the value.
+          # `[[ =~ ]]` anchors the whole string, so a multiline value now fails
+          # the pattern itself and the bounds are never reached with a
+          # non-integer.
+          max="$(trim "${INPUT_MAX:-}")"
           if [ -z "$max" ]; then max="500"; fi
-          delay="${INPUT_DELAY:-}"
+          require_oneline max_items "$max"
+          delay="$(trim "${INPUT_DELAY:-}")"
           if [ -z "$delay" ]; then delay="250"; fi
-          if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 100000 ]; then
-            echo "::error::max_items must be a whole number between 1 and 100000 (got '$max')."
+          require_oneline delay_ms "$delay"
+          if ! [[ $max =~ ^[0-9]+$ ]] || [ "$max" -lt 1 ] || [ "$max" -gt 100000 ]; then
+            echo "::error::max_items must be a whole number between 1 and 100000 (got '$(esc "$max")')."
             exit 1
           fi
-          if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
-            echo "::error::delay_ms must be a whole number of milliseconds between 0 and 60000 (got '$delay'). These are small shared-hosting origins; 250 is the default for a reason."
+          if ! [[ $delay =~ ^[0-9]+$ ]] || [ "$delay" -gt 60000 ]; then
+            echo "::error::delay_ms must be a whole number of milliseconds between 0 and 60000 (got '$(esc "$delay")'). These are small shared-hosting origins; 250 is the default for a reason."
             exit 1
           fi
           posts="${INPUT_POSTS:-}"
           if [ -z "$posts" ]; then posts="false"; fi
+          # Defense in depth rather than a finding: `include_posts` is
+          # `type: boolean`, so GitHub validates it and it cannot carry a
+          # newline today. This step no longer depends on that being true,
+          # because every value it writes to `$GITHUB_OUTPUT` is checked here.
+          require_oneline include_posts "$posts"
 
           # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
           # A character-class check over the whole string is not enough: it
@@ -218,9 +280,15 @@ jobs:
             set -f
             for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do
               entry="${entry#www.}"
-              if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              # This input was already safe from the line-based defect above,
+              # and for a reason worth keeping: word splitting treats a newline
+              # as a SEPARATOR here, so an injected second line arrives as its
+              # own entry and fails this check rather than riding along inside
+              # one. Validated with `=~` against the whole entry all the same,
+              # so the entry rule does not rest on that incidental property.
+              if ! [[ $entry =~ $host_re ]]; then
                 set +f
-                echo "::error::ignore_hosts entry '$entry' is not a bare hostname. Expected a comma-separated list like 'a.org' or 'a.org,b.org'."
+                echo "::error::ignore_hosts entry '$(esc "$entry")' is not a bare hostname. Expected a comma-separated list like 'a.org' or 'a.org,b.org'."
                 exit 1
               fi
               case ",$ignore_hosts," in *",$entry,"*) continue ;; esac

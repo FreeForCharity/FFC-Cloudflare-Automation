@@ -290,6 +290,57 @@ jobs:
             printf '%s' "${v%"${v##*[![:space:]]}"}"
           }
 
+          # Workflow-command escaping for input-derived text. Same helper, and
+          # the same measurement, as 705/704/112/119: an un-escaped value
+          # carrying newlines emits workflow-command lines the runner obeys,
+          # and the value has to stay in the message because an operator needs
+          # to see what was rejected. `%` is substituted first so the
+          # `%0D`/`%0A` the later replacements introduce are not re-escaped.
+          esc() {
+            local s=${1//'%'/'%25'}
+            s=${s//$'\r'/'%0D'}
+            s=${s//$'\n'/'%0A'}
+            printf '%s' "$s"
+          }
+
+          # A value carrying a newline or a carriage return is refused OUTRIGHT,
+          # before any other check. `$GITHUB_OUTPUT` is line-based `key=value`,
+          # so a multiline value does not land as one awkward output — it writes
+          # EXTRA outputs, and on a duplicate key the last line wins. Escaping is
+          # no remedy there; only refusal is (#1724, #1801).
+          #
+          # This step is where that matters most in the whole repo, because
+          # `repo` selects the repository `deliver` checks out WRITABLE under an
+          # org-wide Key Vault PAT. Measured on this step before the guard
+          # existed, with `target_repo` = 'FFC-EX-vpmin.org\nrepo=FFC-IN-ffcadmin.org':
+          #
+          #   charset check (piped `grep -qE '^…$'`)  PASSED  -- grep matches per LINE
+          #   FFC-EX-* allowlist (`case` glob)        PASSED  -- `*` matches a newline
+          #   resolved `repo` output                  FFC-IN-ffcadmin.org
+          #
+          # So both checks passed and the destination resolved to a repo both of
+          # them are written to refuse. The allowlist is the control that exists
+          # specifically to stop a wrong destination, and a `case` glob cannot be
+          # made newline-safe: it constrains the FIRST LINE's prefix and nothing
+          # else. Ordering is the fix — establish the value is one line, then
+          # pattern-match it — which is why every `require_oneline` below runs
+          # before the check it protects.
+          require_oneline() {
+            case "$2" in
+              *$'\n'*|*$'\r'*)
+                echo "::error::$1 must be a single line (got '$(esc "$2")'). A newline or carriage return in a dispatch input writes extra step outputs, so the value is refused rather than trimmed or escaped."
+                exit 1
+                ;;
+            esac
+          }
+
+          # Anchored against the WHOLE value by `[[ =~ ]]`, not per line. bash's
+          # `=~` has no multiline mode, so `^…$` bounds the string — which is
+          # what a piped `grep -qE '^…$'` reads as and is not.
+          host_re='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+          repo_re='^[A-Za-z0-9._-]+$'
+          email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+
           # The domain is the one value that becomes a network call, and the
           # natural way to type it is wrong: an operator pastes
           # `https://example.org/`, which threads into the REST candidates as
@@ -300,12 +351,13 @@ jobs:
           domain="${domain#http://}"
           domain="${domain#www.}"
           domain="${domain%%/*}"
+          require_oneline domain "$domain"
           if [ -z "$domain" ]; then
             echo "::error::domain is required."
             exit 1
           fi
-          if ! printf '%s' "$domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
-            echo "::error::domain '$domain' is not a bare hostname. Expected e.g. 'example.org'."
+          if ! [[ $domain =~ $host_re ]]; then
+            echo "::error::domain '$(esc "$domain")' is not a bare hostname. Expected e.g. 'example.org'."
             exit 1
           fi
 
@@ -324,12 +376,18 @@ jobs:
           # A pasted repo URL usually carries one of these; both are unambiguous.
           repo="${repo%.git}"
           repo="${repo%/}"
+          # FIRST, before either check below. Both of them passed a multiline
+          # value until #1801: the charset check because `grep` matches per
+          # line, and the fleet allowlist because its `case` glob's `*` spans a
+          # newline. See the `require_oneline` comment above for the measured
+          # chain and why ordering — not a stricter pattern — is the fix.
+          require_oneline target_repo "$repo"
           if [ -z "$repo" ]; then
             echo "::error::target_repo is required."
             exit 1
           fi
-          if ! printf '%s' "$repo" | grep -qE '^[A-Za-z0-9._-]+$'; then
-            echo "::error::target_repo '$repo' is not a bare repository name. Expected e.g. 'FFC-EX-example.org'."
+          if ! [[ $repo =~ $repo_re ]]; then
+            echo "::error::target_repo '$(esc "$repo")' is not a bare repository name. Expected e.g. 'FFC-EX-example.org'."
             exit 1
           fi
           # Fail closed on anything outside the FFC-EX fleet. `deliver` holds an
@@ -339,10 +397,12 @@ jobs:
           # no natural cross-check: the source domain cannot confirm it, by
           # design. Narrowing to the prefix this workflow is written for costs
           # nothing, since integrate-clone-into-nextjs targets that template.
+          # Reached only with a value already known to be one line, so the glob
+          # constrains the whole value rather than its first line (#1801 AC2).
           case "$repo" in
             FFC-EX-*) ;;
             *)
-              echo "::error::target_repo '$repo' is not an FFC-EX repository. This workflow replaces the target's public/ wholesale and runs with an org-wide token, so it refuses any repo outside the FFC-EX-* fleet."
+              echo "::error::target_repo '$(esc "$repo")' is not an FFC-EX repository. This workflow replaces the target's public/ wholesale and runs with an org-wide token, so it refuses any repo outside the FFC-EX-* fleet."
               exit 1
               ;;
           esac
@@ -359,9 +419,10 @@ jobs:
           publish="${publish#http://}"
           publish="${publish#www.}"
           publish="${publish%%/*}"
+          require_oneline publish_domain "$publish"
           if [ -n "$publish" ]; then
-            if ! printf '%s' "$publish" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
-              echo "::error::publish_domain '$publish' is not a bare hostname."
+            if ! [[ $publish =~ $host_re ]]; then
+              echo "::error::publish_domain '$(esc "$publish")' is not a bare hostname."
               exit 1
             fi
           fi
@@ -377,24 +438,29 @@ jobs:
             # gate have all run. Caught here, where the input is wrong, rather
             # than twenty minutes later somewhere that does not name it.
             if [ -z "$cname_domain" ]; then
-              echo "::error::target_repo '$repo' carries no domain after the FFC-EX- prefix, so no destination domain can be derived. Expected e.g. 'FFC-EX-example.org', or set publish_domain explicitly."
+              echo "::error::target_repo '$(esc "$repo")' carries no domain after the FFC-EX- prefix, so no destination domain can be derived. Expected e.g. 'FFC-EX-example.org', or set publish_domain explicitly."
               exit 1
             fi
             # Held to the SAME hostname rule as an explicit publish_domain.
             # Guarding only emptiness was half a fix: target_repo legitimately
             # allows `_` and needs no dot, so `FFC-EX-my_repo` derives to
             # `my_repo` — non-empty, not a hostname, and bound for public/CNAME.
-            if ! printf '%s' "$cname_domain" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
-              echo "::error::target_repo '$repo' derives the destination domain '$cname_domain', which is not a bare hostname. Rename the repo to FFC-EX-<domain>, or set publish_domain explicitly."
+            if ! [[ $cname_domain =~ $host_re ]]; then
+              echo "::error::target_repo '$(esc "$repo")' derives the destination domain '$(esc "$cname_domain")', which is not a bare hostname. Rename the repo to FFC-EX-<domain>, or set publish_domain explicitly."
               exit 1
             fi
           fi
 
           mode="${INPUT_MODE:-}"
           if [ -z "$mode" ]; then mode="convert"; fi
+          # Defense in depth rather than a finding: `mode` is `type: choice`, so
+          # GitHub validates it against its options and it cannot carry a
+          # newline today. This step no longer depends on that being true,
+          # because every value it writes to `$GITHUB_OUTPUT` is checked here.
+          require_oneline mode "$mode"
           case "$mode" in
             convert|deliver) ;;
-            *) echo "::error::mode '$mode' is not one of: convert, deliver."; exit 1 ;;
+            *) echo "::error::mode '$(esc "$mode")' is not one of: convert, deliver."; exit 1 ;;
           esac
 
           # Validated here rather than trusted at the point of use. This value
@@ -402,9 +468,10 @@ jobs:
           # channel; a typo does not degrade the page, it silently ends every
           # conversation, and nothing downstream would notice.
           email="$(trim "${INPUT_EMAIL:-}")"
+          require_oneline contact_email "$email"
           if [ -n "$email" ]; then
-            if ! printf '%s' "$email" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'; then
-              echo "::error::contact_email '$email' is not a plausible address."
+            if ! [[ $email =~ $email_re ]]; then
+              echo "::error::contact_email '$(esc "$email")' is not a plausible address."
               exit 1
             fi
           fi
@@ -412,29 +479,50 @@ jobs:
           # parseInt-style parsing accepts '12abc' as 12 and yields NaN for
           # 'abc', which then propagates into a fetch loop as an unbounded or
           # zero-length run. Refuse anything that is not wholly digits.
+          #
+          # These three carried the line-based defect in a form that LOOKS like
+          # it cannot (#1801 AC5). Measured before the fix with max_items =
+          # '800\n::error::forged': the piped `grep` matched the first line, so
+          # `! grep` was false and the bounds were evaluated — and
+          # `[ '800\n::error::forged' -lt 1 ]` is not false, it is an ERROR. It
+          # printed `integer expression expected` to stderr and returned 2,
+          # which the `||` chain reads as "this bound is satisfied". So the step
+          # wrote the forged line into `$GITHUB_OUTPUT` while complaining
+          # loudly on stderr that it could not evaluate the value: the loudest
+          # possible failure, and a pass. `[[ =~ ]]` anchors the whole string,
+          # so a multiline value now fails the pattern itself and the bounds
+          # are never reached with a non-integer.
           min_percent="$(trim "${INPUT_MINPCT:-}")"
           if [ -z "$min_percent" ]; then min_percent="98"; fi
-          if ! printf '%s' "$min_percent" | grep -qE '^[0-9]+$' || [ "$min_percent" -lt 1 ] || [ "$min_percent" -gt 100 ]; then
-            echo "::error::min_capture_percent '$min_percent' must be a whole number between 1 and 100."
+          require_oneline min_capture_percent "$min_percent"
+          if ! [[ $min_percent =~ ^[0-9]+$ ]] || [ "$min_percent" -lt 1 ] || [ "$min_percent" -gt 100 ]; then
+            echo "::error::min_capture_percent '$(esc "$min_percent")' must be a whole number between 1 and 100."
             exit 1
           fi
 
           max="$(trim "${INPUT_MAX:-}")"
           if [ -z "$max" ]; then max="800"; fi
-          if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || [ "$max" -lt 1 ] || [ "$max" -gt 5000 ]; then
-            echo "::error::max_items '$max' must be a whole number between 1 and 5000."
+          require_oneline max_items "$max"
+          if ! [[ $max =~ ^[0-9]+$ ]] || [ "$max" -lt 1 ] || [ "$max" -gt 5000 ]; then
+            echo "::error::max_items '$(esc "$max")' must be a whole number between 1 and 5000."
             exit 1
           fi
 
           delay="$(trim "${INPUT_DELAY:-}")"
           if [ -z "$delay" ]; then delay="250"; fi
-          if ! printf '%s' "$delay" | grep -qE '^[0-9]+$' || [ "$delay" -gt 60000 ]; then
-            echo "::error::delay_ms '$delay' must be a whole number of milliseconds, at most 60000."
+          require_oneline delay_ms "$delay"
+          if ! [[ $delay =~ ^[0-9]+$ ]] || [ "$delay" -gt 60000 ]; then
+            echo "::error::delay_ms '$(esc "$delay")' must be a whole number of milliseconds, at most 60000."
             exit 1
           fi
 
           posts="${INPUT_POSTS:-}"
           if [ -z "$posts" ]; then posts="true"; fi
+          # `include_posts` is `type: boolean`, so GitHub validates it and it
+          # cannot carry a newline today — but it is published as a job output,
+          # and this step validates everything it publishes rather than
+          # inheriting a guarantee from the dispatch form.
+          require_oneline include_posts "$posts"
 
           # Validated ENTRY BY ENTRY against the same hostname rule as `domain`.
           # A whole-string character-class check accepts `a,org`, turning one
@@ -457,9 +545,15 @@ jobs:
             set -f
             for entry in $(printf '%s' "$raw_ignore" | tr ',' ' '); do
               entry="${entry#www.}"
-              if ! printf '%s' "$entry" | grep -qE '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+              # This input was already safe from the line-based defect above,
+              # and for a reason worth keeping: whitespace is a SEPARATOR here,
+              # so word splitting hands an injected second line to this check
+              # as its own entry rather than letting it ride along inside one.
+              # Validated with `=~` against the whole entry all the same, so the
+              # entry rule does not rest on that incidental property.
+              if ! [[ $entry =~ $host_re ]]; then
                 set +f
-                echo "::error::ignore_hosts entry '$entry' is not a bare hostname."
+                echo "::error::ignore_hosts entry '$(esc "$entry")' is not a bare hostname."
                 exit 1
               fi
               case ",$ignore_hosts," in *",$entry,"*) continue ;; esac
@@ -524,27 +618,37 @@ jobs:
           # types it by hand from a URL — the shape is the only thing this job
           # can check, and checking the shape is what keeps the failure in this
           # job rather than in the one that has already installed sharp.
-          reuse_run="$(printf '%s' "${INPUT_REUSE_RUN:-}" | tr -d '[:space:]')"
-          if [ -n "$reuse_run" ] && ! printf '%s' "$reuse_run" | grep -qE '^[0-9]+$'; then
-            echo "::error::reuse_capture_from_run must be a numeric run id (the digits at the end of an Actions run URL), got '$reuse_run'."
+          # `trim`, not `tr -d '[:space:]'`. Deleting INTERNAL whitespace is the
+          # fail-open this step's own `trim` comment documents for `domain`, and
+          # it applied here too: `1 2` became the bound `12` that nobody typed,
+          # and an embedded newline was silently DELETED rather than refused —
+          # so these three were safe from the forgery only by accident, and
+          # safe at the cost of mangling the value. Trimmed and then refused
+          # outright, per #1801 AC1.
+          reuse_run="$(trim "${INPUT_REUSE_RUN:-}")"
+          require_oneline reuse_capture_from_run "$reuse_run"
+          if [ -n "$reuse_run" ] && ! [[ $reuse_run =~ ^[0-9]+$ ]]; then
+            echo "::error::reuse_capture_from_run must be a numeric run id (the digits at the end of an Actions run URL), got '$(esc "$reuse_run")'."
             exit 1
           fi
-          reuse_max_age="$(printf '%s' "${INPUT_REUSE_MAX_AGE:-168}" | tr -d '[:space:]')"
+          reuse_max_age="$(trim "${INPUT_REUSE_MAX_AGE:-168}")"
           [ -n "$reuse_max_age" ] || reuse_max_age=168
-          if ! printf '%s' "$reuse_max_age" | grep -qE '^[0-9]+$' || [ "$reuse_max_age" -lt 1 ]; then
-            echo "::error::reuse_max_age_hours must be a positive whole number of hours, got '$reuse_max_age'."
+          require_oneline reuse_max_age_hours "$reuse_max_age"
+          if ! [[ $reuse_max_age =~ ^[0-9]+$ ]] || [ "$reuse_max_age" -lt 1 ]; then
+            echo "::error::reuse_max_age_hours must be a positive whole number of hours, got '$(esc "$reuse_max_age")'."
             exit 1
           fi
-          max_pdf_mb="$(printf '%s' "${INPUT_MAX_PDF_MB:-90}" | tr -d '[:space:]')"
+          max_pdf_mb="$(trim "${INPUT_MAX_PDF_MB:-90}")"
           [ -n "$max_pdf_mb" ] || max_pdf_mb=90
+          require_oneline max_pdf_mb "$max_pdf_mb"
           # The upper bound is not decoration: capture-wordpress-api.mjs declares
           # `['max-pdf-mb', …, { min: 1, max: 100000 }]`, so a larger value is
           # refused THERE — in `convert`, after checkout and setup, which is
           # exactly the "fail before the network" promise this job exists to
           # keep. The two bounds must agree or the earlier one is decorative.
-          if ! printf '%s' "$max_pdf_mb" | grep -qE '^[0-9]+$' \
+          if ! [[ $max_pdf_mb =~ ^[0-9]+$ ]] \
             || [ "$max_pdf_mb" -lt 1 ] || [ "$max_pdf_mb" -gt 100000 ]; then
-            echo "::error::max_pdf_mb must be a whole number of MB between 1 and 100000, got '$max_pdf_mb'."
+            echo "::error::max_pdf_mb must be a whole number of MB between 1 and 100000, got '$(esc "$max_pdf_mb")'."
             exit 1
           fi
           {

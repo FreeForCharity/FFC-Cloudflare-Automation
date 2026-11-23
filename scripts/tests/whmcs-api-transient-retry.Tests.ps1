@@ -363,6 +363,29 @@ Describe 'Invoke-WhmcsApi retry path' {
         $script:Warnings[0] | Should -BeLike '*connection dropped (read)*'
     }
 
+    It 'does not treat a server-supplied error body as a dropped connection' {
+        # On an HTTP error status Invoke-RestMethod puts the RESPONSE BODY on
+        # $_.ErrorDetails.Message and its own text on the exception. Measured against
+        # a real socket: a 400 whose body read 'upstream says connection reset' was
+        # classified as a dropped connection and retried while the predicate read
+        # ErrorDetails. A body is proof the connection did NOT drop, so body text must
+        # never reach the predicate - otherwise the host decides our retry policy.
+        $env:WHMCS_API_MAX_ATTEMPTS = '2'
+        $script:Calls = 0
+        Mock Invoke-RestMethod {
+            $script:Calls++
+            $er = [System.Management.Automation.ErrorRecord]::new(
+                [System.Exception]::new('Response status code does not indicate success: 400 (Bad Request).'),
+                'WhmcsHttpError', [System.Management.Automation.ErrorCategory]::InvalidOperation, $null)
+            $er.ErrorDetails = [System.Management.Automation.ErrorDetails]::new('upstream says connection reset')
+            throw $er
+        }
+
+        { Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetClientsProducts' } } | Should -Throw
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        $script:Warnings.Count | Should -Be 0
+    }
+
     It 'does not retry a write whose response ended prematurely: <_>' -ForEach @('AcceptOrder', 'OpenTicket', 'UpdateClient') {
         $action = $_
         Mock Invoke-RestMethod { throw 'The response ended prematurely. (ResponseEnded)' }
@@ -425,10 +448,43 @@ Describe 'Source guards over every copy of the retry loop' {
     # scripts/whmcs-domain-export.ps1 is self-contained by design - it duplicates
     # Resolve-WhmcsCredentials and Invoke-WhmcsApi rather than dot-sourcing them - so
     # it carried the identical defect. It cannot be dot-sourced here (mandatory param
-    # block, runs a live sweep), so it is asserted on its source. A future copy should
-    # be added to this list.
+    # block, runs a live sweep), so it is asserted on its source.
+    #
+    # THIS LIST IS A PIN, NOT A DISCOVERY MECHANISM (#1783). Since #1783 the AST guard
+    # in api-transient-label.Tests.ps1 discovers both of these files from the tree, so
+    # the general question - "is there a retry loop nobody enumerated?" - is answered
+    # there and is no longer this list's job. What stays here are the WHMCS-specific
+    # properties that guard does not check: ErrorDetails, the loose status alternation,
+    # the 800-character response slice and the $transientReason assignments. Those are
+    # claims about these two files, so naming them is correct rather than a shortcut.
+    #
+    # It no longer falls behind silently either: the completeness test below fails if a
+    # third copy of this loop appears in scripts/ and is not added here.
     BeforeDiscovery {
         $script:RetryLoopFiles = @('whmcs-api-common.ps1', 'whmcs-domain-export.ps1')
+
+        # Swept at DISCOVERY time, and handed to the pin test below as data. Pester
+        # runs BeforeDiscovery in the discovery phase, so a $script: variable set here
+        # is visible to -ForEach and is EMPTY inside an It body - which is why the
+        # guards above consume the list only through -ForEach. Measured: reading
+        # $script:RetryLoopFiles inside an It compares the carriers against '' and
+        # fails with an empty expectation.
+        #
+        # The tokenizer is inlined rather than calling Get-PowerShellCodeOnly, which is
+        # defined in the BeforeAll below and so does not exist yet in this phase.
+        $script:RetryLoopCarriers = @(
+            Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot -Parent) -Filter '*.ps1' -File |
+                Where-Object {
+                    $t = $null
+                    $e = $null
+                    $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e)
+                    if ($e -and @($e).Count -gt 0) { return $false }
+                    $code = ((@($t) | Where-Object { $_.Kind -ne 'Comment' } | ForEach-Object { $_.Text }) -join ' ')
+                    $code -match '\$transientReason'
+                } |
+                Select-Object -ExpandProperty Name |
+                Sort-Object
+        )
     }
 
     BeforeAll {
@@ -461,6 +517,18 @@ Describe 'Source guards over every copy of the retry loop' {
         }
     }
 
+    It 'never classifies a transient on a serialized response body in <_>' -ForEach $script:RetryLoopFiles {
+        # The retry decision must be driven by transport facts, not by anything the
+        # host sends in a response body. ErrorDetails.Message IS that body for an HTTP
+        # error status, so reading it hands an outside party a lever on our retry
+        # policy and on what the exhaustion throw then reports.
+        #
+        # Asserted on comment-stripped code: the fix documents the trap by NAME in
+        # whmcs-api-common.ps1, so a raw-text guard would flag the explanation.
+        $code = Get-RetryLoopCode $_
+        $code | Should -Not -Match 'ErrorDetails'
+    }
+
     It 'has no loose status alternation in <_>' -ForEach $script:RetryLoopFiles {
         # The exact pre-fix shape, which matched any numeric data field.
         (Get-RetryLoopCode $_).Contains('\b(429|502|503|504)\b') | Should -BeFalse
@@ -482,6 +550,21 @@ Describe 'Source guards over every copy of the retry loop' {
         $code = Get-RetryLoopCode $_
         $code | Should -Not -Match '\$transientReason\s*=\s*\$msg\b'
         $code | Should -Not -Match '\$transientReason\s*=\s*\$em\b'
+    }
+
+    It 'pins every copy of this loop that exists: no third copy is unguarded' -ForEach @(
+        @{ Pinned = @($script:RetryLoopFiles | Sort-Object); Carriers = $script:RetryLoopCarriers }
+    ) {
+        # What makes the list above a PIN rather than a stale enumeration (#1783). Every
+        # assertion in this Describe is about $transientReason, so any further copy of
+        # this loop carries that variable by construction - which makes it the right
+        # signature to sweep for, and makes a new copy fail here instead of being
+        # guarded by nothing.
+        #
+        # Comment-stripped, for the same reason as the guards above: these files quote
+        # the pre-fix shapes in comments that explain why they were wrong.
+        @($Carriers).Count | Should -BeGreaterThan 0 -Because 'a sweep that finds nothing must not read as a pass'
+        (@($Carriers) -join ', ') | Should -Be (@($Pinned) -join ', ')
     }
 
     It 'routes the retry reason through the label helper in <_>' -ForEach $script:RetryLoopFiles {

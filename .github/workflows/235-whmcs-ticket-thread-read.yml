@@ -13,8 +13,11 @@ run-name: 'WHMCS Ticket Thread Read (encrypted)'
 # content key wrapped (RSA-OAEP-SHA256) to `recipient_public_key`, a key whose
 # private half only the requester holds. Make one with
 #   python3 scripts/whmcs-ticket-thread-decrypt.py keygen --out <private.pem>
-# and decrypt the artifact with the same script's `decrypt`. The log and job
-# summary carry ticket/message COUNTS and the key fingerprint only.
+# and decrypt the artifact with the same script's `decrypt`. The log also carries
+# the SAME ciphertext between BEGIN/END-FFC-TICKET-ENVELOPE markers, for cloud
+# sessions that cannot download artifacts (`decrypt-log`; Clarke, 2026-11-20,
+# #1781). Beyond that, the log and job summary carry ticket/message COUNTS and
+# the key fingerprint only.
 #
 # GATED `whmcs-prod` lane with the READ-scoped credential. Full ticket TEXT is a
 # different category from the subjects/counts the ungated reads emit, so this one
@@ -32,8 +35,8 @@ on:
     inputs:
       ticket_ids:
         description:
-          'WHMCS internal ticket ids, comma separated (the `id` column of 208, not the 6-digit
-          client-facing number). Optional if client_id is set.'
+          'WHMCS internal ticket ids, comma separated (the `id` column of 208), and/or client-facing
+          ticket numbers written with a # (e.g. #692991). Optional if client_id is set.'
         required: false
         type: string
         default: ''

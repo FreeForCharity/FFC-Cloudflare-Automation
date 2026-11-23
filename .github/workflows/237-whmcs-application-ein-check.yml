@@ -1,0 +1,108 @@
+name: '237. WHMCS - Application EIN Check (IRS lists, read-only)'
+run-name: 'WHMCS Application EIN Check'
+
+# Read-only. Checks the EIN on every charity onboarding application in WHMCS
+# (pid 16 pre-501(c)(3), pid 33 501(c)(3), any status) against IRS Publication 78
+# and the IRS automatic revocation list, with ProPublica as a second opinion
+# (Clarke 2026-11-21), and against the EIN each FFC-EX charity website shows, so a
+# typo can be told from a real problem.
+#
+# Two jobs:
+#   site_eins (no environment, no credential) - shallow-clones the public FFC-EX
+#     repos and lists the EIN each site shows (scripts/collect_site_eins.py).
+#   application_eins (whmcs-prod-read) - reads the applications and writes the
+#     report (scripts/whmcs-application-ein-check.ps1).
+#
+# Output is PII-free (this repo is public): order id, client id, pid, status,
+# domain, org name, IRS and ProPublica results, the IRS name for the EIN, and how
+# the site's EIN compares (same / differs by N digits). Never an EIN, a person's
+# name or contact data. Job summary + the application-ein-check artifact. It
+# writes nothing to WHMCS.
+#
+# The WHMCS read uses the READ-scoped credential: `scope: read` on the
+# READ_ALL_FFC_AZURE_* (ffc-admin-kv-reader) identity, exactly as 232.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'WHMCS API endpoint'
+        required: false
+        type: string
+        default: 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 237-whmcs-application-ein-check
+  cancel-in-progress: false
+
+jobs:
+  site_eins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: List the EIN each FFC charity site shows (public repos)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p work/repos
+          {
+            gh api --paginate 'orgs/FreeForCharity/repos?per_page=100&type=public' --jq '.[].name'
+            python3 -c "import csv;[print(r['Repo URL'].rstrip('/').split('/')[-1]) for r in csv.DictReader(open('sites-list/sites_list.csv')) if r['Repo URL'].strip()]"
+          } | grep -E '^FFC-EX-[A-Za-z0-9._-]+$' | sort -u > work/repo-names.txt
+          echo "candidate repos: $(wc -l < work/repo-names.txt)"
+          while read -r name <&3; do
+            git clone -q --depth 1 --filter=blob:limit=2m "https://github.com/FreeForCharity/${name}.git" "work/repos/${name}" </dev/null 2>/dev/null \
+              || echo "::warning::could not clone ${name}"
+          done 3< work/repo-names.txt
+          python3 scripts/collect_site_eins.py work/repos site-eins.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: site-eins
+          path: site-eins.json
+          retention-days: 1
+
+  application_eins:
+    needs: site_eins
+    runs-on: windows-latest
+    timeout-minutes: 40
+    environment: whmcs-prod-read
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: site-eins
+
+      - uses: ./.github/actions/whmcs-secrets-from-kv
+        with:
+          scope: read
+          azure-client-id: ${{ vars.READ_ALL_FFC_AZURE_KV_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.READ_ALL_FFC_AZURE_TENANT_ID }}
+
+      - name: Check application EINs (read-only)
+        shell: pwsh
+        env:
+          WHMCS_API_URL: ${{ inputs.api_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WHMCS_API_URL)) {
+            $env:WHMCS_API_URL = 'https://apim-ffc-gateway-prod.azure-api.net/whmcs/api.php'
+          }
+          & .\scripts\whmcs-application-ein-check.ps1 -ApiUrl $env:WHMCS_API_URL -SiteEinFile site-eins.json
+          if ($LASTEXITCODE -ne 0) { throw "Application EIN check failed (exit $LASTEXITCODE)." }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: application-ein-check
+          path: artifacts/whmcs/application-ein-check.*

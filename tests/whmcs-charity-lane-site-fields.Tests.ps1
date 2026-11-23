@@ -241,6 +241,18 @@ Describe 'Fallback order: client field -> product answer' {
         $r.fields.tagline | Should -Be 'From the product'
     }
 
+    It 'a blank answer WHMCS wrapped in an empty link is missing, not rejected' {
+        $r = Resolve-SiteFields -Config $script:Config -ClientValues @{} -ProductSets @(New-Set -ProductPid 33 -Answers @{ 'current-site-url|Current public website or page, if any (even without your own domain)' = '<a href="" target="_blank"></a>' }) -ClientId 1
+        $r.missing | Should -Contain 'currentWebsiteUrl'
+        @($r.rejected | Where-Object { $_.field -eq 'currentWebsiteUrl' }) | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped link answer still resolves to its URL' {
+        $u = 'https://hope-pantry.my.canva.site/'
+        $r = Resolve-SiteFields -Config $script:Config -ClientValues @{} -ProductSets @(New-Set -ProductPid 33 -Answers @{ 'current-site-url|Current public website or page, if any (even without your own domain)' = "<a href=`"$u`" target=`"_blank`">$u</a>" }) -ClientId 1
+        $r.fields.currentWebsiteUrl | Should -Be $u
+    }
+
     It 'an invalid client field falls back too, and the rejection is recorded' {
         $r = Resolve-SiteFields -Config $script:Config -ClientValues @{ 'brand color (hex)' = 'navy blue' } -ProductSets @(New-Set -ProductPid 40 -Answers @{ 'brand-color' = '#112233' }) -ClientId 1
         $r.fields.brandColor | Should -Be '#112233'
@@ -533,7 +545,10 @@ Describe 'Validators' {
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/company/bright-future/admin/dashboard/'; why = 'url_path_is_admin' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/home/'; why = 'url_path_not_allowed' }
             @{ k = 'linkedinUrl'; v = 'https://www.linkedin.com/'; why = 'url_path_not_allowed' }
-            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_host_not_public' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/user/profile'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/search?q=pantry'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://app.candid.org/'; why = 'url_path_not_allowed' }
+            @{ k = 'candidProfileUrl'; v = 'https://guidestar.org'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en'; why = 'url_path_not_allowed' }
             @{ k = 'volunteerUrl'; v = 'https://www.idealist.org/en/admin/volunteer-opportunities'; why = 'url_path_is_admin' }
             @{ k = 'donationUrl'; v = 'https://www.zeffy.com/en-US/o/fundraising/campaigns'; why = 'url_path_not_allowed' }

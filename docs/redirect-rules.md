@@ -53,14 +53,15 @@ gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
 
 Inputs:
 
-| Input                   | Required | Default | Notes                                                  |
-| ----------------------- | -------- | ------- | ------------------------------------------------------ |
-| `source_domain`         | yes      | —       | Zone that will redirect. Must exist in FFC Cloudflare. |
-| `target_domain`         | yes      | —       | Destination domain (always HTTPS).                     |
-| `status_code`           | no       | `301`   | One of 301 / 302 / 307 / 308.                          |
-| `include_www`           | no       | `true`  | Match `www.<source>` in addition to apex.              |
-| `preserve_query_string` | no       | `true`  | Forward query string through to target.                |
-| `dry_run`               | no       | `true`  | When true, only the preview job runs.                  |
+| Input                   | Required | Default | Notes                                                                                                    |
+| ----------------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| `source_domain`         | yes      | —       | Host that will redirect: a zone apex, or a host inside a zone. The zone must exist in FFC Cloudflare.    |
+| `target_domain`         | yes      | —       | Destination host, optionally with a path prefix (always HTTPS).                                          |
+| `status_code`           | no       | `301`   | One of 301 / 302 / 307 / 308.                                                                            |
+| `include_www`           | no       | `true`  | Match `www.<source>` in addition to apex.                                                                |
+| `preserve_query_string` | no       | `true`  | Forward query string through to target.                                                                  |
+| `proxy_source_records`  | no       | `false` | Also switch the source host's (and `www.`'s) A/AAAA/CNAME records to proxied, after the rule is written. |
+| `dry_run`               | no       | `true`  | When true, only the preview job runs.                                                                    |
 
 ### From the GitHub UI
 
@@ -124,6 +125,36 @@ You may see the misleading error `request is not authorized` if a PUT hits a non
 If the source zone's A/AAAA records aren't proxied (orange cloud), Cloudflare never sees the request
 and can't apply the rule. Use `101. Domain - Status` or `106. DNS - Enforce Standard` first to
 ensure the apex/www records are proxied.
+
+### Subdomain sources (legacy subdomains after an apex cutover)
+
+After a charity's apex moves to GitHub Pages, its old WordPress subdomains (for example
+`school.newheightseducation.org`) can still point at the legacy host while their content now lives
+under the apex (`newheightseducation.org/school/`). To send each one to its new home:
+
+```bash
+gh workflow run "111. DNS - Create Redirect Rule (Admin) [CF]" \
+  --repo FreeForCharity/FFC-Cloudflare-Automation \
+  -f source_domain=school.newheightseducation.org \
+  -f target_domain=newheightseducation.org/school \
+  -f include_www=false \
+  -f proxy_source_records=true \
+  -f dry_run=true
+```
+
+- The zone is found by walking up the labels (`school.newheightseducation.org`, then
+  `newheightseducation.org`), and the rule is added to that zone's ruleset beside any existing ones.
+- The request path is appended to the target, so `school.<domain>/students/` goes to
+  `<domain>/school/students/`. Check the old URLs exist under the new prefix before applying.
+- A subdomain's record is usually DNS-only, pointing at the legacy host, so the rule would never
+  run. `proxy_source_records=true` proxies it (and `www.<source>` if present) **after** the rule is
+  written, so the edge answers with the redirect and the legacy host is no longer contacted.
+- Certificates: Universal SSL covers only `<zone>` and `*.<zone>`. A subdomain source like
+  `school.<zone>` is covered, but `www.school.<zone>` is not, and a proxied host with no covering
+  certificate fails HTTPS before the redirect runs. The script checks coverage (Universal SSL plus
+  any certificate packs on the zone) and refuses to proxy an uncovered host. For a subdomain source,
+  dispatch with `include_www=false` unless `www.<source>` has its own certificate coverage.
+- Rollback: set the source records back to DNS-only in Cloudflare, then remove the rule.
 
 ### Running the script locally
 

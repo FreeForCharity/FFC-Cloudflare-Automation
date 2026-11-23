@@ -49,9 +49,18 @@ permissions:
   issues: read
   actions: read
 
-# Serialize runs: a second dispatch queues behind the first instead of racing it.
+# Serialize runs per record, not per workflow. GitHub keeps at most ONE pending
+# run per concurrency group and cancels any older pending one, so a single
+# workflow-wide group turned a batch of dispatches (NHEG, 2026-11-21) into one
+# run plus cancellations. Keying on zone + type + name still serializes the
+# read-modify-write on any one record set, while dispatches for different
+# records, or different zones, run instead of cancelling each other. A labeled
+# issue gets its own group by number, so a label on an unrelated issue no
+# longer displaces a queued dispatch either.
 concurrency:
-  group: 105-manage-record
+  group: >-
+    105-manage-record-${{ inputs.domain && format('{0}-{1}-{2}', inputs.domain, inputs.record_type,
+    inputs.record_name) || format('issue-{0}', github.event.issue.number) }}
   cancel-in-progress: false
 
 jobs:

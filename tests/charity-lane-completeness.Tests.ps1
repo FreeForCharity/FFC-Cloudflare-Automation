@@ -85,6 +85,61 @@ Describe 'A complete application' {
     }
 }
 
+Describe 'WHMCS link-wrapped answers (orders 883 / 886, 2026-11-20)' {
+    # GetClientsProducts returns a "link" custom field as
+    # <a href="URL" target="_blank">URL</a>, and a blank one as an empty
+    # anchor. Every pid 33 application read OFFICER_LINKEDIN_NOT_PROFILE and
+    # every one with no current website read CURRENT_SITE_URL_INVALID.
+    BeforeAll {
+        function Wrap { param([string]$Url) return "<a href=`"$Url`" target=`"_blank`">$Url</a>" }
+        $script:ChairLabel = 'Board President/Chair LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:SecLabel = 'Board Secretary LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:TreasLabel = 'Board Treasurer LinkedIn Link e.g. (https://www.linkedin.com/in/yourname/)'
+        $script:SiteLabel = 'Current public website or page, if any (even without your own domain)'
+    }
+
+    It 'three wrapped personal officer profiles pass' {
+        Get-Codes -Override @{
+            $script:ChairLabel = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+            $script:SecLabel   = (Wrap 'https://www.linkedin.com/in/ben-secretary/')
+            $script:TreasLabel = (Wrap 'https://www.linkedin.com/in/cara-treasurer/')
+        } | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped company page in an officer slot is still not a profile' {
+        Get-Codes -Override @{ $script:ChairLabel = (Wrap 'https://www.linkedin.com/company/riverbend-pantry/') } |
+            Should -Contain 'OFFICER_LINKEDIN_NOT_PROFILE'
+    }
+
+    It 'wrapped duplicate officer profiles are still not distinct' {
+        Get-Codes -Override @{
+            $script:ChairLabel = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+            $script:SecLabel   = (Wrap 'https://www.linkedin.com/in/ann-chair/')
+        } | Should -Contain 'OFFICER_LINKEDIN_NOT_DISTINCT'
+    }
+
+    It 'a wrapped blank officer link reads as missing' {
+        Get-Codes -Override @{ $script:TreasLabel = '<a href="" target="_blank"></a>' } |
+            Should -Contain 'OFFICER_LINKEDIN_MISSING'
+    }
+
+    It 'a wrapped blank current website is no answer, not an invalid one' {
+        $codes = Get-Codes -Override @{ $script:SiteLabel = '<a href="" target="_blank"></a>' } -Probes (Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Candid))
+        $codes | Should -Not -Contain 'CURRENT_SITE_URL_INVALID'
+        $codes | Should -BeNullOrEmpty
+    }
+
+    It 'a wrapped current website that is not a link is still invalid' {
+        Get-Codes -Override @{ $script:SiteLabel = '<a href="not a link" target="_blank">not a link</a>' } |
+            Should -Contain 'CURRENT_SITE_URL_INVALID'
+    }
+
+    It 'a wrapped blank REQUIRED link is still flagged (as missing)' {
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = '<a href="" target="_blank"></a>' } -Probes (Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current)) |
+            Should -Contain 'CANDID_URL_MISSING'
+    }
+}
+
 Describe 'Links that are not public (orders 875 / 876, 2026-11-12)' {
     It '<Name> -> <Code>' -ForEach @(
         @{ Name = 'Zeffy campaigns admin page'; Label = 'Zeffy donation form URL'; Value = 'https://www.zeffy.com/en-US/o/fundraising/campaigns?fromOnboarding=true'; Code = 'DONATION_URL_NOT_PUBLIC' }
@@ -317,5 +372,164 @@ Describe 'Get-LaneAdjudicatedOrders' {
     ) {
         $p = Write-Adj $Json
         { Get-LaneAdjudicatedOrders -Path $p } | Should -Throw
+    }
+}
+
+Describe 'Candid profile links on app.candid.org (orders 883 / 886, 2026-11-21)' {
+    BeforeAll {
+        $script:AppCandid = 'https://app.candid.org/profile/15935725/restorative-expressive-arts-corp-99-1579845'
+        $script:AppCandidShared = 'https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true'
+        $script:AppCandidSharedEin = 'https://app.candid.org/profile/15935725/restorative-expressive-arts-corp-99-1579845/?pkId=e115d60f-1499-4a15-9aea-56fe7d8b413d'
+    }
+
+    It 'an app.candid.org profile link without its shareable pkId is NOT_PUBLIC (it opens only signed in)' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:AppCandid, $script:Current)
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandid } -Probes $p | Should -Contain 'CANDID_URL_NOT_PUBLIC'
+    }
+
+    It 'a shared app.candid.org profile link with its pkId is accepted when it opens' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:AppCandidShared, $script:Current)
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidShared } -Probes $p | Should -BeNullOrEmpty
+    }
+
+    It 'the EIN in an app.candid.org slug gives the GuideStar profile-by-EIN page' {
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandid -Ein '' | Should -Be 'https://www.guidestar.org/profile/99-1579845'
+        Get-LaneCandidEinProfileUrl -CandidUrl 'https://www.guidestar.org/profile/991579845' -Ein '' | Should -Be 'https://www.guidestar.org/profile/99-1579845'
+    }
+
+    It "without an EIN in the link, the application's EIN is used" {
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandidShared -Ein '12-3456789' | Should -Be 'https://www.guidestar.org/profile/12-3456789'
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandidShared -Ein '' | Should -Be ''
+    }
+
+    It "an EIN in the link that disagrees with the application's EIN gets no fallback (#1793 review)" {
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandid -Ein '12-3456789' | Should -Be ''
+        Get-LaneCandidEinProfileUrl -CandidUrl $script:AppCandid -Ein '991579845' | Should -Be 'https://www.guidestar.org/profile/99-1579845'
+    }
+
+    It 'a bare 9-digit Candid id is never read as an EIN (#1793 review)' {
+        Get-LaneCandidEinProfileUrl -CandidUrl 'https://app.candid.org/profile/123456789/?pkId=a' -Ein '' | Should -Be ''
+    }
+
+    It 'a profile link that will not answer a signed-out GET passes when the GuideStar EIN page opens' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current, 'https://www.guidestar.org/profile/99-1579845')
+        $p[$script:AppCandidSharedEin] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -BeNullOrEmpty
+    }
+
+    It 'the runner is asked to open the GuideStar EIN page too' {
+        $t = Get-LaneCompletenessTargets -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin }) -ProductPid 33
+        @($t.Links.Values) | Should -Contain 'https://www.guidestar.org/profile/99-1579845'
+    }
+
+    It 'still unverified when neither the link nor the GuideStar EIN page opens' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current)
+        $p[$script:AppCandidSharedEin] = @{ status = 403; mitigated = ''; host = 'app.candid.org' }
+        $p['https://www.guidestar.org/profile/99-1579845'] = @{ status = $null; mitigated = ''; host = 'www.guidestar.org' }
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -Contain 'LINK_UNVERIFIED'
+    }
+
+    It 'a 404 on the given profile link stays NOT_FOUND even if the EIN page opens' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:Current, 'https://www.guidestar.org/profile/99-1579845')
+        $p[$script:AppCandidSharedEin] = @{ status = 404; mitigated = ''; host = 'app.candid.org' }
+        Get-Codes -Override @{ 'Public GuideStar Profile Link' = $script:AppCandidSharedEin } -Probes $p | Should -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'with both answers given, the shareable link is chosen over the signed-in-only one (order 883)' {
+        $fields = New-AppFields -Override @{
+            'Public GuideStar Profile Link'                              = $script:AppCandid
+            'Candid / GuideStar direct (shared) profile link (optional)' = $script:AppCandidSharedEin
+        }
+        $t = Get-LaneCompletenessTargets -Fields $fields -ProductPid 33
+        $t.Links['candidProfileUrl'] | Should -Be $script:AppCandidSharedEin
+    }
+}
+
+Describe 'Candid seal widget answers (workflow 803, measured 2026-11-21)' {
+    BeforeAll {
+        $script:SealShared = 'https://app.candid.org/profile/16766185/ritual-azteca-inc/?pkId=e0adf022-4e46-48f4-baa3-8488ece7c3f4&isActive=true'
+        # Shapes copied from what Candid returned to a GitHub runner.
+        $script:GoldSvg = @'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" height="108" width="108">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #d3aa41;
+      }
+      .cls-3 {
+        fill: #fff;
+      }
+    </style>
+  </defs>
+    <rect class="cls-1" x="0" width="108" height="108"/>
+    <rect class="cls-3" x="9.45" y="9.45" width="89.1" height="89.1"/>
+</svg>
+'@
+        $script:EmptySvg = @'
+<?xml version="1.0"?>
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+    <path fill="none" stroke="#fff" stroke-width="2" d="M1,1V199H199V1z"/>
+</svg>
+'@
+        function New-Fetch { param($Status, $Type, $Body) [pscustomobject]@{ status = $Status; contentType = $Type; body = $Body } }
+    }
+
+    It 'a coloured 108x108 seal is ok, and names its level' {
+        $v = Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' $script:GoldSvg)
+        $v.verdict | Should -Be 'ok'
+        $v.level | Should -Be 'Gold'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' ($script:GoldSvg -replace '#d3aa41', '#a6c0ce'))).level | Should -Be 'Platinum'
+    }
+
+    It 'the 200 empty white outline Candid serves for an org with no seal is no_seal, not ok' {
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' $script:EmptySvg)).verdict | Should -Be 'no_seal'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'image/svg+xml' ($script:GoldSvg -replace '#d3aa41', '#fff'))).verdict | Should -Be 'no_seal'
+    }
+
+    It 'a 404 is no_org, a non-SVG is not_svg, a transport error is unverified' {
+        (Get-CandidSealVerdict -Fetch (New-Fetch 404 'application/json' '{"Message":"Organization 999999999 not found"}')).verdict | Should -Be 'no_org'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 200 'text/html' '<html></html>')).verdict | Should -Be 'not_svg'
+        (Get-CandidSealVerdict -Fetch (New-Fetch $null '' '')).verdict | Should -Be 'unverified'
+        (Get-CandidSealVerdict -Fetch (New-Fetch 503 'text/html' '')).verdict | Should -Be 'unverified'
+    }
+
+    It 'the review flags a Candid link whose profile id Candid does not know as NOT_FOUND' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'no_org' })
+        $codes | Should -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'no seal yet is INFO only and does not block acceptance' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'no_seal' })
+        $codes | Should -Contain 'CANDID_SEAL_NONE'
+        @(Get-LaneCompletenessBlocking -Codes $codes) | Should -Not -Contain 'CANDID_SEAL_NONE'
+    }
+
+    It 'a visible seal adds nothing' {
+        $p = Get-OkProbes -Urls @($script:Zeffy, $script:Idealist, $script:SealShared, $script:Current)
+        $codes = @(Get-LaneCompletenessCodes -Fields (New-AppFields -Override @{ 'Public GuideStar Profile Link' = $script:SealShared }) -ProductPid 33 -LinkProbes $p -GithubLookup @{ 'riverbend-web' = $true } -CandidSeals @{ '16766185' = 'ok' })
+        $codes | Should -Not -Contain 'CANDID_SEAL_NONE'
+        $codes | Should -Not -Contain 'CANDID_URL_NOT_FOUND'
+    }
+
+    It 'a rendered shareable profile is the full page; the plain link is only a summary signed out' {
+        $full = 'Skip to content Donate to Candid Log in/Register Ritual Azteca Inc Documents Info Summary Programs Impact People Forms 990 EIN 42-4285263 IRS subsection 501(c)(3) Public Charity Mission ...'
+        $stub = 'Candid search Ritual Azteca Inc Location: Los Angeles, CA EIN: 42-4285263 Tax status: 501(c)(3) Public Charity Suggest an edit Do you manage Ritual Azteca Inc? Claim it here. Summary Forms 990 Programs'
+        Get-CandidProfilePageVerdict -Text $full | Should -Be 'full'
+        Get-CandidProfilePageVerdict -Text $stub | Should -Be 'summary_only'
+        Get-CandidProfilePageVerdict -Text '' | Should -Be 'unverified'
+        # The full page can carry the summary page's wording further down.
+        Get-CandidProfilePageVerdict -Text ($full + ' People CEO ... Suggest an edit') | Should -Be 'full'
+    }
+
+    It 'a footer badge works only with a visible seal, a rendered image and a full signed-out page' {
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 108 -PageVerdict 'full').ok | Should -BeTrue
+        $v = Get-CandidBadgeVerdict -SealVerdict 'no_seal' -FooterWidth 200 -PageVerdict 'full'
+        $v.ok | Should -BeFalse
+        $v.why | Should -Match 'seal no_seal'
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 0 -PageVerdict 'full').why | Should -Match 'did not render'
+        (Get-CandidBadgeVerdict -SealVerdict 'ok' -FooterWidth 108 -PageVerdict 'summary_only').why | Should -Match 'summary_only'
     }
 }

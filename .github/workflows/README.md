@@ -590,6 +590,7 @@ No additional setup is required for these workflows to run. However, to get the 
 | 234 | WHMCS - Charity-Lane Site Content Fields (public, read-only) [WHMCS] | `234-whmcs-charity-lane-site-fields.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 | 235 | WHMCS - Ticket Thread Read (full text, encrypted) [WHMCS] | `235-whmcs-ticket-thread-read.yml` | workflow_dispatch | Reads | whmcs-prod |
 | 236 | WHMCS - Open Charity Tickets (batch, one approval) [WHMCS] | `236-whmcs-ticket-batch.yml` | workflow_dispatch | Writes (gated) | ✅ whmcs-prod |
+| 237 | WHMCS - Application EIN Check (IRS lists, read-only) | `237-whmcs-application-ein-check.yml` | workflow_dispatch | Reads | whmcs-prod-read |
 ### 3xx — Microsoft (M365 / Azure / Graph)
 
 | # | Workflow | File | Triggers | Safety | Approval env |
@@ -669,11 +670,13 @@ No additional setup is required for these workflows to run. However, to get the 
 | 751 | Website - Security Overrides Sync (FFC-EX) [GH] | `751-website-security-overrides-sync.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 752 | Repo - Merge Queue Backfill (FFC-EX) [GH] | `752-repo-merge-queue-backfill.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 | 753 | Repo - Charity-Lane Gate Broker (policy-bound approvals) [GH] | `753-charity-lane-gate-broker.yml` | schedule, workflow_dispatch | Writes (policy approvals) | charity-lane-broker (no reviewer, `main` only) |
+| 754 | Org - Team Membership [Org] | `754-org-team-membership.yml` | workflow_dispatch | Writes (dry-run default) | ✅ github-prod (apply job only) |
 ### 8xx — Candid (GuideStar)
 
 | # | Workflow | File | Triggers | Safety | Approval env |
 | --- | --- | --- | --- | --- | --- |
 | 801 | Candid - Charity Check (EIN) [CANDID] | `801-candid-charity-check.yml` | workflow_dispatch | Reads | candid-prod-read |
 | 802 | Candid - Essentials Search [CANDID] | `802-candid-essentials-search.yml` | workflow_dispatch | Reads | candid-prod-read |
+| 803 | Candid - Seal Widget Check [CANDID] | `803-candid-seal-check.yml` | pull_request, workflow_dispatch | Reads | none (no credentials) |
 
 <!-- catalog:end -->

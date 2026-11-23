@@ -184,6 +184,50 @@ Describe 'Get-WhmcsResponseShape' {
     }
 }
 
+Describe 'Get-WhmcsTransientRemedy' {
+    # #1774. The exhaustion throw used to assert an Imunify360 diagnosis for every
+    # label. Only a bot-protection challenge may send the operator to the egress
+    # allowlist.
+    It 'advises the egress allowlist for a bot-protection challenge only: <_>' -ForEach @(
+        'bot-protection challenge',
+        'rate limited',
+        'gateway error',
+        'service unavailable',
+        'request timed out',
+        'connection dropped (read)'
+    ) {
+        $remedy = Get-WhmcsTransientRemedy $_
+        $remedy | Should -Not -BeNullOrEmpty
+        if ($_ -eq 'bot-protection challenge') {
+            $remedy | Should -BeLike '*Imunify360*'
+            $remedy | Should -BeLike '*whitelist*'
+        }
+        else {
+            $remedy | Should -Not -BeLike '*Imunify360*'
+            $remedy | Should -Not -BeLike '*whitelist*'
+        }
+    }
+
+    It 'keys on the label prefix, so the non-JSON suffix keeps the right remedy' {
+        Get-WhmcsTransientRemedy 'bot-protection challenge (non-JSON response)' | Should -BeLike '*Imunify360*'
+        Get-WhmcsTransientRemedy 'gateway error (non-JSON response)' | Should -Not -BeLike '*Imunify360*'
+    }
+
+    It 'covers every label in the closed set, so a new label cannot fall through unnoticed' {
+        # A label added to $AllowedLabels without a remedy branch gets the generic
+        # fallback; asserting it is NOT the fallback forces the branch to be written.
+        foreach ($label in $script:AllowedLabels) {
+            Get-WhmcsTransientRemedy $label | Should -Not -Be 'Re-run the workflow.' -Because $label
+        }
+    }
+
+    It 'never echoes its input' {
+        $remedy = Get-WhmcsTransientRemedy "connection dropped (read) $script:Sensitive"
+        $remedy | Should -Not -BeLike "*$script:Sensitive*"
+        Get-WhmcsTransientRemedy $null | Should -Be 'Re-run the workflow.'
+    }
+}
+
 Describe 'Invoke-WhmcsApi retry path' {
     BeforeEach {
         $script:Warnings = [System.Collections.ArrayList]::new()
@@ -329,6 +373,42 @@ Describe 'Invoke-WhmcsApi retry path' {
         $script:Warnings.Count | Should -Be 0
     }
 
+    It 'exhausting on a dropped read does not report a bot-protection block (#1774)' {
+        $env:WHMCS_API_MAX_ATTEMPTS = '3'
+        Mock Invoke-RestMethod { throw "The response ended prematurely. (ResponseEnded) $script:Sensitive" }
+
+        $err = $null
+        try { Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetClientsProducts' } }
+        catch { $err = "$($_.Exception.Message)" }
+
+        Should -Invoke Invoke-RestMethod -Times 3 -Exactly
+        $err | Should -BeLike '*connection dropped (read)*'
+        $err | Should -Not -BeLike '*Imunify360*'
+        $err | Should -Not -BeLike '*whitelist*'
+        $err | Should -Not -BeLike '*blocked*'
+        $err | Should -Not -BeLike "*$script:Sensitive*"
+        $script:Warnings.Count | Should -Be 2
+        foreach ($w in $script:Warnings) {
+            $w | Should -Not -BeLike '*block*'
+            $w | Should -Not -BeLike "*$script:Sensitive*"
+        }
+    }
+
+    It 'exhausting on a genuine bot-protection challenge keeps the allowlist advice (#1774)' {
+        $env:WHMCS_API_MAX_ATTEMPTS = '2'
+        Mock Invoke-RestMethod { "<html>Access denied by Imunify360 bot-protection. $script:Sensitive</html>" }
+
+        $err = $null
+        try { Invoke-WhmcsApi -ApiUrl $script:ApiUrl -Body @{ action = 'GetTickets' } }
+        catch { $err = "$($_.Exception.Message)" }
+
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly
+        $err | Should -BeLike '*bot-protection challenge (non-JSON response)*'
+        $err | Should -BeLike '*Imunify360*'
+        $err | Should -BeLike '*whitelist*'
+        $err | Should -Not -BeLike "*$script:Sensitive*"
+    }
+
     It 'returns the response unchanged on success' {
         Mock Invoke-RestMethod { '{"result":"success","totalresults":2}' | ConvertFrom-Json }
 
@@ -406,5 +486,13 @@ Describe 'Source guards over every copy of the retry loop' {
 
     It 'routes the retry reason through the label helper in <_>' -ForEach $script:RetryLoopFiles {
         (Get-RetryLoopCode $_).Contains('Get-WhmcsTransientLabel') | Should -BeTrue
+    }
+
+    It 'selects the exhaustion remedy from the reason rather than hard-coding one in <_>' -ForEach $script:RetryLoopFiles {
+        # #1774: the self-contained copy carried the same fixed Imunify360 sentence.
+        $code = Get-RetryLoopCode $_
+        $code.Contains('Get-WhmcsTransientRemedy $transientReason') | Should -BeTrue
+        $code.Contains('WHMCS API blocked after') | Should -BeFalse
+        $code.Contains('WHMCS API transient block') | Should -BeFalse
     }
 }

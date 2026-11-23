@@ -22,6 +22,19 @@ jobs:
   validate:
     name: Validate Repository
     runs-on: ubuntu-latest
+    # This job supplies `Validate Repository`, one of the two required checks on
+    # `main`, and it declares `merge_group:` above -- so it paces every merge in
+    # the repository. With no `timeout-minutes` it inherited GitHub's default of
+    # 360, meaning a hang anywhere in it held the merge queue for six hours with
+    # nothing landing behind it and no alert (#1565). A wedged queue is
+    # indistinguishable from a healthy one from the PR page, which reads
+    # `AWAITING_CHECKS` either way.
+    #
+    # 30 is ~1.5x the slowest run measured over the 30 most recent successes
+    # (11.9-19.9 min, median 15.3, 2026-11-23), so a healthy run cannot reach it
+    # while the suite has room to keep growing. Re-measure before tightening:
+    # CLAUDE.md records this suite outgrowing a recorded bound once already.
+    timeout-minutes: 30
     permissions:
       contents: read
       # Reading this repo's own environment protection rules
@@ -382,6 +395,32 @@ jobs:
           # stale freeze entry, or on a workflow it cannot parse.
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/check-workflow-fixed-tmp-paths.py
+
+      - name: Validate every merge-queue job declares a bounded timeout
+        shell: bash
+        run: |
+          # A workflow declaring `merge_group:` is evaluated by the merge queue,
+          # so its jobs pace every merge in the repository -- and GitHub's
+          # default job timeout is 360 minutes. Three of the four such workflows
+          # (722, 723, 728) declared none, so a hang in any of them held the
+          # queue for six hours with nothing landing behind it and no alert;
+          # only 727 was bounded, at 5 minutes. The asymmetry was the tell: the
+          # short guard got a timeout and the long one that actually paces the
+          # queue did not (#1565).
+          #
+          # It is silent because a wedged queue and a healthy one are the same
+          # picture -- `AWAITING_CHECKS` either way -- and CLAUDE.md correctly
+          # teaches the operator to wait ~17 minutes before reading anything
+          # into that state. #1565 was filed off a false alarm in which "this is
+          # hung" had already been written about a run that was 9 minutes in and
+          # merged normally; judging slow from hung by eye is what a timeout
+          # does instead of a human.
+          #
+          # The check validates the NUMBER, not just its presence:
+          # `timeout-minutes: 360` is the default wearing a declaration and
+          # would pass a presence-only guard while fixing nothing.
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/check-merge-queue-job-timeouts.py
 
       - name: Validate a pull-request read declares the permission it needs
         shell: bash

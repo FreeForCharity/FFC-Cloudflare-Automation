@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-21T02:49:30Z",
+  "generated_at": "2026-11-23T22:25:13Z",
   "source": "FreeForCharity/FFC-Cloudflare-Automation charity-lane items",
   "rows": [
     {
@@ -11,7 +11,7 @@
       "held_since": "",
       "repo": "https://github.com/FreeForCharity/FFC-EX-eastridgepto.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-eastridgepto.org/",
-      "last_repo_activity": "2026-11-17",
+      "last_repo_activity": "2026-11-12",
       "stale": "",
       "charity_maintainers": ""
     },
@@ -37,8 +37,8 @@
       "held_since": "2026-11-21",
       "repo": "https://github.com/FreeForCharity/FFC-EX-cactuswrenpreschool.com",
       "preview_url": "https://cactuswrenpreschool.com/",
-      "last_repo_activity": "2026-11-17",
-      "stale": "no",
+      "last_repo_activity": "2026-10-14",
+      "stale": "yes",
       "charity_maintainers": "BrianLenzmeier"
     },
     {
@@ -50,7 +50,7 @@
       "held_since": "2026-11-21",
       "repo": "https://github.com/FreeForCharity/FFC-EX-newheightseducation.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-newheightseducation.org/",
-      "last_repo_activity": "2026-11-19",
+      "last_repo_activity": "2026-11-22",
       "stale": "no",
       "charity_maintainers": ""
     },
@@ -63,7 +63,7 @@
       "held_since": "2026-11-12",
       "repo": "https://github.com/FreeForCharity/FFC-EX-btsscv.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-btsscv.org/",
-      "last_repo_activity": "2026-11-17",
+      "last_repo_activity": "2026-11-13",
       "stale": "",
       "charity_maintainers": ""
     },
@@ -76,7 +76,7 @@
       "held_since": "2026-11-12",
       "repo": "https://github.com/FreeForCharity/FFC-EX-projectherinc.org",
       "preview_url": "https://freeforcharity.github.io/FFC-EX-projectherinc.org/",
-      "last_repo_activity": "2026-11-17",
+      "last_repo_activity": "2026-11-13",
       "stale": "",
       "charity_maintainers": ""
     }

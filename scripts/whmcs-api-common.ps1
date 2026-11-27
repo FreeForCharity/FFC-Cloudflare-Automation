@@ -66,6 +66,41 @@ function Resolve-WhmcsAccessKey {
     return $null
 }
 
+function Get-WhmcsTransientRemedy {
+    <#
+    .SYNOPSIS
+        Return the FIXED remediation sentence for a transient label, for the terminal throw.
+
+    .DESCRIPTION
+        #1774. The exhaustion throw used to assert one cause for every label - "the
+        host's Imunify360 bot-protection is challenging the runner IP ... whitelist
+        GitHub Actions egress" - which is right for a bot-protection challenge and
+        wrong for everything else. A dropped connection, in particular, is a transport
+        failure: sending the operator to the Imunify360 allowlist costs a detour before
+        anyone looks at APIM, Cloudflare or the origin.
+
+        Keyed on the label's PREFIX, because the non-JSON path appends
+        " (non-JSON response)". Like Get-WhmcsTransientLabel, every return value is a
+        literal and never any part of $Reason, so the #1753 log-safety property holds.
+    #>
+    param([AllowNull()][string]$Reason)
+
+    if ([string]::IsNullOrWhiteSpace($Reason)) { return 'Re-run the workflow.' }
+    if ($Reason.StartsWith('bot-protection challenge')) {
+        return "The host's Imunify360 bot-protection is challenging the runner IP; re-run the workflow or whitelist GitHub Actions egress."
+    }
+    if ($Reason.StartsWith('connection dropped')) {
+        return 'The connection closed before the response completed, which is a transport failure, not an IP block; re-run the workflow, and if it persists check the APIM gateway, Cloudflare and the WHMCS origin.'
+    }
+    if ($Reason.StartsWith('rate limited')) {
+        return 'The host is rate limiting requests; wait, then re-run the workflow.'
+    }
+    if ($Reason.StartsWith('gateway error') -or $Reason.StartsWith('service unavailable') -or $Reason.StartsWith('request timed out')) {
+        return 'The WHMCS host or the gateway in front of it is failing or slow; re-run the workflow, and if it persists check WHMCS and APIM health.'
+    }
+    return 'Re-run the workflow.'
+}
+
 function Get-WhmcsTransientLabel {
     <#
     .SYNOPSIS
@@ -323,10 +358,10 @@ function Invoke-WhmcsApi {
         }
 
         if ($attempt -ge $maxAttempts) {
-            throw "WHMCS API blocked after $maxAttempts attempts (transient: $transientReason). The host's Imunify360 bot-protection is challenging the runner IP; re-run the workflow or whitelist GitHub Actions egress."
+            throw "WHMCS API failed after $maxAttempts attempts (transient: $transientReason). $(Get-WhmcsTransientRemedy $transientReason)"
         }
         $delay = [int][math]::Min(30, [math]::Pow(2, $attempt))
-        Write-Warning "WHMCS API transient block (attempt $attempt/$maxAttempts): $transientReason. Retrying in ${delay}s..."
+        Write-Warning "WHMCS API transient failure (attempt $attempt/$maxAttempts): $transientReason. Retrying in ${delay}s..."
         Start-Sleep -Seconds $delay
     }
 }

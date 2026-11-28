@@ -103,7 +103,6 @@ block — verified to be the whole fix on that pair, 48 PASS / rc=0, nothing els
 touched.
 
 <!-- reserved-ids
-L371 #1807
 -->
 
 ## Verification and monitoring

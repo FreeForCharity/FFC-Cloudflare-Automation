@@ -1096,8 +1096,37 @@ PROTECTED_BRANCH_RE = re.compile(r"(?<![\w./-])(main|master)(?![\w/-])", re.IGNO
 GIT_SEPARATE_ARG_OPT = (
     r"(?:-[cC]|--(?:git-dir|work-tree|namespace|config-env|super-prefix|exec-path))"
 )
+# The separate argument may be QUOTED, and a quoted word can contain spaces, so
+# `\S+` is not enough to span it (#1311's 2026-10-09 addendum). `\S+` stops at
+# the first space inside the quotes, `\s+push` then fails against the rest of
+# the path, and the generic alternative cannot pick the option up either --
+# its lookahead deliberately bars every separate-arg option -- so the scan dies
+# before the verb and the whole rule is bypassed. Five live force-pushes to
+# `main` were ALLOWED by that, measured on this branch before the fix:
+#
+#     git -C "C:/Program Files/x" push --force origin main
+#     git -C 'C:/Program Files/x' push --force origin main
+#     git --git-dir "C:/Program Files/x/.git" push --force origin main
+#     git --work-tree "/my dir" push --force origin main
+#     git -c "a.b=c d" push --force origin main
+#
+# Each is a working spelling, not a contrivance: measured on git 2.43.0 against
+# a repo under a path containing a space, every one parses its global option and
+# reaches push (`fatal: The current branch main has no upstream branch.`),
+# against a `git --bogus-opt x status` control that dies at `unknown option`.
+# The quoted alternatives come FIRST so the quoted span is consumed whole --
+# ordered alternation, and `\S+` would otherwise match the opening fragment and
+# commit the scan to failing.
+#
+# This is strictly SAFER than `\S+`, not merely wider: because the quoted span
+# is consumed as one unit, a `push` sitting INSIDE a quoted option value can
+# never be read as the verb, where `\S+` plus backtracking left that open. And
+# it stays a superset of the pattern it replaces -- `\S+` is retained as the
+# last alternative, so no command that was blocked before can become allowed.
+GIT_SEPARATE_ARG_VALUE = r"""(?:"[^"]*"|'[^']*'|\S+)"""
 GIT_GLOBAL_OPT = (
-    rf"(?:{GIT_SEPARATE_ARG_OPT}\s+\S+|(?!{GIT_SEPARATE_ARG_OPT}\s)--?[A-Za-z]\S*)"
+    rf"(?:{GIT_SEPARATE_ARG_OPT}\s+{GIT_SEPARATE_ARG_VALUE}"
+    rf"|(?!{GIT_SEPARATE_ARG_OPT}\s)--?[A-Za-z]\S*)"
 )
 GIT_PUSH_RE = re.compile(
     rf"\bgit(?:\.exe)?\s+(?:{GIT_GLOBAL_OPT}\s+)*push\b", re.IGNORECASE

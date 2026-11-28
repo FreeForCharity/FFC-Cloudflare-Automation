@@ -599,6 +599,50 @@ RULES = [
         # all three halves in ONE stage. Only `-F != -f` clears it.
         ("heredoc prose naming git push -F and main",
          "gh pr create -F - <<'EOF'\nwe force-push with git push -F only on main\nEOF", ALLOW),
+        # A separate-arg option's value may be QUOTED, and a quoted word can
+        # hold spaces -- which `\S+` cannot span (#1311's 2026-10-09 addendum).
+        # These five were ALLOWED on `main` at ffed4f1: `\S+` stopped at the
+        # space inside the quotes, `\s+push` failed against the remainder of the
+        # path, and the generic alternative's lookahead bars every separate-arg
+        # option, so the scan died before the verb and all three halves of the
+        # rule went unread. Each is a real force-push to `main`.
+        #
+        # Working spellings, not contrivances: measured on git 2.43.0 against a
+        # repo under a path containing a space, each parses its global option
+        # and reaches push (`fatal: The current branch main has no upstream
+        # branch.`), against a `git --bogus-opt x status` control that dies at
+        # `unknown option`. A path with a space is the ordinary case on the
+        # Conductor's Windows host (`C:/Program Files/...`), so this is reachable
+        # without trying to.
+        #
+        # Discrimination, measured: narrowing GIT_SEPARATE_ARG_VALUE back to
+        # `\S+` on a copy flips exactly these five rows to `want=block
+        # got=allow` -- a PERMISSIVE failure on a protected-branch rule -- and
+        # reddens no ALLOW row anywhere in the suite. Both quote styles are
+        # pinned because one row covers only a third of the vector.
+        ("force-push main via git -C with a double-quoted path holding a space",
+         'git -C "C:/Program Files/x" push --force origin main', BLOCK),
+        ("force-push main via git -C with a single-quoted path holding a space",
+         "git -C 'C:/Program Files/x' push --force origin main", BLOCK),
+        ("force-push main via git --git-dir with a quoted path holding a space",
+         'git --git-dir "C:/Program Files/x/.git" push --force origin main', BLOCK),
+        ("force-push main via git --work-tree with a quoted path holding a space",
+         'git --work-tree "/my dir" push --force origin main', BLOCK),
+        ("force-push main via git -c with a quoted config value holding a space",
+         'git -c "a.b=c d" push --force origin main', BLOCK),
+        # ...and the benign control, which is why the quoted value is spelled as
+        # an alternative rather than as `[^\s]*|.*`: a quoted path with a space
+        # is an ordinary thing to write, and pushing a feature branch from one
+        # must stay allowed. A single row here would let a fix that blocks every
+        # `git -C "..."` push pass the BLOCK rows above.
+        ("normal push feature via git -C with a quoted path holding a space",
+         'git -C "C:/Program Files/x" push origin feature-x', ALLOW),
+        # The consumed-whole property is worth its own row: because the quoted
+        # alternative eats the span as one unit, a `push` INSIDE a quoted option
+        # value can never be read as the verb. Under `\S+` plus backtracking
+        # that was left open.
+        ("quoted option value containing push, with force and main elsewhere",
+         'git -c "a.b=push --force" status origin main', ALLOW),
     ]),
 
     Rule("echo-secret-var", 'Refusing to echo/print a secret value', BLOCK_TIER, [

@@ -86,6 +86,38 @@ UNRECOGNISED_OUTPUT = (
 )
 
 
+# The #1732 shape, captured VERBATIM from a scheduled cloud-worker sandbox on
+# 2026-11-28 by running `python3 -c "from cryptography.hazmat.primitives.asymmetric
+# import rsa"`. Kept whole rather than trimmed to the signature, because the
+# point of the fixture is that the classifier reads real captured text: note
+# that the roster ends mid-module with seven PASS lines and NO `  FAIL` line
+# anywhere, which is why a `grep -c FAIL` scores this dead module as passing
+# (L82/L194) and why `::error::` is the line to score from.
+CFFI_ENVIRONMENTAL_OUTPUT = """  PASS test_callee_log_lines_carry_no_thread_fields
+ModuleNotFoundError: No module named '_cffi_backend'
+thread '<unnamed>' panicked at /usr/share/cargo/registry/pyo3-0.20.2/src/err/mod.rs:788:5:
+Python API call failed
+stack backtrace:
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+Traceback (most recent call last):
+  File "test_235_ticket_thread_read.py", line 212, in <module>
+    from cryptography.hazmat.primitives import serialization
+  File "/usr/lib/python3/dist-packages/cryptography/hazmat/primitives/hashes.py", line 10, in <module>
+    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+pyo3_runtime.PanicException: Python API call failed
+"""
+
+# The same host breakage sitting beside a GENUINE failing assertion, which is
+# the ordinary state of any module that got far enough to run tests before the
+# first `cryptography` call. #1290's ordering rule has to hold for the Linux
+# signature exactly as it does for `[WinError 32]`.
+CFFI_MIXED_OUTPUT = (
+    "  PASS test_a\n"
+    "  FAIL test_b: the workflow lost its `permissions:` block\n"
+    + CFFI_ENVIRONMENTAL_OUTPUT
+)
+
+
 def test_an_environmental_death_is_classified_environmental():
     """The #1119 shape, with no assertion evidence present, goes to the quiet bucket."""
     kind, evidence = run_all.classify_failure(ENVIRONMENTAL_OUTPUT)
@@ -132,6 +164,75 @@ def test_an_unrecognised_failure_lands_in_the_assertion_bucket():
     )
     kind, _ = run_all.classify_failure(UNRECOGNISED_OUTPUT)
     assert kind == run_all.ASSERTION, f"an unrecognised failure was excused as {kind}"
+
+
+def test_the_linux_cffi_death_is_classified_environmental():
+    """#1732 -- the cloud worker's broken `cryptography` is a host cause, not a defect.
+
+    `import cryptography` succeeds on that sandbox and reports 41.0.7; the
+    death arrives at the first real use, so the module cannot skip itself and
+    dies mid-roster. Before this signature existed the sweep rendered it as
+    `1 assertion failure(s); 0 environmental`, and it cost a run a wrong first
+    conclusion about the PR that happened to be under test (#1728).
+    """
+    assert "_cffi_backend" in CFFI_ENVIRONMENTAL_OUTPUT, (
+        "fixture no longer carries the signature -- this test would pass vacuously"
+    )
+    kind, evidence = run_all.classify_failure(CFFI_ENVIRONMENTAL_OUTPUT)
+    assert kind == run_all.ENVIRONMENTAL, (
+        f"a missing CFFI backend is a property of the host, not of the tree; "
+        f"got {kind} ({evidence})"
+    )
+    assert evidence == "ModuleNotFoundError: No module named '_cffi_backend'", (
+        f"the evidence must name the signature that matched; got {evidence!r}"
+    )
+
+
+def test_the_linux_signature_cannot_mask_a_real_failure():
+    """The #1290 invariant, re-pinned for the Linux entry.
+
+    Assertion evidence is tested before any signature, so a module carrying
+    BOTH a real `  FAIL` and the sandbox's CFFI death stays ASSERTION. Without
+    this case the new signature would be one `  FAIL`-less capture away from
+    quietly excusing a genuine regression on the host that does the work.
+    """
+    assert run_all.environmental_signature(CFFI_MIXED_OUTPUT) is not None, (
+        "fixture is not exercising the masking case -- it must contain the "
+        "environmental signature, or this test passes vacuously"
+    )
+    kind, evidence = run_all.classify_failure(CFFI_MIXED_OUTPUT)
+    assert kind == run_all.ASSERTION, (
+        f"the Linux signature masked a real failure -- got {kind} ({evidence})"
+    )
+    assert "test_b" in evidence, evidence
+
+
+def test_the_rejected_pyo3_panic_is_not_a_signature():
+    """`pyo3_runtime.PanicException` is deliberately OUT, and must stay out.
+
+    It is emitted in the same capture as the accepted string, so the tempting
+    move is to add both. It cannot discriminate: any pyo3-backed package
+    panics that way, including on input repo code handed it. This pins the
+    rejection the way the `[WinError 2]` comment is pinned by
+    `test_an_unrecognised_failure_lands_in_the_assertion_bucket` -- a panic on
+    its own, with no accepted signature beside it, stays actionable.
+    """
+    assert not any(
+        "pyo3" in s or "PanicException" in s for s in run_all.ENVIRONMENTAL_SIGNATURES
+    ), (
+        "a bare Rust panic was added as a signature; it cannot separate a "
+        "broken host from a defect that fed a Rust extension bad input"
+    )
+    panic_only = (
+        "thread '<unnamed>' panicked at pyo3-0.20.2/src/err/mod.rs:788:5:\n"
+        "Python API call failed\n"
+        "pyo3_runtime.PanicException: Python API call failed\n"
+    )
+    assert run_all.environmental_signature(panic_only) is None, (
+        "fixture must not match any signature, or this test proves nothing"
+    )
+    kind, _ = run_all.classify_failure(panic_only)
+    assert kind == run_all.ASSERTION, f"a bare panic was excused as {kind}"
 
 
 def test_every_signature_is_non_empty_and_actually_classifies():

@@ -75,7 +75,15 @@ ENVIRONMENTAL = "environmental"
 # would hide exactly what this list exists to surface. When in doubt, leave it
 # out: an unrecognised failure is classified as an assertion by
 # `classify_failure`, which is the safe direction.
+#
+# Entries are GROUPED BY HOST, because every one of them is a property of a
+# particular box rather than of this repository. The list was Windows-only for
+# as long as the Conductor was the only non-CI host; the scheduled cloud worker
+# is Linux and is now the population doing the issue->PR work, so a Linux cause
+# that is not described here presents to a reviewer as a defect in the PR under
+# test (#1732). Add the host's group, not a bare string.
 ENVIRONMENTAL_SIGNATURES = (
+    # --- Windows / git-bash (the Conductor's host) -------------------------
     # A PowerShell host refusing to run the harness's bash `gh`/`git` shim: the
     # shim is a shell document, and PowerShell cannot place one in a pipeline.
     # Emitted by the host before a single line of module code runs.
@@ -107,6 +115,30 @@ ENVIRONMENTAL_SIGNATURES = (
     # node aborting inside its own C++ startup when spawned with a scrubbed
     # environment (#943's shape). Never reachable from repo code.
     "Assertion failed: ncrypto::CSPRNG",
+    # --- Linux (the scheduled cloud worker's sandbox) ----------------------
+    # The cloud sandbox ships a Debian-packaged `cryptography` (41.0.7) whose
+    # Rust bindings cannot load their CFFI backend, because `cffi` is not
+    # installed at all. The shape that makes this expensive: `import
+    # cryptography` SUCCEEDS and reports a version, and the death arrives at
+    # the first real use -- so a module cannot skip itself at import time, and
+    # it dies mid-roster with no `  FAIL` line to grep (#1732).
+    #
+    # Safe as a substring where `[WinError 2]` was not, and for a reason that
+    # is not "it looks specific": `_cffi_backend` is the C extension of an
+    # installed third-party package, so there is no repo path a wrong
+    # `subprocess` argument could spell this way, and nothing in this
+    # repository imports, vendors or references `cffi` -- this entry and the
+    # test that pins it are the only mentions of the string in the tree.
+    "ModuleNotFoundError: No module named '_cffi_backend'",
+    # NOT HERE, and for the same reason `[WinError 2]` is not:
+    # `pyo3_runtime.PanicException`. It is emitted into the very same output
+    # (#1732 measured both strings in one capture), which is what makes it
+    # tempting. But it is the generic "a Rust extension panicked" wrapper --
+    # any pyo3-backed package raises it, including when repo code hands that
+    # package input it cannot accept, so it cannot separate a broken host from
+    # a defect. The missing-backend line above names its own cause; the panic
+    # only reports that one happened. The narrower string is sufficient here:
+    # it is present in every capture of this breakage.
 )
 
 # `  FAIL <name>` -- the outcome line a module prints when a test it RAN failed

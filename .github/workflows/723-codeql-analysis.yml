@@ -20,6 +20,15 @@ jobs:
   analyze:
     name: Analyze Code
     runs-on: ubuntu-latest
+    # Declares `merge_group:` above, so a hang here holds the merge queue. With
+    # no `timeout-minutes` this inherited GitHub's 360-minute default (#1565).
+    #
+    # 15 is ~11x the slowest run measured over the 30 most recent successes
+    # (0.8-1.3 min, median 1.1, 2026-11-23). Deliberately loose rather than
+    # tight to the measurement: the `languages:` matrix is one entry (`actions`)
+    # today and CodeQL's cost scales with what is added to it, so this is sized
+    # for a second language rather than for the current scan.
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read

@@ -42,6 +42,14 @@ jobs:
   validate-hooks:
     name: Validate AI agent hooks
     runs-on: ubuntu-latest
+    # Declares `merge_group:` above -- load-bearing, per the comment on that
+    # trigger -- so a hang here holds the merge queue. With no `timeout-minutes`
+    # this inherited GitHub's 360-minute default (#1565).
+    #
+    # 10 is ~20x the slowest run measured over the 30 most recent successes
+    # (0.3-0.5 min, median 0.4, 2026-11-23). This is the cheapest of the three
+    # merge-queue gates; the bound exists to cap a hang, not to pace the job.
+    timeout-minutes: 10
     permissions:
       contents: read
 

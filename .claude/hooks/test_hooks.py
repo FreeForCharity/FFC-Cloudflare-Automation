@@ -2591,6 +2591,8 @@ def main():
 
     test_git_precommit()
     test_post_edit_ledger_citation_nudge()
+    test_post_bash_pure_rules()
+    test_post_bash_secret_backstop()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
@@ -2752,6 +2754,356 @@ def test_git_precommit():
               f"want={'block' if expect_block else 'allow'} "
               f"got={'block' if blocked else f'allow(rc={rc})'}")
 
+
+# --- post_bash.py: the #1292 backstop on files written by Bash ---------------
+#
+# `post_edit.py` re-scans the file named in `tool_input.file_path`. A Bash tool
+# call has no such field, so every file written by `sed`, a heredoc, a redirect
+# or a script went unscanned -- while the standing operating instruction for
+# these sessions is to prefer Bash for file work, which makes the uncovered
+# path the normal one and the Edit path the exception.
+#
+# The cases below run a COPY of the hook inside a throwaway git repo, the way
+# `test_git_precommit` copies the pre-commit scanner. The hook derives the
+# repository it scans from its own `__file__`, so a copy inside the fixture
+# scans the fixture and nothing else. That matters for two reasons: no env
+# override has to exist (an env seam on a security hook is a bypass), and the
+# verdict does not depend on whether the clone running the suite happens to be
+# dirty.
+
+# Fabricated GitHub-PAT-shaped value, split across literals so this file never
+# holds a contiguous token -- same reason as REAL_CF above. It matches
+# HARD_PATTERNS, which are not placeholder-filtered, so the fixture is
+# deterministic rather than hostage to the placeholder heuristics.
+FAKE_PAT = "ghp_" + "A1b2C3d4E5f6G7h8" + "I9j0K1l2M3n4O5p6" + "Q7r8"
+
+
+def _pb_git_env():
+    return dict(
+        os.environ,
+        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+        PYTHONIOENCODING="utf-8",
+    )
+
+
+def _pb_plant(root, rel, content):
+    full = os.path.join(root, rel)
+    if os.path.dirname(rel):
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(content)
+    return full
+
+
+def _pb_fixture(src, common_src):
+    """A throwaway git repo carrying its own copy of the hook. Returns the root."""
+    import shutil
+    import tempfile
+
+    root = tempfile.mkdtemp()
+    hooks = os.path.join(root, ".claude", "hooks")
+    os.makedirs(hooks)
+    shutil.copy(src, os.path.join(hooks, "post_bash.py"))
+    shutil.copy(common_src, os.path.join(hooks, "common.py"))
+    subprocess.run(["git", "init", "-q"], cwd=root, env=_pb_git_env(),
+                   capture_output=True)
+    return root
+
+
+def _pb_invoke(root, session, command):
+    return subprocess.run(
+        [sys.executable, os.path.join(root, ".claude", "hooks", "post_bash.py")],
+        input=json.dumps({
+            "tool_name": "Bash",
+            "session_id": session,
+            "cwd": root,
+            "tool_input": {"command": command},
+        }),
+        cwd=root,
+        env=_pb_git_env(),
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+
+
+def test_post_bash_secret_backstop():
+    """End-to-end: a secret that reaches disk via Bash is caught and named."""
+    global PASS, FAIL
+    import shutil
+    import time
+
+    print("post_bash (#1292 -- secrets in files written by Bash):")
+
+    src = os.path.join(HOOKS, "post_bash.py")
+    common_src = os.path.join(HOOKS, "common.py")
+    if not (os.path.exists(src) and os.path.exists(common_src)):
+        # Deliberately a FAIL and not a skip. "Falsify first" is this issue's
+        # own verification step -- with the hook reverted these cases must go
+        # RED -- and a skip would score its removal as green. Same hole
+        # VALID_RC closes for a hook that cannot start: silence must not read
+        # as success.
+        FAIL += 1
+        print("  [FAIL] post_bash.py / common.py missing: the Bash backstop is not installed")
+        return
+
+    def verdict(name, proc, expect_block, needle=None, in_stdout=None):
+        global PASS, FAIL
+        blocked = proc.returncode == 2
+        ok = blocked == expect_block and proc.returncode in VALID_RC
+        detail = ""
+        # A block is only the right block if it NAMES the offending file. Exit
+        # code 2 alone cannot tell "found the planted secret" from "fell over
+        # and happened to exit 2" -- the repo's standing rule that a test
+        # asserting a failure code must also assert on the output.
+        if ok and needle and needle not in proc.stderr:
+            ok, detail = False, f"stderr does not name {needle}"
+        if ok and in_stdout and in_stdout not in proc.stdout:
+            ok, detail = False, f"stdout lacks {in_stdout!r}"
+        PASS, FAIL = (PASS + 1, FAIL) if ok else (PASS, FAIL + 1)
+        want = "block" if expect_block else "allow"
+        got = "block" if blocked else f"allow(rc={proc.returncode})"
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name}: want={want} got={got}"
+              + (f" -- {detail}" if detail else ""))
+
+    def case(session, command, plant, expect_block, name, **kw):
+        root = _pb_fixture(src, common_src)
+        try:
+            for rel, content in plant:
+                _pb_plant(root, rel, content)
+            verdict(name, _pb_invoke(root, session, command), expect_block, **kw)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # Unique per suite run: the out-of-clone advisory is reported once per
+    # session per path, so a fixed id would be suppressed by the state file an
+    # earlier run of this very suite left behind -- and the case would pass or
+    # fail according to how recently the suite last ran.
+    uniq = f"{os.getpid()}-{int(time.time())}"
+
+    # 1. A heredoc. `guard_bash.py` already refuses this before execution, and
+    #    this is not a claim that it does not: the backstop exists because a
+    #    heredoc also reaches disk from inside a script the command merely
+    #    invokes, where no command text carries the value.
+    case("pb-heredoc-" + uniq,
+         "cat > creds.txt <<'EOF'\n" + FAKE_PAT + "\nEOF",
+         [("creds.txt", FAKE_PAT + "\n")], True,
+         "a secret written by a heredoc is caught", needle="creds.txt")
+
+    # 2. THE CASE #1292 IS ABOUT, and the one that must fail before the fix.
+    #    The command text is clean, so the pre-execution scan has nothing to
+    #    refuse; the secret arrives in the captured output.
+    case("pb-redirect-" + uniq,
+         "gh api repos/o/r/actions/secrets > captured.json",
+         [("captured.json", '{"token": "' + FAKE_PAT + '"}')], True,
+         "a secret captured by a redirect with CLEAN command text is caught",
+         needle="captured.json")
+
+    # 3. The discriminating allow. Without it every case above passes just as
+    #    well for a hook that exits 2 unconditionally.
+    case("pb-clean-" + uniq, "echo hello > notes.md",
+         [("notes.md", "# hello world\n")], False,
+         "a clean command over a clean file stays silent")
+
+    # 4. Placeholders are not secrets; firing on them is how a backstop gets
+    #    switched off.
+    case("pb-placeholder-" + uniq, "printf '%s' x > .env.example",
+         [(".env.example", 'api_token = "your-api-token-here"\n')], False,
+         "a placeholder value does not fire")
+
+    # 5. A deleted path is in `git status` with nothing left to read. Reading it
+    #    would raise, and the hook fails open, so a crash here would look
+    #    exactly like a clean tree.
+    root = _pb_fixture(src, common_src)
+    try:
+        _pb_plant(root, "tracked.md", "# hello\n")
+        subprocess.run(["git", "add", "tracked.md"], cwd=root, env=_pb_git_env(),
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "seed"], cwd=root, env=_pb_git_env(),
+                       capture_output=True)
+        os.remove(os.path.join(root, "tracked.md"))
+        _pb_plant(root, "kept.md", "# still here\n")
+        verdict("a deleted file is skipped rather than read",
+                _pb_invoke(root, "pb-deleted-" + uniq, "rm -f tracked.md"), False)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # 6. The scope limit is NAMED rather than silently absent. A write outside
+    #    every repository the hook reads is a real gap, and an agent told
+    #    nothing would read the silence as "scanned and clean".
+    case("pb-outside-" + uniq,
+         "gh api user > /var/tmp/ffc-post-bash-probe.json",
+         [("notes.md", "# clean\n")], False,
+         "a write target outside every scanned repo is reported",
+         in_stdout="NOT COVERED")
+
+    # 7. The freshness filter is the cost control -- without it a dirty
+    #    `docs/lessons-ledger.md` charges ~480ms to every Bash command in the
+    #    session. Both halves are asserted because the cheap direction is the
+    #    dangerous one: a filter that skipped a FRESH write would be a coverage
+    #    hole wearing the same green as a correct one.
+    root = _pb_fixture(src, common_src)
+    try:
+        session = "pb-fresh-" + uniq
+        _pb_plant(root, "captured.json", FAKE_PAT)
+        verdict("a freshly written secret is scanned",
+                _pb_invoke(root, session, "gh api x > captured.json"), True,
+                needle="captured.json")
+        # Backdate it well past the watermark the run above recorded. Nothing
+        # touched the file since, so re-reading it would be waste.
+        old = time.time() - 3600
+        os.utime(os.path.join(root, "captured.json"), (old, old))
+        verdict("the same file, untouched since, is not re-scanned",
+                _pb_invoke(root, session, "ls -la"), False)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_post_bash_pure_rules():
+    """`parse_status` / `uncovered_targets` / `scan_file`, over planted input.
+
+    Pure, so these discriminate where the end-to-end cases cannot. Those can
+    only say "something blocked": a parse that dropped renames, or one that
+    read a `-o` out of an unrelated flag, would still block on the planted
+    file and still report an advisory, so the suite would stay green over a
+    rule that had stopped working.
+    """
+    global PASS, FAIL
+    import shutil
+
+    print("post_bash parse + scope rules:")
+
+    sys.path.insert(0, HOOKS)
+    import post_bash  # noqa: E402
+
+    def ok(name, cond, got=""):
+        global PASS, FAIL
+        PASS, FAIL = (PASS + 1, FAIL) if cond else (PASS, FAIL + 1)
+        print(f"  [{'ok  ' if cond else 'FAIL'}] {name}" + (f": {got}" if not cond else ""))
+
+    # `git status --porcelain` is `XY<space>path`. Each row below is a shape a
+    # split-on-whitespace parse gets wrong.
+    status_cases = [
+        (" M docs/a.md", ["docs/a.md"], "a work-tree modification"),
+        ("M  docs/b.md", ["docs/b.md"], "a staged modification"),
+        ("?? new.txt", ["new.txt"], "an untracked file"),
+        ("A  added.py", ["added.py"], "a staged addition"),
+        ("MM both.md", ["both.md"], "modified in index and work tree"),
+        (" D gone.md", [], "a work-tree deletion has nothing to read"),
+        ("D  gone.md", [], "a staged deletion has nothing to read"),
+        ("!! ignored.log", [], "an ignored entry is not a change"),
+        ("R  old.md -> new.md", ["new.md"], "a rename reports the NEW name"),
+        ("C  src.md -> copy.md", ["copy.md"], "a copy reports the new name"),
+        ('?? "a b.txt"', ["a b.txt"], "a quoted path is unquoted"),
+        ("", [], "empty output"),
+        ("garbage", [], "a line too short to be a status row"),
+    ]
+    for text, want, label in status_cases:
+        got = post_bash.parse_status(text)
+        ok(f"parse_status: {label}", got == want, f"{got} want {want}")
+
+    ok("parse_status de-duplicates",
+       post_bash.parse_status(" M a.md\n M a.md") == ["a.md"])
+
+    # Scope: `within` decides whether a target is covered, and a prefix match
+    # on the raw string would call `/a/bc` a child of `/a/b`.
+    ok("within: a child is inside", post_bash.within("/a/b/c", "/a/b"))
+    ok("within: the root itself is inside", post_bash.within("/a/b", "/a/b"))
+    ok("within: a sibling with a shared prefix is OUTSIDE",
+       not post_bash.within("/a/bc", "/a/b"))
+
+    roots = [os.path.join(os.sep, "repo")]
+    base = os.path.join(os.sep, "repo")
+
+    def targets(cmd):
+        return post_bash.uncovered_targets(cmd, base, roots)
+
+    # The in-repo cases must be SILENT -- an advisory on every redirect is one
+    # nobody reads, and that is the failure mode this rule has to avoid.
+    ok("a redirect inside the repo is covered, so silent",
+       targets("gh api user > out.json") == [])
+    ok("`-o` inside the repo is silent",
+       targets("curl https://x -o out.json") == [])
+
+    out = targets("gh api user > /var/tmp/x.json")
+    ok("a redirect outside every root is reported",
+       out == [os.path.abspath(os.path.join(os.sep, "var", "tmp", "x.json"))], out)
+    ok("`-o` outside every root is reported",
+       len(targets("curl https://x -o /var/tmp/y.json")) == 1,
+       targets("curl https://x -o /var/tmp/y.json"))
+    ok("`--output=` outside every root is reported",
+       len(targets("curl https://x --output=/var/tmp/z.json")) == 1)
+    ok("`>>` is a write target too",
+       len(targets("echo x >> /var/tmp/append.log")) == 1)
+
+    # Unresolvable or non-file targets must not be guessed at. A confident
+    # wrong path is worse than no advisory.
+    ok("/dev/null is not reported", targets("cmd > /dev/null") == [])
+    ok("a shell-expanded target is not guessed",
+       targets("cmd > $SCRATCH/out.json") == [])
+    ok("a globbed target is not guessed", targets("cmd > /var/tmp/*.json") == [])
+    ok("an fd duplication is not a path", targets("cmd 2>&1") == [])
+    # `-o` must not be read out of a longer flag or a word ending in it.
+    ok("`--only` is not read as `-o`", targets("tool --only /var/tmp/a") == [])
+
+    # scan_file: binary is skipped so the byte budget is not spent on the
+    # ~6 MiB of webfonts and minified bundles this repo tracks, and a file
+    # larger than the cap reports that it was read in part.
+    import tempfile as _tf
+    d = _tf.mkdtemp()
+    try:
+        binary = os.path.join(d, "b.bin")
+        with open(binary, "wb") as fh:
+            fh.write(b"\x00\x01" + FAKE_PAT.encode())
+        hits, _, note = post_bash.scan_file(binary)
+        ok("scan_file skips a binary file", hits == [] and note == post_bash.SKIP_BINARY,
+           f"{hits} {note}")
+
+        text = os.path.join(d, "t.txt")
+        with open(text, "w", encoding="utf-8", newline="\n") as fh:
+            # A newline before the token: the GitHub-PAT pattern is
+            # `\bghp_...`, so gluing it to a word character leaves no word
+            # boundary and the planted "secret" is not one.
+            fh.write("x" * 50 + "\ntoken: " + FAKE_PAT + "\n")
+        hits, _, note = post_bash.scan_file(text)
+        ok("scan_file finds a secret in a text file", hits and note is None, f"{hits} {note}")
+
+        hits, _, note = post_bash.scan_file(text, max_bytes=10)
+        ok("scan_file reports a partial read rather than hiding it",
+           note == post_bash.READ_PARTIAL, note)
+
+        hits, read, note = post_bash.scan_file(os.path.join(d, "absent.txt"))
+        ok("scan_file on a missing path fails open",
+           hits == [] and read == 0 and note is None)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # Everything the caps and the scope excluded must be NAMED. A cap that
+    # silently drops files is the defect, not the cap.
+    notes = post_bash.advisories(["a.md"], ["big.md"], ["/var/tmp/x"])
+    ok("advisories name a capped file", any("a.md" in n and "NOT SCANNED" in n for n in notes), notes)
+    ok("advisories name a partially read file",
+       any("big.md" in n and "ONLY THE FIRST" in n for n in notes), notes)
+    ok("advisories name an uncovered target",
+       any("/var/tmp/x" in n and "NOT COVERED" in n for n in notes), notes)
+    ok("advisories are empty when nothing was excluded",
+       post_bash.advisories([], [], []) == [])
+
+    # A remainder past the listing limit is summarised, never dropped.
+    many = [f"f{i}.md" for i in range(post_bash.MAX_LISTED + 3)]
+    notes = post_bash.advisories(many, [], [])
+    ok("a capped remainder past the listing limit is counted",
+       any("3 further changed file(s)" in n for n in notes), notes)
+
+    # The hook is wired with the `Bash` matcher, and must not duplicate
+    # post_edit.py's job if a settings file widens it.
+    proc = run_full("post_bash.py", {"tool_name": "Edit",
+                                     "tool_input": {"file_path": "x.md"}})
+    ok("a non-Bash tool is ignored", proc.returncode == 0, proc.returncode)
+    proc = run_full("post_bash.py", {})
+    ok("an empty payload fails open", proc.returncode == 0, proc.returncode)
 
 if __name__ == "__main__":
     main()

@@ -69,6 +69,15 @@
             "command": "python3 \"__HUB_CLONE__/.claude/hooks/post_edit.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__HUB_CLONE__/.claude/hooks/post_bash.py\""
+          }
+        ]
       }
     ]
   }

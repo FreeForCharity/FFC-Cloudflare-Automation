@@ -542,6 +542,7 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
         return report
 
     guard_bash = None
+    post_bash = None
     for event, matcher, command in commands:
         for raw in script_paths(command):
             resolved = pathlib.Path(_expand(raw, workspace))
@@ -562,6 +563,8 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
                 continue
             if event == "PreToolUse" and "Bash" in (matcher or "") and guard_bash is None:
                 guard_bash = resolved
+            if event == "PostToolUse" and "Bash" in (matcher or "") and post_bash is None:
+                post_bash = resolved
 
     if report["missing_paths"]:
         report["problems"].append(
@@ -576,6 +579,30 @@ def verify(workspace: pathlib.Path, *, source: str) -> dict:
         return report
 
     report["guard_bash"] = str(guard_bash)
+
+    # #1292: `post_edit.py` re-scans the file named in `tool_input.file_path`,
+    # and a Bash tool call has no such field -- so a session wired for the
+    # PreToolUse guard alone has a pre-write scan of the command TEXT and no
+    # post-write scan at all on the path these sessions are told to prefer for
+    # file work. Wired has to mean both, or the verdict certifies the narrower
+    # of the two coverages.
+    #
+    # Presence, not a probe. The two-sided probe above works because
+    # guard_bash.py decides from a command string handed to it on stdin;
+    # post_bash.py decides from the git status of the session's own clone, so
+    # exercising it for real would mean writing a planted secret into the
+    # workspace being graded. A read-only verifier must not do that, and a
+    # verifier that wrote to the tree it certifies would be its own finding.
+    # The behaviour is covered instead by `.claude/hooks/test_hooks.py`, which
+    # CI runs on every change under `.claude/**`.
+    if post_bash is None:
+        report["problems"].append(
+            "no PostToolUse hook matching Bash -- the secret backstop for files "
+            "written by a shell command is not wired (#1292)"
+        )
+    else:
+        report["post_bash"] = str(post_bash)
+
     report["probes"] = probe_guard(guard_bash)
     for p in report["probes"]:
         if p["ok"]:

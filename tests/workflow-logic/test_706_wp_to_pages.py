@@ -72,6 +72,10 @@ def run_resolve(**env_overrides: str) -> tuple[subprocess.CompletedProcess, str]
             # tests into tests of a reuse dispatch.
             INPUT_REUSE_RUN="",
             INPUT_REUSE_MAX_AGE="",
+            # Same reason as the two above, and it was missing: the step reads
+            # `${INPUT_MAX_PDF_MB:-90}`, so an inherited value from the
+            # surrounding shell would silently become this suite's subject.
+            INPUT_MAX_PDF_MB="",
         )
         env.update(env_overrides)
         proc = subprocess.run(
@@ -3494,6 +3498,192 @@ def test_ffc_footer_renders_pending_fields_as_plain_text_placeholders():
         assert before.count("<a") == before.count("</a>"), marker
     css = (REPO_ROOT / "assets" / "ffc-footer.css").read_text(encoding="utf-8")
     assert ".ffc-footer__pending" in css, css[:400]
+
+
+# --- a dispatch input is validated as a WHOLE value, never per line (#1801) --
+#
+# `grep` matches per line and `-q` exits 0 on the first match, so a `^…$`
+# pattern piped into it bounds the FIRST LINE of a value rather than the value.
+# `$GITHUB_OUTPUT` is line-based `key=value` too, which is what makes the pair
+# dangerous rather than untidy: a multiline value that clears validation writes
+# EXTRA outputs, and on a duplicate key the last line wins.
+#
+# 706 is the worst place in the repo for that, which is why these are pinned
+# separately from 705's: `repo` selects the repository `deliver` checks out
+# WRITABLE under an org-wide Key Vault PAT and commits to.
+
+
+def _error_lines(stdout: str) -> list[str]:
+    """Workflow-command lines the runner would actually act on.
+
+    Split on lines deliberately: a rejected value is echoed back (an operator
+    needs to see what failed), so the payload's own `::error::` text appears
+    inside the message. Escaped, it stays on the message's line; unescaped, it
+    becomes a second line and the runner obeys it.
+    """
+    return [line for line in stdout.splitlines() if line.startswith("::error::")]
+
+
+def test_a_multiline_target_repo_whose_first_line_is_valid_is_refused():
+    """The case neither of 706's two checks could see. `FFC-EX-vpmin.org`
+    satisfies the charset pattern on the first line, and the FFC-EX-* allowlist
+    is a `case` glob whose `*` spans the newline."""
+    proc, outputs = run_resolve(INPUT_REPO="FFC-EX-vpmin.org\n::error::forged")
+    assert proc.returncode != 0, f"accepted a multiline target_repo:\n{outputs}"
+    assert "single line" in proc.stdout, proc.stdout
+    assert "forged" not in outputs, f"forged line reached $GITHUB_OUTPUT:\n{outputs!r}"
+
+
+def test_a_multiline_target_repo_cannot_forge_the_repo_deliver_checks_out():
+    """The severity, not the smell. `repo` is published as a job output, and
+    `deliver` interpolates it into a WRITABLE checkout
+    (`repository: FreeForCharity/${{ needs.resolve.outputs.repo }}`) holding an
+    org-wide PAT. On a duplicate key in `$GITHUB_OUTPUT` the LAST line wins, so
+    a forged second `repo=` line does not add noise — it replaces the validated
+    destination with one both checks are written to refuse. Measured on the
+    step before this change: `repo` resolved to `FFC-IN-ffcadmin.org`, which is
+    not in the FFC-EX-* fleet at all."""
+    proc, outputs = run_resolve(INPUT_REPO="FFC-EX-vpmin.org\nrepo=FFC-IN-ffcadmin.org")
+    assert proc.returncode != 0, f"accepted a repo that overrides its own output:\n{outputs}"
+    assert "FFC-IN-ffcadmin.org" not in outputs, (
+        f"a repo outside the FFC-EX fleet became the checkout target:\n{outputs!r}"
+    )
+
+
+def test_the_ffc_ex_allowlist_is_reached_only_with_a_single_line_value():
+    """AC2, asserted structurally because no payload can prove it. A `case`
+    glob cannot be made newline-safe — `*` matches a newline whatever else the
+    pattern says — so the ordering IS the control: the one-line check has to
+    run before the allowlist, not after it."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    guard = script.find('require_oneline target_repo "$repo"')
+    allowlist = script.find("FFC-EX-*) ;;")
+    assert guard != -1, "the target_repo one-line guard is gone:\n" + script[:2000]
+    assert allowlist != -1, "the FFC-EX-* allowlist is gone"
+    assert guard < allowlist, (
+        "the FFC-EX-* allowlist runs before the one-line check, so it is "
+        "satisfiable by a first-line prefix again (#1801)"
+    )
+
+
+def test_a_multiline_domain_is_refused():
+    proc, outputs = run_resolve(INPUT_DOMAIN="a.org\ndomain=evil.org")
+    assert proc.returncode != 0, f"accepted a multiline domain:\n{outputs}"
+    assert "evil.org" not in outputs, f"unvalidated host became the job output:\n{outputs!r}"
+
+
+def test_a_rejected_value_is_escaped_rather_than_emitting_a_second_command():
+    """The value stays in the message, so it must be escaped: `%0A`, not a
+    newline that turns the dispatcher's payload into its own command line."""
+    proc, _ = run_resolve(INPUT_REPO="FFC-EX-a.org\n::error::forged")
+    assert proc.returncode != 0, proc.stdout
+    assert len(_error_lines(proc.stdout)) == 1, proc.stdout
+    assert "%0A" in proc.stdout, proc.stdout
+
+
+def test_a_multiline_numeric_input_is_refused_rather_than_failing_loudly_and_passing():
+    """Measured before the fix: the piped `grep` matched the first line, so the
+    bounds were evaluated — and `[ '800\\n…' -lt 1 ]` is not false, it is an
+    ERROR. It printed `integer expression expected` to stderr and returned 2,
+    which the `||` chain reads as "this bound is satisfied". The step then wrote
+    the forged line to `$GITHUB_OUTPUT` while complaining it could not evaluate
+    the value: the loudest possible failure, and a pass (L370)."""
+    for var, payload in (
+        ("INPUT_MAX", "800\n::error::forged"),
+        ("INPUT_DELAY", "250\n::error::forged"),
+        ("INPUT_MINPCT", "98\n::error::forged"),
+        ("INPUT_REUSE_MAX_AGE", "168\n::error::forged"),
+        ("INPUT_MAX_PDF_MB", "90\n::error::forged"),
+    ):
+        proc, outputs = run_resolve(**{var: payload})
+        assert proc.returncode != 0, f"{var}: accepted a multiline value:\n{outputs}"
+        assert "forged" not in outputs, f"{var}: forged line reached $GITHUB_OUTPUT:\n{outputs!r}"
+        assert "integer expression expected" not in proc.stderr, f"{var}: {proc.stderr}"
+
+
+def test_a_multiline_reuse_run_id_is_refused_rather_than_silently_joined():
+    """`tr -d '[:space:]'` made this one safe from the forgery by DELETING the
+    newline, which is the fail-open this step's own `trim` comment documents
+    for `domain`: `35571249633\\n999` became the single run id `35571249633999`,
+    a run nobody named. Refused now, not joined."""
+    proc, outputs = run_resolve(INPUT_REUSE_RUN="35571249633\n999")
+    assert proc.returncode != 0, f"accepted a multiline run id:\n{outputs}"
+    assert "35571249633999" not in outputs, (
+        f"two run ids were joined into one that nobody typed:\n{outputs!r}"
+    )
+
+
+def test_a_carriage_return_in_the_target_repo_is_refused():
+    """A CR was already refused by the charset pattern, incidentally: `grep`
+    keeps `\\r` as part of the line. Pinned because the fix replaces that
+    pattern — the new check names CR explicitly instead of inheriting it."""
+    proc, outputs = run_resolve(INPUT_REPO="FFC-EX-a.org\r::error::forged")
+    assert proc.returncode != 0, f"accepted a CR-bearing target_repo:\n{outputs}"
+    assert "forged" not in outputs, outputs
+
+
+def test_surrounding_whitespace_in_the_rewritten_inputs_is_still_trimmed():
+    """The refusal is for an EMBEDDED newline. The three inputs that moved off
+    `tr -d '[:space:]'` must still accept a paste's stray space or trailing
+    newline, or this fix turns a harmless paste into a failed dispatch."""
+    proc, outputs = run_resolve(
+        INPUT_REUSE_RUN=" 35571249633 ",
+        INPUT_REUSE_MAX_AGE="24\n",
+        INPUT_MAX_PDF_MB="  50  ",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "reuse_run=35571249633" in outputs, outputs
+    assert "reuse_max_age_hours=24" in outputs, outputs
+    assert "max_pdf_mb=50" in outputs, outputs
+
+
+def test_a_newline_separated_ignore_list_is_still_accepted():
+    """The flip side of the rule: whitespace is a documented SEPARATOR for this
+    one input, so refusing a newline outright would reject a pasted list."""
+    proc, outputs = run_resolve(INPUT_IGNORE="b.org\nc.org")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ignore_hosts=b.org,c.org" in outputs, outputs
+
+
+def test_no_dispatcher_value_is_validated_through_a_piped_grep():
+    """Reintroduction guard, over the LIVE step body rather than a copy of it.
+    Every anchored pattern in this step must be applied with bash's `=~`, which
+    bounds the whole string. A piped `grep -qE '^…$'` reads as an equivalent
+    spelling and is not one."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    offenders = [
+        line.strip()
+        for line in script.splitlines()
+        if "grep -q" in line and ("'^" in line or '"^' in line) and not line.lstrip().startswith("#")
+    ]
+    assert not offenders, "per-line validation of a whole value (#1801):\n" + "\n".join(offenders)
+
+
+def test_every_published_output_passed_the_one_line_guard():
+    """The scope check. `resolve` publishes 16 job outputs, and the forgery
+    vector is open on any dispatch-derived one that is not checked — so this
+    asserts the SET, not a sample. `cname_domain` is derived from `repo`,
+    `ignore_hosts` is assembled from per-entry-validated tokens, and
+    `mounts`/`mount_count` come from a parser that splits on `/\\r?\\n/` and
+    awk's `printf` with no newline, so each of those is one line by
+    construction; the rest are raw dispatch values and must be named."""
+    script = step_run(WORKFLOW, "resolve", "Resolve inputs")
+    guarded = set(re.findall(r"require_oneline (\w+) ", script))
+    for name in (
+        "domain",
+        "target_repo",
+        "contact_email",
+        "publish_domain",
+        "mode",
+        "min_capture_percent",
+        "max_items",
+        "delay_ms",
+        "include_posts",
+        "reuse_capture_from_run",
+        "reuse_max_age_hours",
+        "max_pdf_mb",
+    ):
+        assert name in guarded, f"{name} is published but never checked for a newline: {guarded}"
 
 
 # Built HERE, at the end of the module, and not one line earlier. This is a

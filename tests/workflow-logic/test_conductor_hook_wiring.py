@@ -76,7 +76,20 @@ def write_settings(ws: pathlib.Path, data: dict, name: str = "settings.json") ->
     (ws / ".claude" / name).write_text(json.dumps(data), encoding="utf-8")
 
 
-def guard_config(guard_path: str) -> dict:
+def guard_config(guard_path: str, post_path: str | None = None) -> dict:
+    """A minimally-wired settings dict: the Bash guard AND the Bash post-hook.
+
+    Both are required for `wired` since #1292, so a fixture carrying only the
+    guard would now fail every case below for a reason none of them is about.
+
+    The same file serves both roles by default, and that is sound rather than
+    lazy: the verifier PROBES the guard and only checks that the post-hook
+    exists (it decides from the git status of the session's clone, which a
+    read-only verifier must not manufacture). No assertion here depends on
+    which file the post entry names -- `post_path` exists for the one test that
+    does.
+    """
+    post = post_path or guard_path
     return {
         "hooks": {
             "PreToolUse": [
@@ -84,7 +97,13 @@ def guard_config(guard_path: str) -> dict:
                     "matcher": "Bash",
                     "hooks": [{"type": "command", "command": f'python3 "{guard_path}"'}],
                 }
-            ]
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": f'python3 "{post}"'}],
+                }
+            ],
         }
     }
 
@@ -283,6 +302,69 @@ def test_a_relative_hook_path_in_the_workspace_is_still_found():
         assert not report["missing_paths"], report
         assert report["wired"], report
         assert proc.returncode == 0, proc.stdout
+
+
+def test_a_bash_guard_without_the_bash_post_hook_is_not_wired():
+    """#1292: the pre-write guard alone leaves the post-write scan unwired.
+
+    `guard_bash.py` scans the command TEXT before execution, so it cannot see
+    what a redirect captures or what a script the command invokes writes.
+    `post_edit.py` closes that for Edit / Write / MultiEdit and reads
+    `tool_input.file_path`, which a Bash call does not have. A session carrying
+    the guard and not the backstop is precisely the state #1292 describes, and
+    it looked fully wired before this -- the most expensive kind of green.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td)
+        guard = ws / "guard_bash.py"
+        behaving_guard(guard)
+        write_settings(
+            ws,
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {"type": "command", "command": f'python3 "{guard}"'}
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        proc = run("--workspace", str(ws), "--json")
+        report = json.loads(proc.stdout)
+        assert proc.returncode == 1, proc.stdout
+        assert not report["wired"], report
+        # The REASON, not just the verdict: a config this incomplete would also
+        # fail for "no settings" or a missing path, and an assertion on `wired`
+        # alone passes for any of them.
+        assert any(
+            "PostToolUse" in p and "#1292" in p for p in report["problems"]
+        ), report["problems"]
+
+
+def test_both_settings_carriers_wire_the_bash_post_hook():
+    """Both halves of #1292 AC6, read with the verifier's own parser.
+
+    `.claude/settings.json` governs a session whose project root is this clone;
+    `.claude/conductor/settings.template.json` governs the Conductor's
+    workspace. Fixing one and not the other leaves exactly one population
+    unguarded while every check passes -- L218's shape, which is why this
+    asserts on both in one test rather than trusting a reader to notice the
+    second file.
+    """
+    vch = _vch()
+    for label, path in (("hub settings", HUB_SETTINGS), ("conductor template", TEMPLATE)):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        post = [
+            command
+            for event, matcher, command in vch.iter_hook_commands(data)
+            if event == "PostToolUse" and "Bash" in (matcher or "")
+        ]
+        assert len(post) == 1, f"{label}: expected one Bash PostToolUse hook, got {post}"
+        assert "post_bash.py" in post[0], f"{label}: {post[0]}"
 
 
 def test_hooks_present_but_no_bash_matcher_is_not_wired():

@@ -20,8 +20,18 @@ Wired up in [`../settings.json`](../settings.json):
 | `PreToolUse`       | `Bash`                   | `guard_bash.py`    | **Blocks** dangerous commands (see below).                                                                                                            |
 | `PreToolUse`       | `Edit\|Write\|MultiEdit` | `guard_edit.py`    | **Blocks** writing sensitive files or secret content.                                                                                                 |
 | `PostToolUse`      | `Edit\|Write\|MultiEdit` | `post_edit.py`     | Re-scans the written file for secrets (**blocks/flags** if found) and prints the matching CI quality check to run before pushing.                     |
+| `PostToolUse`      | `Bash`                   | `post_bash.py`     | Re-scans the files `git status` reports as changed (**blocks/flags** if a secret is found), and names any write it could not cover.                   |
 
 `common.py` holds the shared secret-detection and sensitive-path logic.
+
+`post_bash.py` exists because the other post-write scan cannot see the path the agent actually uses
+(#1292). `post_edit.py` reads `tool_input.file_path`, which a Bash tool call does not have, so a
+file written by `sed`, a heredoc, a redirect or an invoked script was never re-scanned — and
+preferring Bash for file work is the standing instruction, which makes that the normal path rather
+than the exception. `guard_bash.py` still covers a secret **literal in the command text**; what it
+cannot see is content that is not literal there, such as `gh api … > f` capturing a token into a
+file. See the module docstring for what it scans, the caps it runs under, and what it reports as
+uncovered.
 
 ## What gets blocked
 
